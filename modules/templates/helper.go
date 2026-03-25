@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"html/template"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +17,7 @@ import (
 	user_model "code.gitea.io/gitea/models/user"
 	"code.gitea.io/gitea/modules/base"
 	"code.gitea.io/gitea/modules/htmlutil"
+	"code.gitea.io/gitea/modules/log"
 	"code.gitea.io/gitea/modules/markup"
 	"code.gitea.io/gitea/modules/setting"
 	"code.gitea.io/gitea/modules/svg"
@@ -158,6 +161,10 @@ func NewFuncMap() template.FuncMap {
 
 		"FilenameIsImage": filenameIsImage,
 		"TabSizeClass":    tabSizeClass,
+
+		// -----------------------------------------------------------------
+		// file
+		"ReadFile": readFileInCustom,
 	}
 }
 
@@ -321,4 +328,32 @@ func QueryBuild(a ...any) template.URL {
 		}
 	}
 	return template.URL(s)
+}
+
+// readFileInCustom reads a file from the custom directory (setting.CustomPath).
+// The path is restricted to be under the custom directory to prevent path traversal attacks.
+// It returns the file content as a string, or an empty string if the file cannot be read.
+func readFileInCustom(relativePath string) string {
+	if relativePath == "" {
+		return ""
+	}
+	cleanPath := filepath.Clean(relativePath)
+	if filepath.IsAbs(cleanPath) || strings.HasPrefix(cleanPath, "..") {
+		log.Warn("ReadFile: invalid path %q, must be a relative path within the custom directory", relativePath)
+		return ""
+	}
+	absPath := filepath.Join(setting.CustomPath, cleanPath)
+	// double-check the resolved path is still under CustomPath
+	customDir, _ := filepath.Abs(setting.CustomPath)
+	absResolved, _ := filepath.Abs(absPath)
+	if !strings.HasPrefix(absResolved, customDir+string(filepath.Separator)) && absResolved != customDir {
+		log.Warn("ReadFile: path %q resolves outside the custom directory", relativePath)
+		return ""
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		log.Warn("ReadFile: failed to read file %q: %v", absPath, err)
+		return ""
+	}
+	return string(data)
 }

@@ -5,9 +5,12 @@ package templates
 
 import (
 	"html/template"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"code.gitea.io/gitea/modules/setting"
 	"code.gitea.io/gitea/modules/util"
 
 	"github.com/stretchr/testify/assert"
@@ -167,4 +170,29 @@ func TestQueryBuild(t *testing.T) {
 		assert.Equal(t, "&a=b&c=d", string(QueryBuild("&a=b&c=d&e=f", "e", "")))
 		assert.Equal(t, "&a=b&c=d&e=f", string(QueryBuild("&a=b&c=d&e=f", "k", "")))
 	})
+}
+
+func TestReadFileInCustom(t *testing.T) {
+	tmpDir := t.TempDir()
+	setting.CustomPath = tmpDir
+
+	// create test files
+	assert.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "sub"), 0o755))
+	assert.NoError(t, os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("hello"), 0o644))
+	assert.NoError(t, os.WriteFile(filepath.Join(tmpDir, "sub", "nested.txt"), []byte("world"), 0o644))
+
+	// normal read
+	assert.Equal(t, "hello", readFileInCustom("test.txt"))
+	assert.Equal(t, "world", readFileInCustom("sub/nested.txt"))
+
+	// non-existent file returns empty
+	assert.Empty(t, readFileInCustom("no-such-file.txt"))
+
+	// path traversal attempts return empty
+	assert.Empty(t, readFileInCustom("../etc/passwd"))
+	assert.Empty(t, readFileInCustom("../../etc/passwd"))
+	assert.Empty(t, readFileInCustom("/etc/passwd"))
+
+	// empty path returns empty
+	assert.Empty(t, readFileInCustom(""))
 }
