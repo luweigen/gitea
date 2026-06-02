@@ -1,0 +1,124 @@
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+import elkLayouts from 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk/dist/mermaid-layout-elk.esm.min.mjs';
+import svgPanZoom from 'https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.2/+esm';
+
+mermaid.registerLayoutLoaders(elkLayouts);
+mermaid.initialize({
+  startOnLoad: false,
+  theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'neutral',
+  securityLevel: 'strict',
+  suppressErrorRendering: true,
+});
+
+// 高度自适应参数:框高随图形等比增长,但限制在 [MIN_HEIGHT, MAX_HEIGHT] 内
+const MIN_HEIGHT = 80;
+const MAX_HEIGHT = 600;
+
+async function renderMermaid(el) {
+  const pre = el.closest('pre');
+  if (!pre || pre.hasAttribute('data-render-done')) return;
+  pre.setAttribute('data-render-done', 'true');
+
+  const source = el.textContent;
+  const id = 'mermaid-' + Math.random().toString(36).slice(2);
+
+  try {
+    const {svg, bindFunctions} = await mermaid.render(id, source);
+
+    // 外层容器
+    const block = document.createElement('div');
+    block.className = 'mermaid-block';
+    block.style.cssText = 'position:relative; border:1px solid var(--color-secondary); border-radius:4px; overflow:hidden;';
+
+    // SVG 容器(高度稍后根据图形宽高比自适应计算)
+    const svgContainer = document.createElement('div');
+    svgContainer.style.cssText = 'width:100%; background:var(--color-box-body);';
+    svgContainer.innerHTML = svg;
+    block.appendChild(svgContainer);
+
+    // 控制按钮
+    const controls = document.createElement('div');
+    controls.style.cssText = 'position:absolute; top:8px; right:8px; display:flex; gap:4px; z-index:10;';
+    controls.innerHTML = `
+      <button type="button" class="ui mini icon button" data-act="zoom-in" title="放大">+</button>
+      <button type="button" class="ui mini icon button" data-act="reset" title="重置">⟲</button>
+      <button type="button" class="ui mini icon button" data-act="zoom-out" title="缩小">−</button>
+      <button type="button" class="ui mini icon button" data-act="fit" title="适应">⛶</button>
+    `;
+    block.appendChild(controls);
+
+    pre.replaceWith(block);
+    bindFunctions?.(svgContainer);
+
+    // 需要让 SVG 自适应容器
+    const svgEl = svgContainer.querySelector('svg');
+    svgEl.setAttribute('width', '100%');
+    svgEl.setAttribute('height', '100%');
+    svgEl.style.maxWidth = 'none';
+
+    // 从 viewBox 读取图形真实宽高比,用于按容器宽度等比换算高度
+    const vb = (svgEl.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+    const aspect = (vb.length === 4 && vb[2] > 0 && vb[3] > 0) ? vb[2] / vb[3] : null;
+
+    // 根据当前容器宽度计算自适应高度
+    const fitHeight = () => {
+      const w = svgContainer.clientWidth || block.clientWidth;
+      if (!w) return;
+      // 没有有效 viewBox 时退回到 MAX_HEIGHT
+      const natural = aspect ? w / aspect : MAX_HEIGHT;
+      const h = Math.max(MIN_HEIGHT, Math.min(natural, MAX_HEIGHT));
+      svgContainer.style.height = h + 'px';
+    };
+
+    fitHeight();
+
+    // 初始化 pan-zoom(fit 让图形完整放入自适应后的视口)
+    const panZoom = svgPanZoom(svgEl, {
+      zoomEnabled: true,
+      controlIconsEnabled: false,
+      fit: true,
+      center: true,
+      minZoom: 0.1,
+      maxZoom: 20,
+      zoomScaleSensitivity: 0.3,
+    });
+
+    controls.addEventListener('click', (e) => {
+      const act = e.target.closest('button')?.dataset.act;
+      if (!act) return;
+      if (act === 'zoom-in') panZoom.zoomIn();
+      else if (act === 'zoom-out') panZoom.zoomOut();
+      else if (act === 'reset') panZoom.resetZoom(), panZoom.center();
+      else if (act === 'fit') panZoom.fit(), panZoom.center();
+    });
+
+    // 容器宽度变化时重新计算高度并适应(用宽度变化做防抖,避免改高度引发的回环)
+    let lastWidth = svgContainer.clientWidth;
+    new ResizeObserver(() => {
+      const w = svgContainer.clientWidth;
+      if (w !== lastWidth) {
+        lastWidth = w;
+        fitHeight();
+      }
+      panZoom.resize();
+      panZoom.fit();
+      panZoom.center();
+    }).observe(svgContainer);
+  } catch (err) {
+    console.error('Mermaid render error:', err);
+    pre.innerHTML = `<code style="color:red;">Mermaid error: ${err.message}</code>`;
+  }
+}
+
+const observer = new MutationObserver((mutations) => {
+  for (const m of mutations) {
+    for (const node of m.addedNodes) {
+      if (node.nodeType !== 1) continue;
+      node.querySelectorAll?.('code.language-mermaid').forEach(renderMermaid);
+    }
+  }
+});
+observer.observe(document.body, {childList: true, subtree: true});
+document.querySelectorAll('code.language-mermaid').forEach(renderMermaid);
+</script>
