@@ -11,9 +11,12 @@ mermaid.initialize({
   suppressErrorRendering: true,
 });
 
-// 高度自适应参数:框高随图形等比增长,但限制在 [MIN_HEIGHT, MAX_HEIGHT] 内
+// 高度自适应参数:框高随图形宽高比等比增长
+//   MAX_HEIGHT 设为正数  -> 封顶到该值(超出部分用缩放/平移查看)
+//   MAX_HEIGHT 设为 0 或 Infinity -> 不封顶,框高完全随图形增长
 const MIN_HEIGHT = 80;
-const MAX_HEIGHT = 600;
+const MAX_HEIGHT = 1000;
+const HAS_CAP = Number.isFinite(MAX_HEIGHT) && MAX_HEIGHT > 0;
 
 async function renderMermaid(el) {
   const pre = el.closest('pre');
@@ -65,9 +68,10 @@ async function renderMermaid(el) {
     const fitHeight = () => {
       const w = svgContainer.clientWidth || block.clientWidth;
       if (!w) return;
-      // 没有有效 viewBox 时退回到 MAX_HEIGHT
-      const natural = aspect ? w / aspect : MAX_HEIGHT;
-      const h = Math.max(MIN_HEIGHT, Math.min(natural, MAX_HEIGHT));
+      // 按容器宽度等比换算自然高度;没有有效 viewBox 时退回到封顶值/600
+      const natural = aspect ? w / aspect : (HAS_CAP ? MAX_HEIGHT : 600);
+      let h = Math.max(MIN_HEIGHT, natural);
+      if (HAS_CAP) h = Math.min(h, MAX_HEIGHT);
       svgContainer.style.height = h + 'px';
     };
 
