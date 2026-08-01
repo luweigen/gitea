@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '4';
+  const SCRIPT_REVISION = '5';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -31,6 +31,9 @@
     maxSourceChars: 512 * 1024,
     // width below which js-draw's touch-friendly "edge" toolbar is used
     edgeToolbarMaxWidth: 800,
+    // js-draw hides its arrow behind Pen > Shape > Arrow; add a dedicated
+    // top-level arrow tool next to the pens. Set to null to leave it out.
+    arrowTool: {label: 'Arrow', color: '#cc2222', thickness: 6},
     // file extensions the repository file editor offers the button for,
     // keep in sync with [markdown] FILE_EXTENSIONS
     markdownExtensions: ['.md', '.markdown', '.mdown', '.mkd', '.livemd'],
@@ -334,6 +337,45 @@
     }
   }
 
+  // js-draw ships an arrow, but only as a pen *type*: Pen > dropdown > Shape >
+  // Arrow, three clicks deep. Registering a pen tool that starts out as an
+  // arrow gives it a button of its own next to the other pens; the dropdown
+  // still works, so its colour and thickness stay adjustable.
+  // Must run before the toolbar is built -- widgets are created from the tools
+  // that exist at that point.
+  function addArrowTool(jsdraw, editor) {
+    if (!cfg.arrowTool) return null;
+    try {
+      const tool = new jsdraw.PenTool(editor, cfg.arrowTool.label, {
+        factory: jsdraw.makeArrowBuilder,
+        color: jsdraw.Color4.fromHex(cfg.arrowTool.color),
+        thickness: cfg.arrowTool.thickness,
+      });
+      editor.toolController.addPrimaryTool(tool);
+      return tool;
+    } catch (err) {
+      // a js-draw version without these exports must not break the whole board
+      console.warn('markdown-draw: could not add the arrow tool', err);
+      return null;
+    }
+  }
+
+  // A primary tool is appended to the end of the list, which puts the arrow
+  // button after the pan tool and its sub-toggles. Move the button back next to
+  // the other pens, where it belongs. Purely a DOM move: the widget, its
+  // dropdown and its listeners all travel with the element.
+  function moveArrowWidgetNextToPens(elHost) {
+    if (!cfg.arrowTool) return;
+    const pens = [...elHost.querySelectorAll('.toolbar-internalWidgetId--pen')];
+    if (pens.length < 2) return;
+    // the label is ours, so it is not subject to js-draw's localization
+    const elArrow = pens.find((el) => el.querySelector('label')?.textContent?.trim() === cfg.arrowTool.label);
+    if (!elArrow) return;
+    const elLastPen = pens.filter((el) => el !== elArrow).pop();
+    if (!elLastPen || elLastPen.parentElement !== elArrow.parentElement) return;
+    if (elLastPen.nextElementSibling !== elArrow) elLastPen.after(elArrow);
+  }
+
   async function openDrawingBoard({initialSvg, onSave}) {
     const elOverlay = document.createElement('div');
     elOverlay.className = 'markup-draw-overlay';
@@ -371,6 +413,8 @@
       appInfo: {name: 'Gitea', description: 'markdown drawing'},
     });
 
+    addArrowTool(jsdraw, editor);
+
     // js-draw's edge toolbar is the one built for thumbs, so use it on narrow
     // screens and on any touch-first device regardless of its width
     const useEdgeToolbar = window.matchMedia(
@@ -378,13 +422,16 @@
     ).matches;
     toolbar = useEdgeToolbar ? jsdraw.makeEdgeToolbar(editor) : jsdraw.makeDropdownToolbar(editor);
     toolbar.addDefaults();
-    restoreToolbarState(toolbar);
     toolbar.addExitButton(() => close());
     toolbar.addSaveButton(async () => {
       const svgElem = await editor.toSVGAsync();
       onSave(new XMLSerializer().serializeToString(svgElem));
       close();
     });
+    // after every widget exists, otherwise js-draw warns about the ones the
+    // saved state mentions but the toolbar does not have yet
+    restoreToolbarState(toolbar);
+    moveArrowWidgetNextToPens(elHost);
 
     if (initialSvg.trim()) {
       // sanitize=true: the SVG was written by whoever wrote the markdown

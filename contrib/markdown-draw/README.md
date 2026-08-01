@@ -65,6 +65,13 @@ From there the behaviour is the same:
   **Edit drawing** button.
 * **Read**: drawings render as images wherever markdown renders.
 
+The board has an **Arrow** tool of its own, next to the pens. js-draw does ship
+an arrow, but only as a pen *type* -- Pen, then the dropdown, then Shape, then
+Arrow -- which is too far to reach for something used as often as pointing at
+part of a diagram. The button is a pen tool preset to the arrow shape, so its
+dropdown still adjusts colour and thickness like any other pen, and it can be
+switched to another shape if you want it to be.
+
 In the file editor the insertion goes through Monaco's `executeEdits`, so a
 single Ctrl+Z undoes it.
 
@@ -122,6 +129,8 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
     lang: "js-draw",            // fence info string
     maxSourceChars: 524288,
     edgeToolbarMaxWidth: 800,   // below this width, use the touch toolbar
+    arrowTool: {label: "Arrow", color: "#cc2222", thickness: 6}, // null to drop it
+    markdownExtensions: [".md", ".markdown", ".mdown", ".mkd", ".livemd"],
   };
 </script>
 ```
