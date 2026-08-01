@@ -31,12 +31,31 @@ echo "installing into ${custom_path}"
 # 1. the customization itself
 mkdir -p "${custom_path}/templates/custom" "${custom_path}/public/assets/js" "${custom_path}/public/assets/css"
 header="${custom_path}/templates/custom/header.tmpl"
-if [ -s "$header" ] && ! grep -q 'gitea-draw.js' "$header"; then
-  echo "note: ${header} already exists, appending to it"
-  cat "${script_dir}/custom/templates/custom/header.tmpl" >>"$header"
-elif ! grep -qs 'gitea-draw.js' "$header"; then
-  cp "${script_dir}/custom/templates/custom/header.tmpl" "$header"
+
+# Stamped into the asset URLs so that browsers pick up an updated
+# gitea-draw.js immediately. Gitea's own AssetVersion cannot do this: it only
+# changes when Gitea is upgraded, while /assets is cached for STATIC_CACHE_TIME.
+version="$(date -u +%Y%m%d%H%M%S)"
+
+if [ -f "$header" ] && grep -q 'gitea-draw' "$header" && ! grep -q 'markdown-draw:begin' "$header"; then
+  # An older install.sh wrote an unmarked block. Editing it out by pattern could
+  # cut a Go template comment in half and take the whole site down, so say so
+  # rather than guess.
+  echo "error: ${header} contains a markdown-draw block from an older install.sh" >&2
+  echo "       delete those lines (the comment, the <link> and the two <script> tags)" >&2
+  echo "       and run this script again" >&2
+  exit 1
 fi
+
+tmp_header="${header}.markdown-draw.tmp"
+: >"$tmp_header"
+if [ -f "$header" ]; then
+  # keep whatever else the admin put in there, drop our previous block
+  sed '/markdown-draw:begin/,/markdown-draw:end/d' "$header" >"$tmp_header"
+fi
+sed "s/__MARKDOWN_DRAW_VERSION__/${version}/g" \
+  "${script_dir}/custom/templates/custom/header.tmpl" >>"$tmp_header"
+mv "$tmp_header" "$header"
 cp "${script_dir}/custom/public/assets/js/gitea-draw.js" "${custom_path}/public/assets/js/"
 cp "${script_dir}/custom/public/assets/css/gitea-draw.css" "${custom_path}/public/assets/css/"
 

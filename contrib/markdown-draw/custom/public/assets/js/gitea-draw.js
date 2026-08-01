@@ -17,6 +17,11 @@
 (() => {
   'use strict';
 
+  // bump when changing this file, giteaDrawDebug() reports it so that a stale
+  // browser cache can be told apart from a real problem
+  const SCRIPT_REVISION = '4';
+  const scriptUrl = document.currentScript?.src ?? '(unknown)';
+
   const cfg = {
     // fence info string used to mark a drawing
     lang: 'js-draw',
@@ -540,7 +545,8 @@
   // sees on a page where the button does not show up.
   window.giteaDrawDebug = () => {
     const report = {
-      scriptLoaded: true,
+      scriptRevision: SCRIPT_REVISION,
+      scriptUrl,
       config: cfg,
       giteaAssetVersion: window.config?.assetVersionEncoded ?? '(window.config missing)',
       jsDrawLoaded: Boolean(window.jsdraw?.Editor),

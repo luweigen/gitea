@@ -149,15 +149,28 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
 
 ## When the button does not show up
 
-Run `giteaDrawDebug()` in the browser console on the page in question. If it is
-not defined, the script itself is not loading: check that
-`<custom>/templates/custom/header.tmpl` contains the two tags, that
-`/assets/js/gitea-draw.js` returns 200, and hard-reload (assets are cached for
-`STATIC_CACHE_TIME`, 6h by default, and the `?v=` in the URL only changes with
-Gitea's own version).
+Run `giteaDrawDebug()` in the browser console on the page in question.
 
-If it is defined, it prints what the script sees. On a file editor page
-`codeEditors` must be at least 1 -- if it is 0 either Monaco has not finished
+**If it is not defined**, the script did not run. Find out which of the two
+reasons it is, in the console:
+
+```js
+[...document.scripts].map((s) => s.src).filter((s) => s.includes('gitea-draw'))
+```
+
+* **Empty** -- the `<script>` tag is not in the page, so `header.tmpl` is not
+  being read. Check `<custom>/templates/custom/header.tmpl` really is under the
+  *Custom File Root Path* the admin panel reports, and restart Gitea (templates
+  are read at startup).
+* **Not empty** -- the tag is there but the file did not execute. Open exactly
+  that URL, `?v=` and all: a stale cached copy and a 404 both look like this.
+  Reloading `/assets/js/gitea-draw.js` without the `?v=` refreshes a *different*
+  cache entry and will not help. `install.sh` stamps a fresh `?v=` on every run
+  for this reason, but it only takes effect after a Gitea restart.
+
+**If it is defined**, it prints what the script sees. `scriptRevision` tells you
+whether the browser is running the version you installed. On a file editor page
+`codeEditors` must be at least 1 -- if it is 0, either Monaco has not finished
 loading, or your Gitea is too old to publish `window.codeEditors`.
 * js-draw follows `prefers-color-scheme` for its own chrome rather than Gitea's
   theme setting. Drawings themselves get an opaque background so they stay
