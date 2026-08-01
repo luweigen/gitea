@@ -48,9 +48,11 @@ lands in a different place in each:
 * **Issues, PRs, comments, wiki, releases** -- the shared markdown editor: a
   pencil button at the end of the markdown toolbar.
 * **The repository file editor** (`/_edit/...`) -- Monaco, which has no markdown
-  toolbar at all: an **Insert drawing** button next to the indent/wrap controls,
-  above the editor. It only shows for file names Gitea renders as markdown, and
-  follows you if you rename the file while editing.
+  toolbar at all: an **Insert drawing** button above the editor. Where exactly
+  depends on your Gitea version: next to the indent/line-wrap controls if it has
+  them, otherwise after the write/preview tabs, otherwise directly above the
+  editor. It only shows for file names Gitea renders as markdown, and follows
+  you if you rename the file while editing.
 
 From there the behaviour is the same:
 
@@ -140,9 +142,23 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
   `markdownExtensions` (Gitea's `[markdown] FILE_EXTENSIONS` defaults). Change
   one and change the other.
 * Depends on Gitea's editor DOM (`.combo-markdown-editor`,
-  `textarea.markdown-text-editor`, `<markdown-toolbar>`, `.repo-editor-menu`,
-  `.code-editor-options`, `#file-name`) and on `window.codeEditors`, none of
-  which carry a compatibility promise. Re-test after a major upgrade.
+  `textarea.markdown-text-editor`, `<markdown-toolbar>`) and on
+  `window.codeEditors`, none of which carry a compatibility promise. Re-test
+  after a major upgrade. The file editor button only needs `window.codeEditors`
+  -- the page layout it is placed into is probed, not assumed.
+
+## When the button does not show up
+
+Run `giteaDrawDebug()` in the browser console on the page in question. If it is
+not defined, the script itself is not loading: check that
+`<custom>/templates/custom/header.tmpl` contains the two tags, that
+`/assets/js/gitea-draw.js` returns 200, and hard-reload (assets are cached for
+`STATIC_CACHE_TIME`, 6h by default, and the `?v=` in the URL only changes with
+Gitea's own version).
+
+If it is defined, it prints what the script sees. On a file editor page
+`codeEditors` must be at least 1 -- if it is 0 either Monaco has not finished
+loading, or your Gitea is too old to publish `window.codeEditors`.
 * js-draw follows `prefers-color-scheme` for its own chrome rather than Gitea's
   theme setting. Drawings themselves get an opaque background so they stay
   readable under any theme.

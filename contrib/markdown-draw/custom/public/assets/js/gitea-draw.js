@@ -461,44 +461,73 @@
     }
   }
 
+  // The file being edited, from the rename input when there is one, then from
+  // the submitted tree path, and finally from the URL.  Gitea's editor markup
+  // has changed shape across versions, the URL has not.
   function editedFileName(elForm) {
-    return (elForm.querySelector('#file-name')?.value ?? '').trim().toLowerCase();
+    const candidates = [
+      elForm.querySelector('#file-name')?.value,
+      elForm.querySelector('#tree_path, input[name="tree_path"]')?.value,
+      decodeURIComponent(window.location.pathname),
+    ];
+    return (candidates.find((v) => v?.trim()) ?? '').trim().toLowerCase();
   }
 
   function isMarkdownFileName(name) {
     return cfg.markdownExtensions.some((ext) => name.endsWith(ext.toLowerCase()));
   }
 
-  // the repository file editor: Monaco, no markdown toolbar of its own
+  // Places the button without depending on the editor page layout, which differs
+  // between Gitea versions: use whichever anchor this version happens to have.
+  function placeFileEditorButton(elForm, elEditorNode, elButton) {
+    const elOptions = elForm.querySelector('.code-editor-options');
+    if (elOptions) { // current layout: with the indent / line-wrap controls
+      elButton.classList.add('markup-draw-button-inline');
+      elOptions.prepend(elButton);
+      return;
+    }
+    // older layouts: after the write/preview/diff tab menu, whatever it is called
+    const elMenu = elForm.querySelector('.repo-editor-menu') ??
+      elForm.querySelector('[data-tab="write"]')?.closest('.menu');
+    if (elMenu) {
+      elButton.classList.add('markup-draw-button-standalone');
+      elMenu.after(elButton);
+      return;
+    }
+    // last resort: directly above the editor itself
+    elButton.classList.add('markup-draw-button-standalone');
+    elEditorNode.before(elButton);
+  }
+
+  // The repository file editor is Monaco and has no markdown toolbar of its own.
+  // Drive it straight off window.codeEditors so that no assumption about the
+  // surrounding markup is needed to find the editor.
   function initFileEditors() {
-    for (const elMenu of document.querySelectorAll('.repo-editor-menu')) {
-      const elForm = elMenu.closest('form');
-      // Monaco is loaded asynchronously; wait for it so the button never
-      // appears before it can do anything
-      if (!elForm || !elForm.querySelector('.monaco-editor-container')) continue;
+    for (const editor of window.codeEditors ?? []) {
+      let elEditorNode = null;
+      try {
+        elEditorNode = editor.getContainerDomNode?.();
+      } catch {
+        continue; // disposed editor
+      }
+      if (!elEditorNode?.isConnected || !editor.getModel?.()) continue;
+
+      const elForm = elEditorNode.closest('form');
+      if (!elForm) continue;
 
       let elButton = elForm.querySelector('.markup-draw-button-file');
       if (!elButton) {
         elButton = makeButton('ui compact small button markup-draw-button-file', true);
         elButton.addEventListener('click', () => {
-          const editor = findMonacoEditor(elForm);
-          if (!editor) {
+          const found = findMonacoEditor(elForm);
+          if (!found) {
             window.alert(i18n.noEditor);
             return;
           }
-          openForSource(monacoSource(editor, elForm));
+          openForSource(monacoSource(found, elForm));
         });
-        // sit with the other editor controls when they exist (the git hook
-        // editor has none), otherwise right after the write/preview tabs
-        const elOptions = elForm.querySelector('.code-editor-options');
-        if (elOptions) {
-          elOptions.prepend(elButton);
-        } else {
-          elMenu.after(elButton);
-        }
-
-        const elName = elForm.querySelector('#file-name');
-        elName?.addEventListener('input', () => scheduleInit());
+        placeFileEditorButton(elForm, elEditorNode, elButton);
+        elForm.querySelector('#file-name')?.addEventListener('input', () => scheduleInit());
       }
 
       // the file name can be changed while editing, and the fence only means
@@ -506,6 +535,31 @@
       elButton.style.display = isMarkdownFileName(editedFileName(elForm)) ? '' : 'none';
     }
   }
+
+  // Paste giteaDrawDebug() in the browser console to find out what this script
+  // sees on a page where the button does not show up.
+  window.giteaDrawDebug = () => {
+    const report = {
+      scriptLoaded: true,
+      config: cfg,
+      giteaAssetVersion: window.config?.assetVersionEncoded ?? '(window.config missing)',
+      jsDrawLoaded: Boolean(window.jsdraw?.Editor),
+      codeEditors: (window.codeEditors ?? []).length,
+      comboEditors: document.querySelectorAll('.combo-markdown-editor').length,
+      markdownToolbars: document.querySelectorAll('.combo-markdown-editor markdown-toolbar').length,
+      monacoContainers: document.querySelectorAll('.monaco-editor-container').length,
+      editArea: Boolean(document.querySelector('#edit_area')),
+      fileNameInput: document.querySelector('#file-name')?.value ?? null,
+      codeEditorOptions: document.querySelectorAll('.code-editor-options').length,
+      repoEditorMenu: document.querySelectorAll('.repo-editor-menu').length,
+      writeTab: document.querySelectorAll('[data-tab="write"]').length,
+      ourButtons: document.querySelectorAll('.markup-draw-button, .markup-draw-button-file').length,
+      renderedDrawings: document.querySelectorAll('.markup-draw').length,
+    };
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify(report, null, 2));
+    return report;
+  };
 
   let scheduled = false;
   function scheduleInit() {

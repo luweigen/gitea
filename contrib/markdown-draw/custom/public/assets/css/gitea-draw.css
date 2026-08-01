@@ -21,6 +21,20 @@
   margin-top: 4px;
 }
 
+/* file editor button: inline next to the other editor controls when this Gitea
+   version has them, otherwise on a line of its own above the editor */
+.markup-draw-button-inline {
+  white-space: nowrap;
+}
+
+.markup-draw-button-standalone {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0;
+  white-space: nowrap;
+}
+
 .markup-draw-overlay {
   position: fixed;
   inset: 0;
