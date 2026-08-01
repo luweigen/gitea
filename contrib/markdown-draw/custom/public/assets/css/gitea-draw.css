@@ -1,0 +1,52 @@
+/* Copyright 2026 The Gitea Authors. All rights reserved.
+   SPDX-License-Identifier: MIT
+
+   Styles for contrib/markdown-draw, see README.md there. */
+
+.markup-draw {
+  margin: 1em 0;
+}
+
+.markup-draw-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  /* drawings are stored with an opaque background, the border only frames them */
+  background: #fff;
+  border: 1px solid var(--color-secondary);
+  border-radius: var(--border-radius);
+}
+
+.markup-draw-actions {
+  margin-top: 4px;
+}
+
+.markup-draw-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  background: var(--color-body);
+  overscroll-behavior: contain;
+}
+
+.markup-draw-host {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text);
+}
+
+/* js-draw defaults to a fixed 400px height, here it should fill the overlay */
+.markup-draw-host .imageEditorContainer {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+body.markup-draw-open {
+  overflow: hidden;
+}

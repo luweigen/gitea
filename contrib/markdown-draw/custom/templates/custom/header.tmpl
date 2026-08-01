@@ -1,0 +1,5 @@
+{{/* contrib/markdown-draw: freehand drawing in markdown, powered by js-draw.
+     This file is rendered inside <head> on every page, see templates/base/head.tmpl. */}}
+<link rel="stylesheet" href="{{AssetUrlPrefix}}/css/gitea-draw.css?v={{AssetVersion}}">
+<script>window.giteaDrawConfig = {assetsPrefix: "{{AssetUrlPrefix}}/js-draw"};</script>
+<script src="{{AssetUrlPrefix}}/js/gitea-draw.js?v={{AssetVersion}}" defer></script>
