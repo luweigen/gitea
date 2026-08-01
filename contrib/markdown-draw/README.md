@@ -42,15 +42,29 @@ To uninstall, delete those files (and the `<script>`/`<link>` lines from
 
 ## Use
 
-* **Draw**: in any markdown editor -- issue, PR, comment, wiki, release,
-  repository file editor -- click the pencil button at the end of the toolbar.
-  The board opens full-screen; on narrow screens it uses js-draw's touch-friendly
-  edge toolbar. Hit save and a `js-draw` fence is inserted at the cursor.
+Gitea has two unrelated markdown editors and both are covered, but the button
+lands in a different place in each:
+
+* **Issues, PRs, comments, wiki, releases** -- the shared markdown editor: a
+  pencil button at the end of the markdown toolbar.
+* **The repository file editor** (`/_edit/...`) -- Monaco, which has no markdown
+  toolbar at all: an **Insert drawing** button next to the indent/wrap controls,
+  above the editor. It only shows for file names Gitea renders as markdown, and
+  follows you if you rename the file while editing.
+
+From there the behaviour is the same:
+
+* **Draw**: click the button, the board opens full-screen; on narrow screens or
+  any touch device it uses js-draw's touch-friendly edge toolbar. Hit save and a
+  `js-draw` fence is inserted at the cursor.
 * **Edit**: put the cursor anywhere inside an existing `js-draw` fence and click
-  the pencil again -- the drawing loads back into the board and the fence is
-  replaced on save. In the editor's *Preview* tab every drawing also carries its
-  own **Edit drawing** button.
+  the button again -- the drawing loads back into the board and the fence is
+  replaced on save. In the *Preview* tab every drawing also carries its own
+  **Edit drawing** button.
 * **Read**: drawings render as images wherever markdown renders.
+
+In the file editor the insertion goes through Monaco's `executeEdits`, so a
+single Ctrl+Z undoes it.
 
 Pen pressure, touch input and palm rejection are js-draw's own; toolbar state
 (pen, colour, thickness) is remembered in `localStorage`.
@@ -67,7 +81,14 @@ sanitizer only ever sees escaped text.
 
 `custom/templates/custom/header.tmpl` is rendered into `<head>` on every page
 (`templates/base/head.tmpl`), and `<custom>/public/` is served under `/assets/`
-(`modules/public/public.go`). Those two hooks are all the integration uses.
+(`modules/public/public.go`).
+
+Writing back into the editor needs one more hook per editor. The shared markdown
+editor keeps its text in a plain `textarea.markdown-text-editor`, so that one is
+just a text edit. The file editor is Monaco, whose text a `textarea` cannot
+reach -- there Gitea publishes its editor instances as `window.codeEditors`,
+declared in `web_src/js/globals.d.ts` as "export editor for customization",
+which is exactly what this uses.
 
 js-draw is only fetched when a board is actually opened, so pages that merely
 display drawings do not pay for it.
@@ -115,9 +136,13 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
   travel with the markdown.
 * **The legacy EasyMDE editor is not covered.** Switching to it hides the
   markdown toolbar, so the button disappears with it; switch back to draw.
+* In the file editor the button only appears for the extensions listed in
+  `markdownExtensions` (Gitea's `[markdown] FILE_EXTENSIONS` defaults). Change
+  one and change the other.
 * Depends on Gitea's editor DOM (`.combo-markdown-editor`,
-  `textarea.markdown-text-editor`, `<markdown-toolbar>`), which carries no
-  compatibility promise. Re-test after a major upgrade.
+  `textarea.markdown-text-editor`, `<markdown-toolbar>`, `.repo-editor-menu`,
+  `.code-editor-options`, `#file-name`) and on `window.codeEditors`, none of
+  which carry a compatibility promise. Re-test after a major upgrade.
 * js-draw follows `prefers-color-scheme` for its own chrome rather than Gitea's
   theme setting. Drawings themselves get an opaque background so they stay
   readable under any theme.

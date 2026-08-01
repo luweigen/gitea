@@ -26,13 +26,16 @@
     maxSourceChars: 512 * 1024,
     // width below which js-draw's touch-friendly "edge" toolbar is used
     edgeToolbarMaxWidth: 800,
+    // file extensions the repository file editor offers the button for,
+    // keep in sync with [markdown] FILE_EXTENSIONS
+    markdownExtensions: ['.md', '.markdown', '.mdown', '.mkd', '.livemd'],
     ...(window.giteaDrawConfig ?? {}),
   };
 
   const TICKS = '```';
   const CODE_SELECTOR = `.markup code.language-${cfg.lang}`;
   const ATTR_RENDERED = 'data-markup-draw-rendered';
-  const ATTR_TOOLBAR = 'data-markup-draw-toolbar';
+  const ATTR_BUTTON = 'data-markup-draw-button';
   const TOOLBAR_STATE_KEY = 'gitea-draw-toolbar-state';
 
   const i18n = {
@@ -40,6 +43,7 @@
     edit: 'Edit drawing',
     loading: 'Loading the drawing board…',
     invalidSvg: 'Not a valid SVG drawing',
+    noEditor: 'The code editor is not ready yet, please try again',
   };
 
   // octicon-pencil, inlined so that no extra request is needed
@@ -47,9 +51,10 @@
 
   const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  // matches a whole ```js-draw fenced block; group 1 is the SVG payload
+  // matches a whole ```js-draw fenced block; group 1 is the SVG payload.
+  // CRLF is tolerated because repository files often use it.
   const fenceRegExp = () => new RegExp(
-    `^${TICKS}${escapeRegExp(cfg.lang)}[^\\n]*\\n([\\s\\S]*?)\\n${TICKS}[ \\t]*$`,
+    `^${TICKS}${escapeRegExp(cfg.lang)}[^\\r\\n]*\\r?\\n([\\s\\S]*?)\\r?\\n${TICKS}[ \\t]*$`,
     'gm',
   );
 
@@ -91,6 +96,119 @@
       return window.jsdraw;
     })();
     return jsDrawPromise;
+  }
+
+  // ---------------------------------------------------------------- text sources
+  //
+  // Gitea has two unrelated markdown editors and a drawing has to be written
+  // back into whichever one is on the page:
+  //
+  //   * issues, comments, wiki, releases: a plain <textarea> in .combo-markdown-editor
+  //   * the repository file editor: Monaco, whose instances Gitea publishes
+  //     through window.codeEditors ("export editor for customization")
+  //
+  // Both are wrapped into the same tiny interface.
+
+  function textareaSource(textarea) {
+    return {
+      root: textarea.closest('.combo-markdown-editor') ?? textarea.form ?? textarea.parentElement,
+      getValue: () => textarea.value,
+      getCursorOffset: () => textarea.selectionStart,
+      replaceRange(start, end, text) {
+        textarea.focus();
+        textarea.setSelectionRange(start, end);
+        let inserted = false;
+        try {
+          // keeps the browser's native undo stack intact
+          inserted = document.execCommand('insertText', false, text);
+        } catch {
+          inserted = false;
+        }
+        if (!inserted) {
+          textarea.setRangeText(text, start, end, 'end');
+        }
+        // let Gitea's autosize / draft saving / preview refresh notice the change
+        textarea.dispatchEvent(new Event('input', {bubbles: true}));
+      },
+    };
+  }
+
+  function monacoSource(editor, root) {
+    const model = editor.getModel();
+    return {
+      root,
+      getValue: () => model.getValue(),
+      getCursorOffset: () => {
+        const position = editor.getPosition();
+        return position ? model.getOffsetAt(position) : 0;
+      },
+      replaceRange(start, end, text) {
+        const from = model.getPositionAt(start);
+        const to = model.getPositionAt(end);
+        editor.executeEdits('markdown-draw', [{
+          range: {
+            startLineNumber: from.lineNumber, startColumn: from.column,
+            endLineNumber: to.lineNumber, endColumn: to.column,
+          },
+          text,
+          forceMoveMarkers: true,
+        }]);
+        editor.focus();
+      },
+    };
+  }
+
+  function findMonacoEditor(elContainer) {
+    for (const editor of window.codeEditors ?? []) {
+      try {
+        const node = editor.getContainerDomNode?.();
+        if (node && elContainer.contains(node) && editor.getModel?.()) return editor;
+      } catch {
+        // a disposed editor may throw, just skip it
+      }
+    }
+    return null;
+  }
+
+  // Resolves the editable text behind a rendered markdown block, so that a
+  // drawing shown in a preview pane can be edited in place.
+  function sourceForMarkup(elMarkup) {
+    const elCombo = elMarkup.closest('.combo-markdown-editor');
+    if (elCombo) {
+      const textarea = elCombo.querySelector('textarea.markdown-text-editor');
+      return textarea ? textareaSource(textarea) : null;
+    }
+    const elForm = elMarkup.closest('form');
+    if (elForm) {
+      const editor = findMonacoEditor(elForm);
+      if (editor) return monacoSource(editor, elForm);
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------------- fence utils
+
+  function findFenceAt(text, pos) {
+    for (const match of text.matchAll(fenceRegExp())) {
+      const start = match.index;
+      const end = start + match[0].length;
+      if (pos >= start && pos <= end) return {start, end, content: match[1]};
+    }
+    return null;
+  }
+
+  function findFenceByIndex(text, index) {
+    const match = [...text.matchAll(fenceRegExp())][index];
+    if (!match) return null;
+    return {start: match.index, end: match.index + match[0].length, content: match[1]};
+  }
+
+  function insertAtCursor(source, block) {
+    const value = source.getValue();
+    const pos = source.getCursorOffset();
+    const before = pos === 0 || value[pos - 1] === '\n' ? '' : '\n';
+    const after = pos >= value.length ? '\n' : value[pos] === '\n' ? '\n' : '\n\n';
+    source.replaceRange(pos, pos, before + block + after);
   }
 
   // ---------------------------------------------------------------- rendering
@@ -158,15 +276,15 @@
     elImg.src = blobUrl;
     elContainer.append(elImg);
 
-    // Inside the markdown editor's own preview pane the drawing can be edited in
-    // place, because the matching source fence is right there in the textarea.
-    const elCombo = elPre.closest('.combo-markdown-editor');
-    if (elCombo) {
+    // Inside a markdown editor's own preview the drawing can be edited in place,
+    // because the matching source fence is right there in the editor.
+    const elMarkup = elPre.closest('.markup');
+    if (elMarkup && sourceForMarkup(elMarkup)) {
       const elEdit = document.createElement('button');
       elEdit.type = 'button';
       elEdit.className = 'ui tiny basic button markup-draw-edit';
       elEdit.textContent = i18n.edit;
-      elEdit.addEventListener('click', () => editPreviewedDrawing(elCombo, elContainer));
+      elEdit.addEventListener('click', () => editPreviewedDrawing(elMarkup, elContainer));
       const elActions = document.createElement('div');
       elActions.className = 'markup-draw-actions';
       elActions.append(elEdit);
@@ -190,47 +308,6 @@
         showBlockError(elPre.closest('.code-block-container') ?? elPre, err);
       }
     }
-  }
-
-  // ---------------------------------------------------------------- textarea plumbing
-
-  function findFenceAt(text, pos) {
-    for (const match of text.matchAll(fenceRegExp())) {
-      const start = match.index;
-      const end = start + match[0].length;
-      if (pos >= start && pos <= end) return {start, end, content: match[1]};
-    }
-    return null;
-  }
-
-  function findFenceByIndex(text, index) {
-    const match = [...text.matchAll(fenceRegExp())][index];
-    if (!match) return null;
-    return {start: match.index, end: match.index + match[0].length, content: match[1]};
-  }
-
-  function replaceRange(textarea, start, end, replacement) {
-    textarea.focus();
-    textarea.setSelectionRange(start, end);
-    let inserted = false;
-    try {
-      // keeps the browser's native undo stack intact
-      inserted = document.execCommand('insertText', false, replacement);
-    } catch {
-      inserted = false;
-    }
-    if (!inserted) {
-      textarea.setRangeText(replacement, start, end, 'end');
-    }
-    // let Gitea's autosize / draft saving / preview refresh notice the change
-    textarea.dispatchEvent(new Event('input', {bubbles: true}));
-  }
-
-  function insertAtCursor(textarea, block) {
-    const {selectionStart: start, selectionEnd: end, value} = textarea;
-    const before = start === 0 || value[start - 1] === '\n' ? '' : '\n';
-    const after = end >= value.length ? '\n' : value[end] === '\n' ? '\n' : '\n\n';
-    replaceRange(textarea, start, end, before + block + after);
   }
 
   // ---------------------------------------------------------------- the drawing board
@@ -320,57 +397,113 @@
 
   // ---------------------------------------------------------------- entry points
 
-  function editPreviewedDrawing(elCombo, elContainer) {
-    const textarea = elCombo.querySelector('textarea.markdown-text-editor');
-    if (!textarea) return;
-    const drawings = [...elCombo.querySelectorAll('.markup-draw')];
-    const index = drawings.indexOf(elContainer);
-    const fence = index < 0 ? null : findFenceByIndex(textarea.value, index);
-    if (!fence) return;
-    openDrawingBoard({
-      initialSvg: fence.content,
-      onSave: (svgText) => {
-        // the textarea may have been edited while the board was open
-        const current = findFenceByIndex(textarea.value, index);
-        if (current) replaceRange(textarea, current.start, current.end, makeFence(svgText));
-      },
-    });
-  }
-
-  function onToolbarButtonClick(elCombo) {
-    const textarea = elCombo?.querySelector('textarea.markdown-text-editor');
-    if (!textarea) return;
-    const fence = findFenceAt(textarea.value, textarea.selectionStart);
+  // "Insert drawing" / "edit the drawing under the cursor"
+  function openForSource(source) {
+    if (!source) return;
+    const fence = findFenceAt(source.getValue(), source.getCursorOffset());
     openDrawingBoard({
       initialSvg: fence?.content ?? '',
       onSave: (svgText) => {
         const block = makeFence(svgText);
         if (fence) {
-          replaceRange(textarea, fence.start, fence.end, block);
+          source.replaceRange(fence.start, fence.end, block);
         } else {
-          insertAtCursor(textarea, block);
+          insertAtCursor(source, block);
         }
       },
     });
   }
 
-  function initEditorToolbars() {
-    for (const elToolbar of document.querySelectorAll('.combo-markdown-editor markdown-toolbar')) {
-      if (elToolbar.hasAttribute(ATTR_TOOLBAR)) continue;
-      elToolbar.setAttribute(ATTR_TOOLBAR, 'true');
+  // "Edit drawing" on a drawing shown in a preview pane
+  function editPreviewedDrawing(elMarkup, elContainer) {
+    const source = sourceForMarkup(elMarkup);
+    if (!source) return;
+    const index = [...elMarkup.querySelectorAll('.markup-draw')].indexOf(elContainer);
+    const fence = index < 0 ? null : findFenceByIndex(source.getValue(), index);
+    if (!fence) return;
+    openDrawingBoard({
+      initialSvg: fence.content,
+      onSave: (svgText) => {
+        // the text may have been edited while the board was open
+        const current = findFenceByIndex(source.getValue(), index);
+        if (current) source.replaceRange(current.start, current.end, makeFence(svgText));
+      },
+    });
+  }
 
-      const elButton = document.createElement('button');
-      elButton.type = 'button'; // must not submit the surrounding form
-      elButton.className = 'markdown-toolbar-button markup-draw-button';
-      elButton.setAttribute('data-tooltip-content', i18n.insert);
-      elButton.setAttribute('aria-label', i18n.insert);
-      elButton.append(svgIcon());
-      elButton.addEventListener('click', () => onToolbarButtonClick(elToolbar.closest('.combo-markdown-editor')));
+  function makeButton(className, withLabel) {
+    const elButton = document.createElement('button');
+    elButton.type = 'button'; // must not submit the surrounding form
+    elButton.className = className;
+    elButton.setAttribute('data-tooltip-content', i18n.insert);
+    elButton.setAttribute('aria-label', i18n.insert);
+    elButton.append(svgIcon());
+    if (withLabel) elButton.append(document.createTextNode(` ${i18n.insert}`));
+    return elButton;
+  }
+
+  // issues, comments, wiki, releases: the shared markdown editor
+  function initComboEditors() {
+    for (const elToolbar of document.querySelectorAll('.combo-markdown-editor markdown-toolbar')) {
+      if (elToolbar.hasAttribute(ATTR_BUTTON)) continue;
+      elToolbar.setAttribute(ATTR_BUTTON, 'true');
+
+      const elButton = makeButton('markdown-toolbar-button markup-draw-button', false);
+      elButton.addEventListener('click', () => {
+        const textarea = elToolbar.closest('.combo-markdown-editor')?.querySelector('textarea.markdown-text-editor');
+        if (textarea) openForSource(textareaSource(textarea));
+      });
 
       const elGroup = document.createElement('div');
       elGroup.className = 'markdown-toolbar-group';
       elGroup.append(elButton);
       elToolbar.append(elGroup);
+    }
+  }
+
+  function editedFileName(elForm) {
+    return (elForm.querySelector('#file-name')?.value ?? '').trim().toLowerCase();
+  }
+
+  function isMarkdownFileName(name) {
+    return cfg.markdownExtensions.some((ext) => name.endsWith(ext.toLowerCase()));
+  }
+
+  // the repository file editor: Monaco, no markdown toolbar of its own
+  function initFileEditors() {
+    for (const elMenu of document.querySelectorAll('.repo-editor-menu')) {
+      const elForm = elMenu.closest('form');
+      // Monaco is loaded asynchronously; wait for it so the button never
+      // appears before it can do anything
+      if (!elForm || !elForm.querySelector('.monaco-editor-container')) continue;
+
+      let elButton = elForm.querySelector('.markup-draw-button-file');
+      if (!elButton) {
+        elButton = makeButton('ui compact small button markup-draw-button-file', true);
+        elButton.addEventListener('click', () => {
+          const editor = findMonacoEditor(elForm);
+          if (!editor) {
+            window.alert(i18n.noEditor);
+            return;
+          }
+          openForSource(monacoSource(editor, elForm));
+        });
+        // sit with the other editor controls when they exist (the git hook
+        // editor has none), otherwise right after the write/preview tabs
+        const elOptions = elForm.querySelector('.code-editor-options');
+        if (elOptions) {
+          elOptions.prepend(elButton);
+        } else {
+          elMenu.after(elButton);
+        }
+
+        const elName = elForm.querySelector('#file-name');
+        elName?.addEventListener('input', () => scheduleInit());
+      }
+
+      // the file name can be changed while editing, and the fence only means
+      // anything in a file rendered as markdown
+      elButton.style.display = isMarkdownFileName(editedFileName(elForm)) ? '' : 'none';
     }
   }
 
@@ -381,14 +514,15 @@
     requestAnimationFrame(() => {
       scheduled = false;
       renderAllDrawings();
-      initEditorToolbars();
+      initComboEditors();
+      initFileEditors();
     });
   }
 
   function init() {
     scheduleInit();
     // Gitea swaps large parts of the page through htmx and async rendering,
-    // so both markup blocks and editors can appear at any time
+    // so markup blocks, editors and Monaco itself can appear at any time
     new MutationObserver(scheduleInit).observe(document.body, {childList: true, subtree: true});
   }
 
