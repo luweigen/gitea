@@ -119,6 +119,15 @@ check('js-draw\'s own entries are hidden while the panel is up',
 check('the base object is named', (await page.locator('.markup-draw-align-base span').first().textContent()) === 'Base: 1 of 2');
 check('the base object is outlined on the canvas',
   await page.locator('.markup-draw-base-box').isVisible());
+
+// the menu opens on top of what it acts on, so it has to be see-through
+const menuBackground = await page.locator('dialog.editor-popup-menu > .content')
+  .evaluate((el) => getComputedStyle(el).backgroundColor);
+const menuAlpha = ((match) => (match ? Number(match[1]) : 1))(
+  menuBackground.match(/[,/]\s*([\d.]+)\s*\)$/),
+);
+check('the menu lets what is under it show through',
+  menuAlpha > 0.3 && menuAlpha < 1, menuBackground);
 await screenshot(page, 'alignment-panel');
 
 await page.locator('.markup-draw-align-back').click();

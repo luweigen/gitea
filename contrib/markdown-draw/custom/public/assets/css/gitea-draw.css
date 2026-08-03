@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 3;
+  --markup-draw-css: 4;
 }
 
 .markup-draw {
@@ -85,6 +85,24 @@ body.markup-draw-open {
    follows the board rather than the surrounding Gitea theme -- js-draw picks
    its palette from prefers-color-scheme, and a panel that sat inside its menu
    while using Gitea's colours would look out of place. */
+
+/* The menu behind the selection's "…" button opens on top of the very elements
+   it acts on -- js-draw anchors it to the corner of the selection -- and the
+   align panel replaces it in place, so both would hide what is about to be
+   lined up. Letting the drawing through keeps the selection, and the outlined
+   base object, visible while an action is picked. js-draw's dialog and its
+   backdrop are already transparent; the list inside it is what is opaque.
+   Override --markup-draw-menu-opacity to taste, 100% restores js-draw's own
+   opaque menu. Browsers without color-mix() get exactly that. */
+.markup-draw-overlay {
+  --markup-draw-menu-opacity: 75%;
+}
+
+.markup-draw-overlay .editor-popup-menu > .content {
+  background-color: color-mix(
+    in srgb, var(--background-color-1) var(--markup-draw-menu-opacity), transparent
+  );
+}
 
 .markup-draw-glyph {
   width: 1em;

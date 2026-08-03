@@ -84,8 +84,14 @@ drawing rather than in a toolbar at the top of the screen, and it is a plain
 button on a touch screen as much as on a desktop.
 
 The panel replaces the menu until you go **◀ Back**, and stays up after an
-action so alignments can be chained -- js-draw's menu has a transparent
-backdrop, so the drawing stays visible behind it. Escape closes the menu.
+action so alignments can be chained. The menu opens at the corner of the
+selection, on top of the very elements it acts on, so it is drawn see-through:
+the selection and the outlined base object stay visible underneath while an
+action is picked, and each result is visible as soon as it is clicked. Escape
+closes the menu.
+
+To change how see-through it is, override `--markup-draw-menu-opacity` on
+`.markup-draw-overlay` -- `100%` gives back js-draw's opaque menu.
 
 |  | | |
 |---|---|---|
