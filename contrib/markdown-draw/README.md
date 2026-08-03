@@ -63,6 +63,10 @@ From there the behaviour is the same:
   the button again -- the drawing loads back into the board and the fence is
   replaced on save. In the *Preview* tab every drawing also carries its own
   **Edit drawing** button.
+* **Align**: pick the selection tool, select what you drew, and open the menu
+  behind the **…** button at the corner of the selection -- next to js-draw's own
+  *Duplicate* / *Delete* / *Copy*, there is an **Align…** entry. See
+  [Aligning what you drew](#aligning-what-you-drew).
 * **Read**: drawings render as images wherever markdown renders.
 
 In the file editor the insertion goes through Monaco's `executeEdits`, so a
@@ -70,6 +74,57 @@ single Ctrl+Z undoes it.
 
 Pen pressure, touch input and palm rejection are js-draw's own; toolbar state
 (pen, colour, thickness) is remembered in `localStorage`.
+
+## Aligning what you drew
+
+js-draw moves a selection as one block; it has nothing that lines the members of
+a selection up with *each other*. That is what **Align…** adds. It hangs off the
+menu the selection's own **…** button already opens, so it sits next to the
+drawing rather than in a toolbar at the top of the screen, and it is a plain
+button on a touch screen as much as on a desktop.
+
+The panel replaces the menu until you go **◀ Back**, and stays up after an
+action so alignments can be chained -- js-draw's menu has a transparent
+backdrop, so the drawing stays visible behind it. Escape closes the menu.
+
+|  | | |
+|---|---|---|
+| align left | align horizontal centres | align right |
+| align top | align vertical centres | align bottom |
+| space out horizontally | space out vertically | snap to grid |
+| match width | match height | match width and height |
+
+Greyed out means the action needs more elements than are selected: spacing out
+needs three, matching sizes needs two.
+
+**What things line up against** depends on how many elements are selected:
+
+* **One** -- the bounding box of everything drawn. Note that this includes the
+  selected element, so aligning the leftmost element to the left does nothing.
+* **Several** -- one of them, the **base object**, which stays put while the
+  others move onto it. It is outlined in orange on the canvas, and **▶** steps
+  the base through the selection, so it is always visible which element the rest
+  are about to line up with.
+
+  Shift-clicking elements one by one makes the first one you picked the base.
+  A rubber-band selection has no click order to take that from -- js-draw sorts
+  a selection by z-index, so the base starts as the element drawn first.
+
+*Space out* leaves the outermost two elements where they are and gives the ones
+between them equal gaps. The base object plays no part: which elements bound the
+row is a property of where they sit, not of what was selected first.
+
+*Snap to grid* snaps each element separately, unlike js-draw's own
+whole-selection snap. The grid is js-draw's, whose spacing follows the zoom
+level, so zoom in for a finer grid.
+
+*Match width / height* scales about each element's own centre, so elements
+change size without moving. js-draw scales a stroke's width along with its
+geometry, so matched elements are drawn with a heavier or lighter pen than they
+were.
+
+Every action is one undoable step: a single Ctrl+Z takes back a whole alignment,
+however many elements moved.
 
 ## How it works
 
@@ -94,6 +149,21 @@ which is exactly what this uses.
 
 js-draw is only fetched when a board is actually opened, so pages that merely
 display drawings do not pay for it.
+
+Alignment needs two things from js-draw, both of which it already offers:
+`AbstractComponent.transformBy()` gives an undoable command per element (united
+into one with `uniteCommands`, so an alignment undoes in a single step), and
+`EditorEventType.SelectionUpdated` says when the selection changed.
+
+Getting into the selection menu is the one place this reaches past the public
+API. `SelectionTool.showContextMenu` is an *instance property*, read when a
+selection is built, so replacing it before anything can be selected covers both
+the **…** button and a right click. The replacement calls the original -- every
+entry js-draw puts in the menu is left alone -- and then appends one button to
+the `.content` list of the `<dialog class="editor-popup-menu">` it just built.
+If that markup ever changes, the **Align…** entry silently does not appear,
+which is the failure mode to prefer over a broken menu; `giteaDrawDebug()`
+reports `alignmentHooked` so it can be told apart from a stale cache.
 
 ### Security
 
@@ -122,6 +192,7 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
     lang: "js-draw",            // fence info string
     maxSourceChars: 524288,
     edgeToolbarMaxWidth: 800,   // below this width, use the touch toolbar
+    alignment: true,            // the "Align…" entry in the selection menu
   };
 </script>
 ```
@@ -158,6 +229,14 @@ with a finger. See [test/README.md](test/README.md).
   `window.codeEditors`, none of which carry a compatibility promise. Re-test
   after a major upgrade. The file editor button only needs `window.codeEditors`
   -- the page layout it is placed into is probed, not assumed.
+* **Align…** depends on js-draw internals in one place: the
+  `SelectionTool.showContextMenu` instance property and the markup of the menu
+  it opens (`dialog.editor-popup-menu > .content`). A js-draw upgrade that
+  changes either drops the entry rather than breaking the menu. The alignment
+  itself is public API and unaffected.
+* Alignment works on whole elements. A stroke drawn as one gesture is one
+  element, so it cannot be lined up with part of itself, and matching sizes
+  scales pen widths along with the geometry.
 
 ## When the button does not show up
 
@@ -186,6 +265,10 @@ installed -- the two files are cached independently, so one can be stale while
 the other is current. On a file editor page
 `codeEditors` must be at least 1 -- if it is 0, either Monaco has not finished
 loading, or your Gitea is too old to publish `window.codeEditors`.
+
+If the pencil button works but **Align…** is not in the selection menu, open a
+board first and run `giteaDrawDebug()` again: `alignmentHooked` is only set once
+a board has been opened, and `alignmentProblem` says what stopped it.
 * js-draw follows `prefers-color-scheme` for its own chrome rather than Gitea's
   theme setting. Drawings themselves get an opaque background so they stay
   readable under any theme.

@@ -7,9 +7,16 @@
 // screen (that overlay is inside the board) while the picker stays hidden
 // behind it. Being present is not the test; being clickable is.
 
+import {readFileSync} from 'node:fs';
 import {BASE, createChecks, launchBrowser, openBoard, screenshot, watchPage} from '../lib.mjs';
 
 const {check, finish} = createChecks('colour-picker');
+
+// read out of the stylesheet rather than pinned here, so that bumping the
+// revision after a change to it does not also mean editing this suite
+const cssRevision = readFileSync(
+  new URL('../../custom/public/assets/css/gitea-draw.css', import.meta.url), 'utf8',
+).match(/--markup-draw-css:\s*(\d+)/)?.[1];
 
 const openPicker = async (page, widgetSelector) => {
   // the dropdown toolbar keeps a tool's properties inside its own container,
@@ -51,8 +58,8 @@ const browser = await launchBrowser();
   await page.goto(BASE);
 
   const debug = await page.evaluate(() => window.giteaDrawDebug());
-  check('gitea-draw.css is loaded and current', debug.cssRevision === '2',
-    `cssRevision=${debug.cssRevision}`);
+  check('gitea-draw.css is loaded and current', debug.cssRevision === cssRevision,
+    `cssRevision=${debug.cssRevision}, stylesheet says ${cssRevision}`);
 
   await openBoard(page);
   await openPicker(page, '.toolbar-internalWidgetId--pen');

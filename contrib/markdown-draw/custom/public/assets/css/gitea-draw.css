@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 2;
+  --markup-draw-css: 3;
 }
 
 .markup-draw {
@@ -78,4 +78,102 @@ body > #clr-picker {
 
 body.markup-draw-open {
   overflow: hidden;
+}
+
+/* --- alignment, see the "alignment" section of gitea-draw.js.
+   The colours come from js-draw's own custom properties so that the panel
+   follows the board rather than the surrounding Gitea theme -- js-draw picks
+   its palette from prefers-color-scheme, and a panel that sat inside its menu
+   while using Gitea's colours would look out of place. */
+
+.markup-draw-glyph {
+  width: 1em;
+  height: 1em;
+  fill: currentcolor;
+}
+
+/* the edge the blocks line up against, drawn stronger than the blocks */
+.markup-draw-glyph rect {
+  opacity: 0.55;
+}
+
+.markup-draw-glyph rect.markup-draw-glyph-rule {
+  opacity: 1;
+}
+
+.markup-draw-align-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  min-width: 148px;
+}
+
+.markup-draw-align-head,
+.markup-draw-align-base {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9em;
+}
+
+.markup-draw-align-head {
+  font-weight: bold;
+}
+
+.markup-draw-align-base {
+  justify-content: space-between;
+  opacity: 0.8;
+}
+
+.markup-draw-align-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+}
+
+.markup-draw-align-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--foreground-color-1, currentcolor);
+  cursor: pointer;
+  font-size: 1em;
+}
+
+.markup-draw-align-button:hover:not(:disabled),
+.markup-draw-align-button:focus-visible {
+  background: var(--background-color-2, rgb(0 0 0 / 8%));
+  color: var(--foreground-color-2, currentcolor);
+}
+
+.markup-draw-align-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.markup-draw-align-back,
+.markup-draw-align-next {
+  padding: 3px;
+  flex: none;
+}
+
+/* pinned to the editor's rendering area so the outline cannot spill over the
+   toolbar; purely decorative, so it must never take a pointer event */
+.markup-draw-base-clip {
+  position: fixed;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.markup-draw-base-box {
+  position: absolute;
+  border: 2px dashed #e0561a;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 60%) inset;
 }

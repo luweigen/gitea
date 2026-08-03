@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '6';
+  const SCRIPT_REVISION = '7';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -34,6 +34,8 @@
     // file extensions the repository file editor offers the button for,
     // keep in sync with [markdown] FILE_EXTENSIONS
     markdownExtensions: ['.md', '.markdown', '.mdown', '.mkd', '.livemd'],
+    // add the "Align…" entry to the selection menu, see the alignment section
+    alignment: true,
     ...(window.giteaDrawConfig ?? {}),
   };
 
@@ -41,6 +43,7 @@
   const CODE_SELECTOR = `.markup code.language-${cfg.lang}`;
   const ATTR_RENDERED = 'data-markup-draw-rendered';
   const ATTR_BUTTON = 'data-markup-draw-button';
+  const ATTR_ALIGN_MENU = 'data-markup-draw-align';
   const TOOLBAR_STATE_KEY = 'gitea-draw-toolbar-state';
 
   const i18n = {
@@ -49,6 +52,25 @@
     loading: 'Loading the drawing board…',
     invalidSvg: 'Not a valid SVG drawing',
     noEditor: 'The code editor is not ready yet, please try again',
+    align: 'Align…',
+    alignTitle: 'Align',
+    back: 'Back',
+    baseObject: 'Base object',
+    nextBase: 'Use the next element as the base object',
+    baseOf: (n, total) => `Base: ${n} of ${total}`,
+    alignToContent: 'Aligned to everything drawn',
+    alignLeft: 'Align left edges',
+    alignCenterX: 'Align horizontal centres',
+    alignRight: 'Align right edges',
+    alignTop: 'Align top edges',
+    alignCenterY: 'Align vertical centres',
+    alignBottom: 'Align bottom edges',
+    distributeX: 'Space out horizontally',
+    distributeY: 'Space out vertically',
+    snapToGrid: 'Snap to grid',
+    matchWidth: 'Match width',
+    matchHeight: 'Match height',
+    matchSize: 'Match width and height',
   };
 
   // octicon-pencil, inlined so that no extra request is needed
@@ -315,6 +337,453 @@
     }
   }
 
+  // ---------------------------------------------------------------- alignment
+  //
+  // js-draw moves a selection as one block; it has nothing that lines the
+  // members of a selection up with each other.  This adds that, hung off the
+  // menu the selection's own "…" button already opens rather than off a toolbar
+  // of our own, so it sits next to the drawing it acts on.
+  //
+  // What the elements line up against:
+  //
+  //   * one element selected -- the bounding box of everything drawn.  The
+  //     background is not a component (`image.getAllComponents()` documents
+  //     that it leaves background elements out), so a full-page white backdrop
+  //     does not swallow that box.
+  //   * several selected -- one of them, the *base object*, which stays put
+  //     while the others move onto it.  It is outlined on the canvas and can be
+  //     stepped through, because a rubber-band selection has no click order for
+  //     "the one you picked first" to be read out of; see selectionOrder below.
+  //
+  // Every action turns into one `transformBy` command per element, united into
+  // a single undoable command, so one Ctrl+Z takes back a whole alignment.
+
+  const alignDebug = {hooked: false, why: 'no drawing board opened yet'};
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  // Icons are drawn here rather than fetched: js-draw has none for alignment,
+  // and an extra request for twelve 16x16 glyphs is not worth it.  A shape is
+  // either [x, y, w, h] or ['path', d]; the "rule" class marks the edge the
+  // blocks line up against so it can be drawn more strongly than they are.
+  const GLYPHS = {
+    left: [[1, 1, 1.5, 14, 'rule'], [3.5, 3, 10, 3.5], [3.5, 9.5, 6.5, 3.5]],
+    centerX: [[7.25, 1, 1.5, 14, 'rule'], [3, 3, 10, 3.5], [4.75, 9.5, 6.5, 3.5]],
+    right: [[13.5, 1, 1.5, 14, 'rule'], [3.5, 3, 10, 3.5], [7, 9.5, 6.5, 3.5]],
+    top: [[1, 1, 14, 1.5, 'rule'], [3, 3.5, 3.5, 10], [9.5, 3.5, 3.5, 6.5]],
+    centerY: [[1, 7.25, 14, 1.5, 'rule'], [3, 3, 3.5, 10], [9.5, 4.75, 3.5, 6.5]],
+    bottom: [[1, 13.5, 14, 1.5, 'rule'], [3, 3.5, 3.5, 10], [9.5, 7, 3.5, 6.5]],
+    distributeX: [[1, 3, 2.5, 10], [6.75, 3, 2.5, 10], [12.5, 3, 2.5, 10]],
+    distributeY: [[3, 1, 10, 2.5], [3, 6.75, 10, 2.5], [3, 12.5, 10, 2.5]],
+    grid: [[5.3, 1, 1, 14, 'rule'], [9.7, 1, 1, 14, 'rule'], [1, 5.3, 14, 1, 'rule'], [1, 9.7, 14, 1, 'rule']],
+    matchWidth: [[2, 2, 12, 4.5], [2, 9, 12, 5]],
+    matchHeight: [[2, 2, 4.5, 12], [9, 2, 5, 12]],
+    matchSize: [[1.5, 4, 6, 8], [8.5, 4, 6, 8]],
+    back: [['path', 'M10.5 2.5 5 8l5.5 5.5z']],
+    next: [['path', 'M5.5 2.5 11 8l-5.5 5.5z']],
+  };
+
+  function makeGlyph(shapes) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.classList.add('markup-draw-glyph');
+    for (const shape of shapes) {
+      if (shape[0] === 'path') {
+        const elPath = document.createElementNS(SVG_NS, 'path');
+        elPath.setAttribute('d', shape[1]);
+        svg.append(elPath);
+        continue;
+      }
+      const elRect = document.createElementNS(SVG_NS, 'rect');
+      const [x, y, w, h, kind] = shape;
+      elRect.setAttribute('x', x);
+      elRect.setAttribute('y', y);
+      elRect.setAttribute('width', w);
+      elRect.setAttribute('height', h);
+      if (kind) elRect.classList.add(`markup-draw-glyph-${kind}`);
+      svg.append(elRect);
+    }
+    return svg;
+  }
+
+  // js-draw's own selection rectangle is the union of getBBox(), so alignment
+  // uses the same box the user sees rather than a tighter one they do not.
+  const bboxOf = (component) => component.getBBox();
+
+  const EPSILON = 1e-9;
+
+  // ref is the box being aligned to, box the one being moved
+  const ALIGN_DELTAS = {
+    left: (box, ref) => [ref.x - box.x, 0],
+    centerX: (box, ref) => [ref.center.x - box.center.x, 0],
+    right: (box, ref) => [ref.x + ref.w - (box.x + box.w), 0],
+    top: (box, ref) => [0, ref.y - box.y],
+    centerY: (box, ref) => [0, ref.center.y - box.center.y],
+    bottom: (box, ref) => [0, ref.y + ref.h - (box.y + box.h)],
+  };
+
+  // the union of everything drawn: what a lone element aligns to
+  function contentBounds(editor) {
+    let bounds = null;
+    for (const component of editor.image.getAllComponents()) {
+      const box = bboxOf(component);
+      bounds = bounds ? bounds.union(box) : box;
+    }
+    return bounds;
+  }
+
+  function translateCommand(jsdraw, component, dx, dy) {
+    if (Math.abs(dx) < EPSILON && Math.abs(dy) < EPSILON) return null;
+    return component.transformBy(jsdraw.Mat33.translation(jsdraw.Vec2.of(dx, dy)));
+  }
+
+  // One command for the whole action, so it undoes in one step.  The selection
+  // rectangle is derived from the elements, so it has to be rebuilt now that
+  // they have moved; the set is unchanged, so this fires no selection event.
+  function applyAlignCommands(ctx, objects, commands, description) {
+    const real = commands.filter(Boolean);
+    if (!real.length) return;
+    ctx.editor.dispatch(ctx.jsdraw.uniteCommands(real, {description}));
+    ctx.tool.setSelection(objects);
+    ctx.updateHighlight();
+  }
+
+  function alignSelection(ctx, edge) {
+    const objects = ctx.tool.getSelectedObjects();
+    if (!objects.length) return;
+    const base = objects.length > 1 ? ctx.getBase() : null;
+    const reference = base ? bboxOf(base) : contentBounds(ctx.editor);
+    if (!reference) return;
+    const commands = objects
+      .filter((component) => component !== base)
+      .map((component) => translateCommand(
+        ctx.jsdraw, component, ...ALIGN_DELTAS[edge](bboxOf(component), reference),
+      ));
+    applyAlignCommands(ctx, objects, commands, i18n[`align${edge[0].toUpperCase()}${edge.slice(1)}`]);
+  }
+
+  // Equal gaps between neighbours, with the outermost two left where they are.
+  // The base object plays no part here: which elements bound the row is a
+  // property of where they sit, not of what was selected first.
+  function distributeSelection(ctx, axis) {
+    const objects = ctx.tool.getSelectedObjects();
+    if (objects.length < 3) return;
+    const horizontal = axis === 'x';
+    const start = (box) => (horizontal ? box.x : box.y);
+    const size = (box) => (horizontal ? box.w : box.h);
+
+    const sorted = [...objects].sort((a, b) => start(bboxOf(a)) - start(bboxOf(b)));
+    const boxes = sorted.map(bboxOf);
+    const first = boxes[0];
+    const last = boxes[boxes.length - 1];
+    const span = start(last) + size(last) - start(first);
+    const filled = boxes.reduce((sum, box) => sum + size(box), 0);
+    const gap = (span - filled) / (boxes.length - 1);
+
+    const commands = [];
+    let cursor = start(first) + size(first) + gap;
+    for (let i = 1; i < sorted.length - 1; i++) {
+      const shift = cursor - start(boxes[i]);
+      commands.push(translateCommand(
+        ctx.jsdraw, sorted[i], horizontal ? shift : 0, horizontal ? 0 : shift,
+      ));
+      cursor += size(boxes[i]) + gap;
+    }
+    applyAlignCommands(ctx, objects, commands, horizontal ? i18n.distributeX : i18n.distributeY);
+  }
+
+  // Scaled about each element's own centre, so it changes size without moving.
+  // Note that this scales stroke widths with everything else.
+  function matchSizeOfSelection(ctx, mode) {
+    const objects = ctx.tool.getSelectedObjects();
+    const base = ctx.getBase();
+    if (objects.length < 2 || !base) return;
+    const reference = bboxOf(base);
+    const commands = [];
+    for (const component of objects) {
+      if (component === base) continue;
+      const box = bboxOf(component);
+      const sx = mode === 'height' || box.w < EPSILON ? 1 : reference.w / box.w;
+      const sy = mode === 'width' || box.h < EPSILON ? 1 : reference.h / box.h;
+      if (Math.abs(sx - 1) < EPSILON && Math.abs(sy - 1) < EPSILON) continue;
+      commands.push(component.transformBy(
+        ctx.jsdraw.Mat33.scaling2D(ctx.jsdraw.Vec2.of(sx, sy), box.center),
+      ));
+    }
+    const labels = {width: i18n.matchWidth, height: i18n.matchHeight, both: i18n.matchSize};
+    applyAlignCommands(ctx, objects, commands, labels[mode]);
+  }
+
+  // Each element separately, unlike js-draw's own snapSelectedObjectsToGrid(),
+  // which moves the selection as a block.  The grid is js-draw's, so its size
+  // follows the zoom level.
+  function snapSelectionToGrid(ctx) {
+    const objects = ctx.tool.getSelectedObjects();
+    if (!objects.length) return;
+    const commands = objects.map((component) => {
+      const box = bboxOf(component);
+      const snapped = ctx.editor.viewport.snapToGrid(box.topLeft);
+      return translateCommand(ctx.jsdraw, component, snapped.x - box.x, snapped.y - box.y);
+    });
+    applyAlignCommands(ctx, objects, commands, i18n.snapToGrid);
+  }
+
+  // Which element is the base, and the outline that says so.
+  //
+  // SelectionTool.setSelection() sorts by z-index, so the click order is not
+  // recoverable from the selection itself.  Selections are *extended* by
+  // appending, though, so remembering the order events arrive in keeps
+  // shift-click order intact; a rubber-band selection genuinely has none and
+  // falls back to z-index, i.e. the order the elements were drawn in.
+  function createSelectionOrder() {
+    let ordered = [];
+    let base = null;
+    return {
+      update(objects) {
+        const selected = new Set(objects);
+        const kept = ordered.filter((component) => selected.has(component));
+        const keptSet = new Set(kept);
+        ordered = [...kept, ...objects.filter((component) => !keptSet.has(component))];
+        if (!base || !selected.has(base)) base = ordered[0] ?? null;
+      },
+      getBase: () => base,
+      getOrder: () => ordered,
+      next() {
+        if (ordered.length < 2) return;
+        base = ordered[(ordered.indexOf(base) + 1) % ordered.length];
+      },
+    };
+  }
+
+  function createBaseHighlight(jsdraw, editor, tool, elParent, getBase) {
+    const elClip = document.createElement('div');
+    elClip.className = 'markup-draw-base-clip';
+    const elBox = document.createElement('div');
+    elBox.className = 'markup-draw-base-box';
+    elClip.append(elBox);
+    elParent.append(elClip);
+
+    const update = () => {
+      const base = getBase();
+      const objects = tool.getSelectedObjects?.() ?? [];
+      // with a single element selected there is no base: it aligns to the
+      // drawing as a whole, and outlining the only selected element would just
+      // repeat the selection rectangle
+      if (!base || objects.length < 2 || !objects.includes(base)) {
+        elClip.style.display = 'none';
+        return;
+      }
+      // canvasToScreen() is relative to the rendering area, so the clip is
+      // pinned to it and the outline positioned inside; that also keeps the
+      // outline from being drawn over the toolbar
+      const area = editor.getOutputBBoxInDOM();
+      elClip.style.display = '';
+      elClip.style.left = `${area.x}px`;
+      elClip.style.top = `${area.y}px`;
+      elClip.style.width = `${area.w}px`;
+      elClip.style.height = `${area.h}px`;
+
+      // mid-drag the elements have not moved yet -- the pending transform sits
+      // on the selection until it is finalised
+      const pending = tool.getSelection()?.getTransform?.() ?? null;
+      const corners = bboxOf(base).corners.map((corner) => editor.viewport.canvasToScreen(
+        pending ? pending.transformVec2(corner) : corner,
+      ));
+      const box = jsdraw.Rect2.bboxOf(corners);
+      elBox.style.left = `${box.x}px`;
+      elBox.style.top = `${box.y}px`;
+      elBox.style.width = `${box.w}px`;
+      elBox.style.height = `${box.h}px`;
+    };
+
+    // A drag only reaches the elements when it ends, so follow the pending
+    // transform while a pointer is down and stop as soon as it is up.
+    let frame = null;
+    const follow = () => {
+      if (!elClip.isConnected) return; // the board was closed mid-drag
+      update();
+      frame = requestAnimationFrame(follow);
+    };
+    elParent.addEventListener('pointerdown', () => {
+      frame ??= requestAnimationFrame(follow);
+    });
+    const stopFollowing = () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      frame = null;
+      update();
+    };
+    elParent.addEventListener('pointerup', stopFollowing);
+    elParent.addEventListener('pointercancel', stopFollowing);
+
+    return {update, stopFollowing};
+  }
+
+  function makeAlignButton(glyph, label, onClick) {
+    const elButton = document.createElement('button');
+    elButton.type = 'button';
+    elButton.className = 'markup-draw-align-button';
+    elButton.title = label;
+    elButton.setAttribute('aria-label', label);
+    elButton.append(makeGlyph(glyph));
+    elButton.addEventListener('click', onClick);
+    return elButton;
+  }
+
+  // The panel that replaces the menu's own contents when "Align…" is picked.
+  // It stays open after an action: js-draw's menu has a transparent backdrop,
+  // so the drawing is visible behind it and alignments can be chained.
+  function buildAlignPanel(ctx, onBack) {
+    const count = ctx.tool.getSelectedObjects().length;
+
+    const elPanel = document.createElement('div');
+    elPanel.className = 'markup-draw-align-panel';
+
+    const elHead = document.createElement('div');
+    elHead.className = 'markup-draw-align-head';
+    const elBack = makeAlignButton(GLYPHS.back, i18n.back, onBack);
+    elBack.classList.add('markup-draw-align-back');
+    const elTitle = document.createElement('span');
+    elTitle.textContent = i18n.alignTitle;
+    elHead.append(elBack, elTitle);
+    elPanel.append(elHead);
+
+    const elBase = document.createElement('div');
+    elBase.className = 'markup-draw-align-base';
+    const elBaseText = document.createElement('span');
+    const elNext = makeAlignButton(GLYPHS.next, i18n.nextBase, () => {
+      ctx.nextBase();
+      ctx.updateHighlight();
+      refreshBase();
+    });
+    elNext.classList.add('markup-draw-align-next');
+    const refreshBase = () => {
+      if (count < 2) {
+        elBaseText.textContent = i18n.alignToContent;
+        return;
+      }
+      const order = ctx.getOrder();
+      elBaseText.textContent = i18n.baseOf(order.indexOf(ctx.getBase()) + 1, order.length);
+    };
+    refreshBase();
+    elBase.append(elBaseText);
+    if (count >= 2) elBase.append(elNext);
+    elPanel.append(elBase);
+
+    // [glyph, label, action, how many elements it needs]
+    const actions = [
+      [GLYPHS.left, i18n.alignLeft, () => alignSelection(ctx, 'left'), 1],
+      [GLYPHS.centerX, i18n.alignCenterX, () => alignSelection(ctx, 'centerX'), 1],
+      [GLYPHS.right, i18n.alignRight, () => alignSelection(ctx, 'right'), 1],
+      [GLYPHS.top, i18n.alignTop, () => alignSelection(ctx, 'top'), 1],
+      [GLYPHS.centerY, i18n.alignCenterY, () => alignSelection(ctx, 'centerY'), 1],
+      [GLYPHS.bottom, i18n.alignBottom, () => alignSelection(ctx, 'bottom'), 1],
+      [GLYPHS.distributeX, i18n.distributeX, () => distributeSelection(ctx, 'x'), 3],
+      [GLYPHS.distributeY, i18n.distributeY, () => distributeSelection(ctx, 'y'), 3],
+      [GLYPHS.grid, i18n.snapToGrid, () => snapSelectionToGrid(ctx), 1],
+      [GLYPHS.matchWidth, i18n.matchWidth, () => matchSizeOfSelection(ctx, 'width'), 2],
+      [GLYPHS.matchHeight, i18n.matchHeight, () => matchSizeOfSelection(ctx, 'height'), 2],
+      [GLYPHS.matchSize, i18n.matchSize, () => matchSizeOfSelection(ctx, 'both'), 2],
+    ];
+
+    const elGrid = document.createElement('div');
+    elGrid.className = 'markup-draw-align-grid';
+    for (const [glyph, label, action, minimum] of actions) {
+      const elButton = makeAlignButton(glyph, label, action);
+      elButton.disabled = count < minimum;
+      elGrid.append(elButton);
+    }
+    elPanel.append(elGrid);
+    return elPanel;
+  }
+
+  // Adds "Align…" to the menu the selection's "…" button (and a right click)
+  // opens.  js-draw builds that menu as a <dialog class="editor-popup-menu">
+  // holding a .content list of .editor-popup-menu-option buttons; everything
+  // js-draw puts there is left alone, ours is appended.
+  function injectAlignEntry(ctx, elRoot) {
+    // a menu that is on its way out keeps its element for the length of its
+    // fade, so the one being opened is the last that is not fading
+    const elDialogs = elRoot.querySelectorAll('dialog.editor-popup-menu:not(.-hide)');
+    const elDialog = elDialogs[elDialogs.length - 1];
+    if (!elDialog || elDialog.hasAttribute(ATTR_ALIGN_MENU)) return;
+    const elContent = elDialog.querySelector('.content');
+    // no selection means this is the "paste here" menu, which has nothing to align
+    if (!elContent || !ctx.tool.getSelectedObjects().length) return;
+    elDialog.setAttribute(ATTR_ALIGN_MENU, 'true');
+
+    const elEntry = document.createElement('button');
+    elEntry.type = 'button';
+    elEntry.className = 'option editor-popup-menu-option markup-draw-align-entry';
+    elEntry.setAttribute('role', 'menuitem');
+    elEntry.append(makeGlyph(GLYPHS.left), document.createTextNode(i18n.align));
+    elEntry.addEventListener('click', () => {
+      const elHidden = [...elContent.children];
+      for (const el of elHidden) el.style.display = 'none';
+      const elPanel = buildAlignPanel(ctx, () => {
+        elPanel.remove();
+        for (const el of elHidden) el.style.display = '';
+      });
+      elContent.append(elPanel);
+      elPanel.querySelector('button')?.focus();
+    });
+    elContent.append(elEntry);
+  }
+
+  function setupAlignment(jsdraw, editor, elRoot) {
+    if (!cfg.alignment) {
+      alignDebug.why = 'turned off in giteaDrawConfig';
+      return;
+    }
+    const tool = editor.toolController.getMatchingTools?.(jsdraw.SelectionTool)?.[0];
+    if (!tool || typeof tool.showContextMenu !== 'function') {
+      alignDebug.why = 'js-draw has no selection tool with a context menu';
+      return;
+    }
+
+    const order = createSelectionOrder();
+    const highlight = createBaseHighlight(jsdraw, editor, tool, elRoot, order.getBase);
+    const ctx = {
+      editor, jsdraw, tool,
+      getBase: order.getBase,
+      getOrder: order.getOrder,
+      nextBase: order.next,
+      updateHighlight: highlight.update,
+    };
+
+    editor.notifier.on(jsdraw.EditorEventType.SelectionUpdated, (event) => {
+      order.update(event.selectedComponents ?? []);
+      highlight.update();
+    });
+    for (const kind of [
+      jsdraw.EditorEventType.ViewportChanged,
+      jsdraw.EditorEventType.CommandDone,
+      jsdraw.EditorEventType.CommandUndone,
+    ]) {
+      editor.notifier.on(kind, () => highlight.update());
+    }
+
+    // showContextMenu is an instance property js-draw reads when it builds a
+    // selection, so replacing it here -- before anything can be selected --
+    // covers both the "…" button and a right click.
+    const showContextMenu = tool.showContextMenu;
+    tool.showContextMenu = (anchor, preferSelectionMenu = true) => {
+      const result = showContextMenu(anchor, preferSelectionMenu);
+      // the menu's <dialog> is built and shown synchronously, so it is already
+      // in the DOM; if js-draw ever changes that markup the entry silently does
+      // not appear, which is the failure mode to prefer over a broken menu
+      try {
+        injectAlignEntry(ctx, elRoot);
+      } catch {
+        alignDebug.why = 'the selection menu no longer looks the way this expects';
+      }
+      return result;
+    };
+
+    alignDebug.hooked = true;
+    alignDebug.why = '';
+  }
+
   // ---------------------------------------------------------------- the drawing board
 
   function restoreToolbarState(toolbar) {
@@ -352,9 +821,13 @@
       elOverlay.remove();
       document.body.classList.remove('markup-draw-open');
     };
-    // bubble phase, so that js-draw's own dialogs can swallow Escape first
     elOverlay.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') close();
+      if (e.key !== 'Escape') return;
+      // A <dialog> closes itself on Escape but does not stop the key event, so
+      // without this, dismissing the selection menu would take the whole board
+      // -- and the drawing -- with it.
+      if (elOverlay.querySelector('dialog[open]')) return;
+      close();
     });
 
     let jsdraw;
@@ -370,6 +843,7 @@
       wheelEventsEnabled: 'only-if-focused',
       appInfo: {name: 'Gitea', description: 'markdown drawing'},
     });
+    setupAlignment(jsdraw, editor, elOverlay);
 
     // js-draw's edge toolbar is the one built for thumbs, so use it on narrow
     // screens and on any touch-first device regardless of its width
@@ -553,6 +1027,9 @@
       config: cfg,
       giteaAssetVersion: window.config?.assetVersionEncoded ?? '(window.config missing)',
       jsDrawLoaded: Boolean(window.jsdraw?.Editor),
+      // false after a board has been opened means the "Align…" entry is missing
+      alignmentHooked: alignDebug.hooked,
+      alignmentProblem: alignDebug.why,
       codeEditors: (window.codeEditors ?? []).length,
       comboEditors: document.querySelectorAll('.combo-markdown-editor').length,
       markdownToolbars: document.querySelectorAll('.combo-markdown-editor markdown-toolbar').length,

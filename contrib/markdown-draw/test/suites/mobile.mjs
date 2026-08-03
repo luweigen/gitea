@@ -50,6 +50,69 @@ check('finger stroke was captured and saved',
 check('page scrolling restored after closing',
   await page.evaluate(() => !document.body.classList.contains('markup-draw-open')));
 
+// --- aligning with a finger: the selection's "…" button is there on touch too,
+// so the panel has to be reachable without a mouse
+await page.locator('textarea.markdown-text-editor').evaluate((el) => {
+  el.value = '';
+  el.dispatchEvent(new Event('input', {bubbles: true}));
+  el.setSelectionRange(0, 0);
+});
+await page.locator('.markup-draw-button').tap();
+await page.locator('.markup-draw-overlay .imageEditorContainer').waitFor({timeout: 30000});
+await page.waitForTimeout(600);
+
+const swipe = async (points) => {
+  await touch('touchStart', ...points[0]);
+  for (const point of points.slice(1)) await touch('touchMove', ...point);
+  await touch('touchEnd', 0, 0);
+  await page.waitForTimeout(200);
+};
+const top = box.y + 120;
+await swipe([[box.x + 40, top], [box.x + 90, top], [box.x + 90, top + 40]]);
+await swipe([[box.x + 200, top + 120], [box.x + 250, top + 120], [box.x + 250, top + 160]]);
+
+await page.locator('.toolbar-internalWidgetId--selection-tool-widget .toolbar-button').first().tap();
+await page.waitForTimeout(300);
+await swipe([[box.x + 20, top - 40], [box.x + 150, top + 80], [box.x + 300, top + 200]]);
+await page.waitForTimeout(300);
+check('the selection menu button is reachable by finger',
+  await page.locator('.selection-tool-selection-menu button').count() === 1);
+
+await page.locator('.selection-tool-selection-menu button').first().tap();
+await page.locator('dialog.editor-popup-menu .content').waitFor({timeout: 5000});
+check('the align entry is in the touch menu too',
+  await page.locator('.markup-draw-align-entry').count() === 1);
+await page.locator('.markup-draw-align-entry').tap();
+await page.locator('.markup-draw-align-grid').waitFor({timeout: 5000});
+await screenshot(page, 'mobile-align-panel');
+check('the panel fits the phone screen',
+  await page.locator('.markup-draw-align-panel').evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    return rect.left >= 0 && rect.right <= window.innerWidth && rect.width >= 120;
+  }));
+
+await page.locator('.markup-draw-align-grid button').first().tap(); // align left
+await page.waitForTimeout(300);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(200);
+await page.locator('.markup-draw-overlay .toolwidget-tag--save .toolbar-button').first().tap();
+await page.locator('.markup-draw-overlay').waitFor({state: 'detached', timeout: 15000});
+
+const alignedLefts = await page.evaluate((svgText) => {
+  const host = document.createElement('div');
+  host.style.cssText = 'position:absolute;visibility:hidden';
+  host.innerHTML = svgText;
+  document.body.append(host);
+  const lefts = [...host.querySelectorAll('svg > path:not(.js-draw-image-background)')]
+    .map((el) => el.getBBox().x);
+  host.remove();
+  return lefts;
+}, (await page.locator('textarea.markdown-text-editor').inputValue())
+  .replace(/^```js-draw\n/, '').replace(/\n```[\s\S]*$/, ''));
+check('a finger-driven alignment lines the strokes up',
+  alignedLefts.length === 2 && Math.abs(alignedLefts[0] - alignedLefts[1]) < 0.5,
+  alignedLefts.map((x) => x.toFixed(1)).join(' '));
+
 // --- and the result has to fit a phone screen
 await page.evaluate((svg) => window.renderFence('standalone', svg),
   value.replace(/^```js-draw\n/, '').replace(/\n```[\s\S]*$/, ''));

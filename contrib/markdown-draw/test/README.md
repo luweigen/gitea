@@ -33,7 +33,8 @@ To poke at the harness by hand: `node server.mjs`, then open
 | suite | what it drives |
 | --- | --- |
 | `combo-editor` | the shared markdown editor (issues, PRs, comments, wiki, releases): insert, render, hostile payloads, round trip |
-| `mobile` | drawing with a finger, via raw CDP touch events on an iPhone-sized viewport |
+| `alignment` | the "Align…" entry in the selection menu, and the geometry it produces |
+| `mobile` | drawing with a finger, via raw CDP touch events on an iPhone-sized viewport, including a finger-driven alignment |
 | `file-editor` | the repository file editor against the real Monaco build Gitea pins |
 | `file-editor-layouts` | the same button across three generations of Gitea's editor markup |
 | `colour-picker` | Coloris' picker, which lives outside the board and has to be stacked above it |
@@ -48,6 +49,11 @@ Two habits worth keeping when adding to them:
   the result back out of the model, not out of the hidden textarea Monaco
   writes to. Faking the editor would have hidden the bug that the textarea is
   written *by* Monaco and never read from.
+* **Assert on what ships.** The alignment suite measures the saved SVG rather
+  than js-draw's in-memory model: what matters is the geometry that lands in
+  the markdown. Where a number would have to be assumed -- the grid spacing,
+  which follows the zoom level -- it checks the property instead (snapping
+  twice changes nothing the second time).
 
 ## Dependency versions
 
