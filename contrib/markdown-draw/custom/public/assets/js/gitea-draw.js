@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '7';
+  const SCRIPT_REVISION = '8';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -36,6 +36,10 @@
     markdownExtensions: ['.md', '.markdown', '.mdown', '.mkd', '.livemd'],
     // add the "Align…" entry to the selection menu, see the alignment section
     alignment: true,
+    // how close, in screen pixels, a dragged selection has to come to another
+    // element's edge or centre before it snaps onto it; 0 turns that off and
+    // leaves only the menu
+    snapDistance: 8,
     ...(window.giteaDrawConfig ?? {}),
   };
 
@@ -556,13 +560,35 @@
     };
   }
 
+  // A layer pinned over the editor's rendering area.  js-draw's
+  // canvasToScreen() is relative to exactly that area, so anything placed
+  // inside can use its coordinates directly, and clipping to it keeps drawings
+  // on the canvas from being painted over the toolbar.
+  function createCanvasOverlay(editor, elParent, className) {
+    const elLayer = document.createElement('div');
+    elLayer.className = `markup-draw-canvas-overlay ${className}`;
+    elParent.append(elLayer);
+    return {
+      el: elLayer,
+      show() {
+        const area = editor.getOutputBBoxInDOM();
+        elLayer.style.display = '';
+        elLayer.style.left = `${area.x}px`;
+        elLayer.style.top = `${area.y}px`;
+        elLayer.style.width = `${area.w}px`;
+        elLayer.style.height = `${area.h}px`;
+      },
+      hide() {
+        elLayer.style.display = 'none';
+      },
+    };
+  }
+
   function createBaseHighlight(jsdraw, editor, tool, elParent, getBase) {
-    const elClip = document.createElement('div');
-    elClip.className = 'markup-draw-base-clip';
+    const layer = createCanvasOverlay(editor, elParent, 'markup-draw-base');
     const elBox = document.createElement('div');
     elBox.className = 'markup-draw-base-box';
-    elClip.append(elBox);
-    elParent.append(elClip);
+    layer.el.append(elBox);
 
     const update = () => {
       const base = getBase();
@@ -571,18 +597,10 @@
       // drawing as a whole, and outlining the only selected element would just
       // repeat the selection rectangle
       if (!base || objects.length < 2 || !objects.includes(base)) {
-        elClip.style.display = 'none';
+        layer.hide();
         return;
       }
-      // canvasToScreen() is relative to the rendering area, so the clip is
-      // pinned to it and the outline positioned inside; that also keeps the
-      // outline from being drawn over the toolbar
-      const area = editor.getOutputBBoxInDOM();
-      elClip.style.display = '';
-      elClip.style.left = `${area.x}px`;
-      elClip.style.top = `${area.y}px`;
-      elClip.style.width = `${area.w}px`;
-      elClip.style.height = `${area.h}px`;
+      layer.show();
 
       // mid-drag the elements have not moved yet -- the pending transform sits
       // on the selection until it is finalised
@@ -601,22 +619,212 @@
     // transform while a pointer is down and stop as soon as it is up.
     let frame = null;
     const follow = () => {
-      if (!elClip.isConnected) return; // the board was closed mid-drag
+      if (!layer.el.isConnected) return; // the board was closed mid-drag
       update();
       frame = requestAnimationFrame(follow);
     };
-    elParent.addEventListener('pointerdown', () => {
-      frame ??= requestAnimationFrame(follow);
-    });
-    const stopFollowing = () => {
-      if (frame !== null) cancelAnimationFrame(frame);
-      frame = null;
-      update();
+    return {
+      update,
+      startFollowing() {
+        frame ??= requestAnimationFrame(follow);
+      },
+      stopFollowing() {
+        if (frame !== null) cancelAnimationFrame(frame);
+        frame = null;
+        update();
+      },
     };
-    elParent.addEventListener('pointerup', stopFollowing);
-    elParent.addEventListener('pointercancel', stopFollowing);
+  }
 
-    return {update, stopFollowing};
+  // Guides while dragging.
+  //
+  // js-draw publishes no "the selection is being dragged" hook, but a drag is a
+  // stream of `Selection.setTransform(Mat33.translation(…))` calls, and
+  // setTransform is an ordinary method: shadowing it *on the instance* (never
+  // on the prototype, which is shared with every other board on the page) lets
+  // the translation be adjusted on its way through.
+  //
+  // Anything that is not a plain translation goes through untouched, so resize
+  // and rotate handles keep working; so does anything with `preview` false,
+  // which is how the finalising command replays the transform. Holding Ctrl
+  // hands over to js-draw's own grid snapping rather than fighting it.
+
+  // The translation a transform performs, or null if it does anything else.
+  // Read off the transform rather than out of its matrix, so that this does not
+  // depend on how Mat33 stores itself.
+  function translationOf(jsdraw, transform) {
+    const {Vec2} = jsdraw;
+    const origin = transform.transformVec2(Vec2.of(0, 0));
+    const alongX = transform.transformVec2(Vec2.of(1, 0)).minus(origin);
+    const alongY = transform.transformVec2(Vec2.of(0, 1)).minus(origin);
+    const isUnit = (vec, x, y) => Math.abs(vec.x - x) < 1e-6 && Math.abs(vec.y - y) < 1e-6;
+    return isUnit(alongX, 1, 0) && isUnit(alongY, 0, 1) ? origin : null;
+  }
+
+  function createDragSnapping(jsdraw, editor, tool, elParent) {
+    const layer = createCanvasOverlay(editor, elParent, 'markup-draw-guides');
+    layer.hide();
+    const patched = new WeakSet();
+    let lines = null; // candidate guides, gathered once per drag
+    let dragBox = null; // the selection's box before the drag, likewise
+    let dragging = false;
+
+    // Where an element offers to line others up: its two edges and its centre,
+    // on each axis.  Guides at the same coordinate are merged, and each keeps
+    // the extent of what produced it so the drawn line can reach from the
+    // element it belongs to to the one being dragged.
+    function gatherLines(selection) {
+      const selected = new Set(selection.getSelectedObjects());
+      const axes = {x: new Map(), y: new Map()};
+      const add = (axis, at, from, to) => {
+        const key = at.toFixed(3);
+        const line = axis.get(key);
+        if (line) {
+          line.from = Math.min(line.from, from);
+          line.to = Math.max(line.to, to);
+        } else {
+          axis.set(key, {at, from, to});
+        }
+      };
+      for (const component of editor.image.getAllComponents()) {
+        if (selected.has(component)) continue;
+        const box = bboxOf(component);
+        for (const at of [box.x, box.center.x, box.x + box.w]) add(axes.x, at, box.y, box.y + box.h);
+        for (const at of [box.y, box.center.y, box.y + box.h]) add(axes.y, at, box.x, box.x + box.w);
+      }
+      return {x: [...axes.x.values()], y: [...axes.y.values()]};
+    }
+
+    const edgesOf = (box) => ({
+      x: [box.x, box.center.x, box.x + box.w],
+      y: [box.y, box.center.y, box.y + box.h],
+    });
+
+    // the smallest move that puts one of the dragged edges onto a guide
+    function nearestShift(edges, candidates, limit) {
+      let shift = 0;
+      let best = limit;
+      for (const edge of edges) {
+        for (const candidate of candidates) {
+          const distance = Math.abs(candidate.at - edge);
+          if (distance < best) {
+            best = distance;
+            shift = candidate.at - edge;
+          }
+        }
+      }
+      return shift;
+    }
+
+    const linesHit = (edges, candidates) => candidates.filter(
+      (candidate) => edges.some((edge) => Math.abs(candidate.at - edge) < 1e-3),
+    );
+
+    function drawGuides(hits, box) {
+      const elLines = [];
+      const guide = (from, to) => {
+        const start = editor.viewport.canvasToScreen(from);
+        const end = editor.viewport.canvasToScreen(to);
+        const span = end.minus(start);
+        const elLine = document.createElement('div');
+        elLine.className = 'markup-draw-guide';
+        elLine.style.left = `${start.x}px`;
+        elLine.style.top = `${start.y}px`;
+        elLine.style.width = `${span.magnitude()}px`;
+        // a rotated viewport turns an axis-aligned guide into a slanted one
+        elLine.style.transform = `rotate(${Math.atan2(span.y, span.x)}rad)`;
+        elLines.push(elLine);
+      };
+      for (const line of hits.x) {
+        guide(
+          jsdraw.Vec2.of(line.at, Math.min(line.from, box.y)),
+          jsdraw.Vec2.of(line.at, Math.max(line.to, box.y + box.h)),
+        );
+      }
+      for (const line of hits.y) {
+        guide(
+          jsdraw.Vec2.of(Math.min(line.from, box.x), line.at),
+          jsdraw.Vec2.of(Math.max(line.to, box.x + box.w), line.at),
+        );
+      }
+      if (!elLines.length) {
+        layer.hide();
+        return;
+      }
+      layer.show();
+      layer.el.replaceChildren(...elLines);
+    }
+
+    const clear = () => {
+      layer.hide();
+      layer.el.replaceChildren();
+    };
+
+    function adjust(selection, transform, preview) {
+      // `preview` false is the finalising command replaying what the drag
+      // already produced; snapping it a second time would move it twice
+      if (!dragging || !preview || tool.snapToGrid) return transform;
+      const delta = translationOf(jsdraw, transform);
+      if (!delta) { // a resize or rotate handle, not the selection itself
+        clear();
+        return transform;
+      }
+      // the grab itself, before any movement: snapping here would tug the
+      // selection out from under the pointer
+      if (Math.abs(delta.x) < EPSILON && Math.abs(delta.y) < EPSILON) {
+        clear();
+        return transform;
+      }
+
+      lines ??= gatherLines(selection);
+      dragBox ??= selection.computeTightBoundingBox();
+      if (!dragBox || (!lines.x.length && !lines.y.length)) return transform;
+
+      const limit = cfg.snapDistance * editor.viewport.getSizeOfPixelOnCanvas();
+      const edges = edgesOf(dragBox);
+      const moved = jsdraw.Vec2.of(
+        delta.x + nearestShift(edges.x.map((at) => at + delta.x), lines.x, limit),
+        delta.y + nearestShift(edges.y.map((at) => at + delta.y), lines.y, limit),
+      );
+      const box = dragBox.translatedBy(moved);
+      const hit = edgesOf(box);
+      drawGuides({x: linesHit(hit.x, lines.x), y: linesHit(hit.y, lines.y)}, box);
+      return jsdraw.Mat33.translation(moved);
+    }
+
+    return {
+      // Selections are rebuilt whenever what is selected changes, so each new
+      // one has to be shadowed again.
+      attach(selection) {
+        if (!selection || patched.has(selection) || typeof selection.setTransform !== 'function') return;
+        patched.add(selection);
+        const original = selection.setTransform.bind(selection);
+        selection.setTransform = (transform, preview = true) => {
+          let adjusted = transform;
+          try {
+            adjusted = adjust(selection, transform, preview);
+          } catch {
+            adjusted = transform; // never let snapping break dragging
+          }
+          original(adjusted, preview);
+        };
+      },
+      startDrag(selection) {
+        this.attach(selection);
+        lines = null;
+        dragBox = null;
+        dragging = cfg.snapDistance > 0;
+      },
+      endDrag() {
+        dragging = false;
+        clear();
+      },
+      // what is on the canvas changed, so the guides it offers did too
+      invalidate() {
+        lines = null;
+        dragBox = null;
+      },
+    };
   }
 
   function makeAlignButton(glyph, label, onClick) {
@@ -743,6 +951,7 @@
 
     const order = createSelectionOrder();
     const highlight = createBaseHighlight(jsdraw, editor, tool, elRoot, order.getBase);
+    const snapping = createDragSnapping(jsdraw, editor, tool, elRoot);
     const ctx = {
       editor, jsdraw, tool,
       getBase: order.getBase,
@@ -753,6 +962,8 @@
 
     editor.notifier.on(jsdraw.EditorEventType.SelectionUpdated, (event) => {
       order.update(event.selectedComponents ?? []);
+      snapping.attach(tool.getSelection?.());
+      snapping.invalidate();
       highlight.update();
     });
     for (const kind of [
@@ -760,8 +971,24 @@
       jsdraw.EditorEventType.CommandDone,
       jsdraw.EditorEventType.CommandUndone,
     ]) {
-      editor.notifier.on(kind, () => highlight.update());
+      editor.notifier.on(kind, () => {
+        snapping.invalidate();
+        highlight.update();
+      });
     }
+
+    // A drag is bracketed by these: js-draw handles the pointer on the canvas
+    // itself, so by the time the event reaches here its own work is done.
+    elRoot.addEventListener('pointerdown', () => {
+      snapping.startDrag(tool.getSelection?.());
+      highlight.startFollowing();
+    });
+    const endDrag = () => {
+      snapping.endDrag();
+      highlight.stopFollowing();
+    };
+    elRoot.addEventListener('pointerup', endDrag);
+    elRoot.addEventListener('pointercancel', endDrag);
 
     // showContextMenu is an instance property js-draw reads when it builds a
     // selection, so replacing it here -- before anything can be selected --

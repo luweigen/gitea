@@ -33,7 +33,7 @@ To poke at the harness by hand: `node server.mjs`, then open
 | suite | what it drives |
 | --- | --- |
 | `combo-editor` | the shared markdown editor (issues, PRs, comments, wiki, releases): insert, render, hostile payloads, round trip |
-| `alignment` | the "Align…" entry in the selection menu, and the geometry it produces |
+| `alignment` | the "Align…" entry in the selection menu, the guides that snap a drag, and the geometry both produce |
 | `mobile` | drawing with a finger, via raw CDP touch events on an iPhone-sized viewport, including a finger-driven alignment |
 | `file-editor` | the repository file editor against the real Monaco build Gitea pins |
 | `file-editor-layouts` | the same button across three generations of Gitea's editor markup |

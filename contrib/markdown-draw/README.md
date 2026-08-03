@@ -63,9 +63,11 @@ From there the behaviour is the same:
   the button again -- the drawing loads back into the board and the fence is
   replaced on save. In the *Preview* tab every drawing also carries its own
   **Edit drawing** button.
-* **Align**: pick the selection tool, select what you drew, and open the menu
-  behind the **…** button at the corner of the selection -- next to js-draw's own
-  *Duplicate* / *Delete* / *Copy*, there is an **Align…** entry. See
+* **Align**: pick the selection tool and drag what you drew -- it snaps onto the
+  edges and centres of the elements around it, with guides showing what it
+  lined up with. For an exact alignment, open the menu behind the **…** button
+  at the corner of the selection: next to js-draw's own *Duplicate* / *Delete* /
+  *Copy* there is an **Align…** entry. See
   [Aligning what you drew](#aligning-what-you-drew).
 * **Read**: drawings render as images wherever markdown renders.
 
@@ -78,10 +80,29 @@ Pen pressure, touch input and palm rejection are js-draw's own; toolbar state
 ## Aligning what you drew
 
 js-draw moves a selection as one block; it has nothing that lines the members of
-a selection up with *each other*. That is what **Align…** adds. It hangs off the
-menu the selection's own **…** button already opens, so it sits next to the
-drawing rather than in a toolbar at the top of the screen, and it is a plain
-button on a touch screen as much as on a desktop.
+a selection up with *each other*. That is what this adds, in two halves: guides
+that snap a drag onto what is around it, and an **Align…** menu for saying
+exactly what should line up with what.
+
+### While dragging
+
+Drag a selection and it snaps onto the edges and centres of the other elements
+as it comes within 8 screen pixels of them, drawing a guide from the element it
+matched to the one in your hand. Both axes snap independently, so a drag can
+land on one element's left edge and another's centre line at once.
+
+Only moving snaps -- the resize and rotate handles are untouched -- and holding
+**Ctrl** (**Cmd**) hands over to js-draw's own snap-to-grid, which is what that
+key already does there.
+
+Set `snapDistance` to `0` in `giteaDrawConfig` to switch this off and keep only
+the menu, or raise it to make the snap grabbier.
+
+### From the menu
+
+**Align…** hangs off the menu the selection's own **…** button already opens, so
+it sits next to the drawing rather than in a toolbar at the top of the screen,
+and it is a plain button on a touch screen as much as on a desktop.
 
 The panel replaces the menu until you go **◀ Back**, and stays up after an
 action so alignments can be chained. The menu opens at the corner of the
@@ -161,15 +182,29 @@ Alignment needs two things from js-draw, both of which it already offers:
 into one with `uniteCommands`, so an alignment undoes in a single step), and
 `EditorEventType.SelectionUpdated` says when the selection changed.
 
-Getting into the selection menu is the one place this reaches past the public
-API. `SelectionTool.showContextMenu` is an *instance property*, read when a
-selection is built, so replacing it before anything can be selected covers both
-the **…** button and a right click. The replacement calls the original -- every
-entry js-draw puts in the menu is left alone -- and then appends one button to
-the `.content` list of the `<dialog class="editor-popup-menu">` it just built.
-If that markup ever changes, the **Align…** entry silently does not appear,
-which is the failure mode to prefer over a broken menu; `giteaDrawDebug()`
-reports `alignmentHooked` so it can be told apart from a stale cache.
+Two things reach past the public API, both the same way: js-draw declares them
+`private` in TypeScript, which is a compile-time promise, so at runtime they are
+ordinary properties that can be wrapped. Neither is replaced on a prototype --
+always on the instance, which is created fresh per board and per selection.
+
+**The menu.** `SelectionTool.showContextMenu` is an *instance property*, read
+when a selection is built, so replacing it before anything can be selected
+covers both the **…** button and a right click. The replacement calls the
+original -- every entry js-draw puts in the menu is left alone -- and then
+appends one button to the `.content` list of the
+`<dialog class="editor-popup-menu">` it just built.
+
+**The guides.** There is no "the selection is being dragged" event, but a drag
+is a stream of `Selection.setTransform(Mat33.translation(…))` calls, so each new
+`Selection` gets its `setTransform` shadowed and the translation adjusted on its
+way through. Anything that is not a plain translation goes through untouched,
+which is what leaves the resize and rotate handles alone, and so does anything
+with `preview` false, which is how the finalising command replays the transform
+-- snapping that a second time would move it twice.
+
+If js-draw changes either, the feature stops rather than misbehaves: the
+**Align…** entry does not appear, or drags stop snapping. `giteaDrawDebug()`
+reports `alignmentHooked` so that can be told apart from a stale cache.
 
 ### Security
 
@@ -199,6 +234,7 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
     maxSourceChars: 524288,
     edgeToolbarMaxWidth: 800,   // below this width, use the touch toolbar
     alignment: true,            // the "Align…" entry in the selection menu
+    snapDistance: 8,            // screen px a drag snaps over, 0 to switch off
   };
 </script>
 ```
@@ -235,11 +271,16 @@ with a finger. See [test/README.md](test/README.md).
   `window.codeEditors`, none of which carry a compatibility promise. Re-test
   after a major upgrade. The file editor button only needs `window.codeEditors`
   -- the page layout it is placed into is probed, not assumed.
-* **Align…** depends on js-draw internals in one place: the
-  `SelectionTool.showContextMenu` instance property and the markup of the menu
-  it opens (`dialog.editor-popup-menu > .content`). A js-draw upgrade that
-  changes either drops the entry rather than breaking the menu. The alignment
-  itself is public API and unaffected.
+* Alignment depends on js-draw internals in two places: the
+  `SelectionTool.showContextMenu` instance property together with the markup of
+  the menu it opens (`dialog.editor-popup-menu > .content`), and
+  `Selection.setTransform` being the channel a drag goes through. A js-draw
+  upgrade that changes either drops that half -- no **Align…** entry, or no
+  snapping while dragging -- rather than breaking the editor. The alignment
+  arithmetic itself is public API and unaffected.
+* Snapping compares the selection against every other element in the drawing.
+  That list is gathered once per drag, so a drag stays smooth, but a drawing
+  with thousands of strokes will pause briefly when one starts.
 * Alignment works on whole elements. A stroke drawn as one gesture is one
   element, so it cannot be lined up with part of itself, and matching sizes
   scales pen widths along with the geometry.

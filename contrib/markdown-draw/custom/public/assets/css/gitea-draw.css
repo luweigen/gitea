@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 5;
+  --markup-draw-css: 6;
 }
 
 .markup-draw {
@@ -180,9 +180,9 @@ body.markup-draw-open {
   flex: none;
 }
 
-/* pinned to the editor's rendering area so the outline cannot spill over the
-   toolbar; purely decorative, so it must never take a pointer event */
-.markup-draw-base-clip {
+/* pinned to the editor's rendering area so nothing can spill over the toolbar;
+   purely decorative, so it must never take a pointer event */
+.markup-draw-canvas-overlay {
   position: fixed;
   overflow: hidden;
   pointer-events: none;
@@ -194,4 +194,15 @@ body.markup-draw-open {
   border: 2px dashed #e0561a;
   border-radius: 2px;
   box-shadow: 0 0 0 1px rgb(255 255 255 / 60%) inset;
+}
+
+/* Guides shown while dragging. Rotated about their left edge, so one rule
+   draws both axes -- and stays right when the viewport itself is rotated. */
+.markup-draw-guide {
+  position: absolute;
+  height: 0;
+  transform-origin: 0 0;
+  border-top: 1px solid #e5178e;
+  /* legible over both dark ink and a white background */
+  box-shadow: 0 1px 0 rgb(255 255 255 / 55%), 0 -1px 0 rgb(255 255 255 / 55%);
 }
