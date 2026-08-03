@@ -3,6 +3,12 @@
 
    Styles for contrib/markdown-draw, see README.md there. */
 
+/* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
+   cached stylesheet can be told apart from a real problem */
+:root {
+  --markup-draw-css: 2;
+}
+
 .markup-draw {
   margin: 1em 0;
 }
@@ -42,6 +48,15 @@
   display: flex;
   background: var(--color-body);
   overscroll-behavior: contain;
+}
+
+/* js-draw's colour inputs are Coloris, which appends its picker to <body> with
+   ".clr-picker { z-index: 1000 }" instead of putting it inside the editor. That
+   is below the board, so clicking a colour swatch used to dim the screen (that
+   overlay *is* inside the board) while the picker itself stayed hidden behind
+   it. "body >" outranks Coloris' class selector, so no !important is needed. */
+body > #clr-picker {
+  z-index: 10000;
 }
 
 .markup-draw-host {

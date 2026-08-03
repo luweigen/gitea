@@ -168,8 +168,10 @@ reasons it is, in the console:
   cache entry and will not help. `install.sh` stamps a fresh `?v=` on every run
   for this reason, but it only takes effect after a Gitea restart.
 
-**If it is defined**, it prints what the script sees. `scriptRevision` tells you
-whether the browser is running the version you installed. On a file editor page
+**If it is defined**, it prints what the script sees. `scriptRevision` and
+`cssRevision` tell you whether the browser is running the versions you
+installed -- the two files are cached independently, so one can be stale while
+the other is current. On a file editor page
 `codeEditors` must be at least 1 -- if it is 0, either Monaco has not finished
 loading, or your Gitea is too old to publish `window.codeEditors`.
 * js-draw follows `prefers-color-scheme` for its own chrome rather than Gitea's

@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '4';
+  const SCRIPT_REVISION = '6';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -546,6 +546,9 @@
   window.giteaDrawDebug = () => {
     const report = {
       scriptRevision: SCRIPT_REVISION,
+      // empty means gitea-draw.css did not load, or a stale copy did
+      cssRevision: getComputedStyle(document.documentElement)
+        .getPropertyValue('--markup-draw-css').trim() || '(not loaded)',
       scriptUrl,
       config: cfg,
       giteaAssetVersion: window.config?.assetVersionEncoded ?? '(window.config missing)',
