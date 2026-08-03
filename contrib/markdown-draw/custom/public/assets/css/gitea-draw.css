@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 4;
+  --markup-draw-css: 5;
 }
 
 .markup-draw {
@@ -95,7 +95,7 @@ body.markup-draw-open {
    Override --markup-draw-menu-opacity to taste, 100% restores js-draw's own
    opaque menu. Browsers without color-mix() get exactly that. */
 .markup-draw-overlay {
-  --markup-draw-menu-opacity: 75%;
+  --markup-draw-menu-opacity: 50%;
 }
 
 .markup-draw-overlay .editor-popup-menu > .content {
