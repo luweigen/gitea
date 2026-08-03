@@ -126,6 +126,18 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
 </script>
 ```
 
+## Tests
+
+`test/` builds a browser test environment and drives the customization in it:
+
+```sh
+cd test && ./setup.sh && ./run.sh
+```
+
+It stands up the two Gitea editors' markup, serves the real
+`custom/public/assets` files into them, and opens the board with a mouse and
+with a finger. See [test/README.md](test/README.md).
+
 ## Limitations
 
 * **Browser-side only.** The API's rendered HTML, Atom/RSS feeds, notification

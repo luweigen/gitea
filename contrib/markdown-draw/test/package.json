@@ -1,0 +1,13 @@
+{
+  "name": "markdown-draw-test",
+  "private": true,
+  "type": "module",
+  "description": "Browser tests for contrib/markdown-draw, see ./README.md",
+  "scripts": {
+    "setup": "./setup.sh",
+    "test": "node run.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "1.56.1"
+  }
+}
