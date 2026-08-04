@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '16';
+  const SCRIPT_REVISION = '17';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -124,7 +124,7 @@
     playStep: (at, total) => `${at} / ${total}`,
     playDeleteIcon: '\u2702\uFE0EStep',
     playDelete: 'Delete this step',
-    playDeleteBlocked: 'This step cannot be removed: a later one builds on it',
+    playDeleteBlocked: (why) => `This step cannot be removed: ${why}`,
     playDeletedWith: (n) => `${n} steps removed`,
     stepStroke: 'a stroke',
     stepText: 'a piece of text',
@@ -1839,6 +1839,10 @@
   // somewhere different; `union` and `inverse` wrap another command and are
   // walked into.
 
+  // how many times a deletion may be replayed while working out what goes with
+  // it; past this something is wrong with the log rather than with the deletion
+  const MAX_DELETE_PROBES = 50;
+
   const COMPONENT_WORDS = {
     'stroke': 'stepStroke',
     'text': 'stepText',
@@ -2171,17 +2175,37 @@
       }
     }
 
-    async function rebuildTo(count) {
+    function freshEditor() {
       // js-draw cannot empty an editor, so starting over means a new one
       editor?.remove();
       elHost.textContent = '';
       editor = new jsdraw.Editor(elHost, {wheelEventsEnabled: 'only-if-focused'});
       restoreCanvasFrame(jsdraw, editor, svgText);
       position = 0;
+    }
+
+    async function rebuildTo(count) {
+      freshEditor();
       while (position < count) {
         await applyEntry(entries[position]);
         position++;
       }
+    }
+
+    // Replays a candidate log and reports the first entry that will not go
+    // through, or null if it all does.  Used to work out what a deletion really
+    // takes with it; it leaves the canvas on the candidate, so the caller has to
+    // put it back.
+    async function probe(list) {
+      freshEditor();
+      for (let i = 0; i < list.length; i++) {
+        try {
+          await applyEntry(list[i]);
+        } catch (err) {
+          return {index: i, error: String(err?.message || err)};
+        }
+      }
+      return null;
     }
 
     async function seek(to) {
@@ -2207,6 +2231,20 @@
       }
     };
 
+    // Everything that touches the editor goes through here, one at a time.
+    // Abandoning a playback only asks it to stop at its *next* checkpoint, so a
+    // step already in flight keeps running -- and applyEntry reads the current
+    // editor when it runs, not when it was queued.  Without this, that stray step
+    // lands on the editor a delete or a rebuild has just put in its place, which
+    // surfaces as a deletion that is agreed to and then refused: the replay that
+    // was meant to verify it runs on a canvas somebody else was still drawing on.
+    let chain = Promise.resolve();
+    const exclusive = (work) => {
+      const next = chain.then(work, work);
+      chain = next.then(() => {}, () => {});
+      return next;
+    };
+
     const gate = () => (paused ? new Promise((resolve) => { waiting = resolve; }) : null);
 
     // Pausing cuts the current wait short; the gate right behind it is what
@@ -2230,12 +2268,12 @@
       playing = true;
       setPaused(false);
       // at the end, Play means "again"
-      if (position >= entries.length && !await guard(() => seek(0))) return;
+      if (position >= entries.length && !await exclusive(() => guard(() => seek(0)))) return;
       while (position < entries.length) {
         await gate();
         if (mine !== run) return;
         const entry = entries[position];
-        if (!await guard(() => seek(position + 1))) return;
+        if (!await exclusive(() => guard(() => seek(position + 1)))) return;
         if (mine !== run) return;
         // no wait after the last one: there is nothing left to pace, and it would
         // only delay saying that the recording has run out
@@ -2261,40 +2299,58 @@
     });
     elBack.addEventListener('click', () => {
       abandon();
-      void guard(() => seek(position - 1));
+      void exclusive(() => guard(() => seek(position - 1)));
     });
     elForward.addEventListener('click', () => {
       abandon();
-      void guard(() => seek(position + 1));
+      void exclusive(() => guard(() => seek(position + 1)));
     });
     elRestart.addEventListener('click', () => {
       abandon();
-      void guard(async () => {
-        await seek(0);
-        await play();
-      });
+      // play() takes the lock a step at a time, so it must not be held across it
+      void exclusive(() => guard(() => seek(0))).then(() => play());
     });
 
     // Removing a step that later ones build on takes those with it -- leaving
     // them behind would mean a history that cannot be replayed.  Which is why
     // every deletion asks first, and one that carries others away says so and
     // names them.
-    async function applyDelete(at, dependents) {
+    // Everything that has to go along with the step at `at`.
+    //
+    // Reading ids out of the log is only a first guess.  js-draw does not fail
+    // uniformly on a missing component -- `transform-element` throws,
+    // `selection-tool-transform` warns and carries on without it -- and a way of
+    // depending on a step that this does not model would otherwise show up as a
+    // deletion that is agreed to and then refused.  So the guess is *replayed*,
+    // and whatever will not go through is added and the replay tried again. That
+    // makes the answer right whatever the dependency turns out to be.
+    async function planDelete(at) {
+      const doomed = new Set([at, ...dependentsOf(entries, at)]);
+      let error = null;
+      for (let attempt = 0; attempt < MAX_DELETE_PROBES; attempt++) {
+        const keep = entries.map((_, i) => i).filter((i) => !doomed.has(i));
+        const failure = await probe(keep.map((i) => entries[i]));
+        if (!failure) return {steps: [...doomed].sort((a, b) => a - b), error: null};
+        error = failure.error;
+        doomed.add(keep[failure.index]);
+      }
+      return {steps: [...doomed].sort((a, b) => a - b), error};
+    }
+
+    async function applyDelete(steps) {
       abandon();
-      const doomed = [at, ...dependents].sort((a, b) => b - a); // last first, so the indexes hold
+      const at = steps[0];
+      const doomed = [...steps].sort((a, b) => b - a); // last first, so the indexes hold
       const removed = doomed.map((i) => [i, entries[i]]);
       for (const i of doomed) entries.splice(i, 1);
       captions = buildCaptions(entries);
       try {
-        // The *whole* log has to still replay, not just the part up to here.  The
-        // analysis above reads ids out of the log; this is the proof, and it is
-        // what catches anything that analysis did not think of.
         await rebuildTo(entries.length);
-      } catch {
+      } catch (err) {
         for (const [i, entry] of [...removed].reverse()) entries.splice(i, 0, entry);
         captions = buildCaptions(entries);
         if (!await guard(() => rebuildTo(at + 1))) return;
-        note(i18n.playDeleteBlocked);
+        note(i18n.playDeleteBlocked(String(err?.message || err)));
         return;
       }
       dirty = true;
@@ -2302,34 +2358,49 @@
       // the deleted step
       if (!await guard(() => rebuildTo(at))) return;
       refresh();
-      if (dependents.length) note(i18n.playDeletedWith(dependents.length + 1));
+      if (steps.length > 1) note(i18n.playDeletedWith(steps.length));
     }
 
     elDelete.addEventListener('click', () => {
       if (elDelete.disabled) return;
       const at = position - 1;
-      const dependents = dependentsOf(entries, at);
-      // Deleting one step on its own needs no question: nothing reaches the
-      // markdown until Save, so a mis-aimed click costs a click to undo -- close
-      // the player and nothing happened.  Taking other steps down with it is the
-      // case worth stopping for, because that is not obvious from the button.
-      if (!dependents.length) {
-        void applyDelete(at, []);
-        return;
-      }
-      askConfirmation(elOverlay, {
-        title: i18n.deleteStepWithDeps(describeCommand(entries[at][2]), dependents.length),
-        body: i18n.deleteStepWithDepsBody(dependents.length, listSteps(dependents)),
-        confirm: i18n.deleteConfirm,
-        cancel: i18n.deleteCancel,
-        onConfirm: () => void applyDelete(at, dependents),
+      const was = position;
+      elDelete.disabled = true;
+      // abandon first, so a playback in flight stops at its next checkpoint, then
+      // queue behind whatever step it was already running
+      abandon();
+      void exclusive(async () => {
+        const plan = await planDelete(at);
+        // planning replays candidate logs through the canvas, so put it back
+        if (!await guard(() => rebuildTo(was))) return;
+        refresh();
+        if (plan.error) {
+          note(i18n.playDeleteBlocked(plan.error));
+          return;
+        }
+        const others = plan.steps.filter((i) => i !== at);
+        // Deleting one step on its own needs no question: nothing reaches the
+        // markdown until Save, so the way back from a mis-aimed click is to close
+        // the player.  Taking other steps down with it is the case worth stopping
+        // for, because that is not visible from the button.
+        if (!others.length) {
+          void exclusive(() => applyDelete(plan.steps));
+          return;
+        }
+        askConfirmation(elOverlay, {
+          title: i18n.deleteStepWithDeps(describeCommand(entries[at][2]), others.length),
+          body: i18n.deleteStepWithDepsBody(others.length, listSteps(others)),
+          confirm: i18n.deleteConfirm,
+          cancel: i18n.deleteCancel,
+          onConfirm: () => void exclusive(() => applyDelete(plan.steps)),
+        });
       });
     });
 
     elSave.addEventListener('click', () => {
       if (elSave.disabled) return;
       abandon();
-      void guard(async () => {
+      void exclusive(() => guard(async () => {
         // The SVG is regenerated from the end of the edited log, so the picture
         // in the markdown is the picture the log now produces.
         await seek(entries.length);
@@ -2348,7 +2419,7 @@
         dirty = false;
         refresh();
         note(i18n.playSaved);
-      });
+      }));
     });
 
     if (!await guard(() => rebuildTo(0))) return;

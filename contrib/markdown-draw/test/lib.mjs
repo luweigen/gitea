@@ -48,6 +48,9 @@ export async function launchBrowser() {
   return chromium.launch({executablePath});
 }
 
+// Page-level failures collected by watchPage, so that finish() can fail on them.
+const pageErrors = [];
+
 // A suite is a list of named boolean checks; the runner only needs the tally.
 export function createChecks(suiteName) {
   const results = [];
@@ -56,6 +59,11 @@ export function createChecks(suiteName) {
     console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? `  -- ${extra}` : ''}`);
   };
   const finish = () => {
+    // An uncaught error in the page is a failure even when every check passed:
+    // it means something threw where nothing was looking.
+    if (pageErrors.length) {
+      check(`no uncaught errors in the page (${pageErrors.length})`, false, pageErrors[0]);
+    }
     const failed = results.filter((r) => !r.ok);
     console.log(`  ${results.length - failed.length}/${results.length} checks passed  (${suiteName})`);
     process.exit(failed.length ? 1 : 0);
@@ -63,9 +71,13 @@ export function createChecks(suiteName) {
   return {check, finish};
 }
 
-// Log page-level failures; a suite that silently swallows them is worthless.
+// Record page-level failures and fail the suite on them at the end; one that
+// only printed them let a real bug through with every check passing.
 export function watchPage(page) {
-  page.on('pageerror', (err) => console.log('  [pageerror]', err.message));
+  page.on('pageerror', (err) => {
+    console.log('  [pageerror]', err.message);
+    pageErrors.push(err.message);
+  });
   return page;
 }
 

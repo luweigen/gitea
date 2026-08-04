@@ -50,6 +50,10 @@ Two habits worth keeping when adding to them:
   the result back out of the model, not out of the hidden textarea Monaco
   writes to. Faking the editor would have hidden the bug that the textarea is
   written *by* Monaco and never read from.
+* **Let the page fail the suite.** An uncaught error in the browser fails the
+  run even when every check passed -- `watchPage` records them and `finish()`
+  reports them. A stray call that threw after doing its work was passing 101
+  checks while printing a `TypeError` nobody was looking at.
 * **Assert on what ships.** The alignment suite measures the saved SVG rather
   than js-draw's in-memory model: what matters is the geometry that lands in
   the markdown. Where a number would have to be assumed -- the grid spacing,

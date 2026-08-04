@@ -303,18 +303,20 @@ two more buttons appear:
   separated. There the click asks -- *Delete a stroke and the 2 that build on
   it?* -- names which steps go with it, and removes them together.
 
-  Which steps those are is read out of the log rather than found by trial:
-  every recorded command names the components it works on by id, so
-  `add-element` says what a step brings into being and `transform-element`,
-  `erase`, `duplicate` and `selection-tool-transform` say what they need to
-  already be there. One forward pass finds the whole chain, including steps that
-  depend on a step that depends on the deleted one, because a step can only ever
-  depend on an earlier one.
+  Reading the log gives the first guess: every recorded command names the
+  components it works on by id, so `add-element` says what a step brings into
+  being and `transform-element`, `erase`, `duplicate` and
+  `selection-tool-transform` say what they need to already be there. One forward
+  pass finds the whole chain, transitive cases included, because a step can only
+  ever depend on an earlier one.
 
-  The deletion is then *proved* by replaying the whole log, not just the part up
-  to it -- a break further on would otherwise surface only as a failure to save.
-  If that replay still fails, everything is put back and the bar says so. That
-  path should be unreachable; it is the net under the analysis, not the plan.
+  That guess is then **replayed**, and anything that will not go through is
+  added to it and the replay tried again, until the log runs clean. js-draw does
+  not even fail uniformly on a missing component -- `transform-element` throws
+  where `selection-tool-transform` warns and carries on -- so a guess alone can
+  be wrong, and a wrong guess would show up as a deletion agreed to and then
+  refused. Replaying is what makes the answer right whatever the dependency
+  turns out to be; the reading only keeps it quick.
 * **Save** (*Save to markdown*) replays the edited log to its end, regenerates the SVG
   from that, and writes both back into the fence. The picture in the markdown is
   therefore always the picture the log produces.
@@ -383,6 +385,13 @@ which is exactly what this uses.
 
 js-draw is only fetched when a board is actually opened, so pages that merely
 display drawings do not pay for it.
+
+Everything in the player that touches the editor runs one at a time. Abandoning
+a playback only asks it to stop at its next checkpoint, and a command applies to
+whichever editor is current when it runs, not when it was queued -- so without
+that, a step still in flight could land on the editor a deletion had just put in
+its place, and the replay meant to verify the deletion would run on a canvas
+something else was still drawing on.
 
 The edit history needs three things from js-draw, all of them public. The
 `UndoRedoStackUpdated` event carries both the command and which of

@@ -611,6 +611,39 @@ await page.locator('.markup-draw-player-close').click();
 await page.locator('.markup-draw-confirm-go').click();
 await page.locator('.markup-draw-player').waitFor({state: 'detached', timeout: 5000});
 
+// --- deleting while a playback is still in flight
+//
+// This is what showed up in real use: a deletion agreed to and then refused,
+// with playback afterwards showing the step still there. Abandoning a playback
+// only asks it to stop at its next checkpoint, and applyEntry uses the editor
+// that is current when it runs -- so a step already in flight could land on the
+// editor the deletion had just put in its place, and the replay meant to verify
+// the deletion ran on a canvas somebody else was still drawing on.
+
+await setSource(page, fence1);
+await page.evaluate((text) => {
+  document.getElementById('preview').replaceChildren();
+  window.renderFence('preview', text);
+}, stripFence(fence1));
+await page.locator('#preview img.markup-draw-image').waitFor({timeout: 10000});
+await page.locator('#preview .markup-draw-play').click();
+await page.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+
+// mid-playback, not after it: catch it on a step that can be deleted and click
+// straight away, so the delete lands while a play step is still in flight
+await page.locator('.markup-draw-player-step').filter({hasText: '4 / 5'}).waitFor({timeout: 30000});
+await page.locator('.markup-draw-player-delete').click();
+await page.waitForTimeout(1500);
+const raced = await playerOf(page);
+const saidNo = await page.locator('.markup-draw-player-caption').textContent();
+check('deleting during playback is not refused by its own verification',
+  !/cannot be removed/.test(saidNo), saidNo);
+check('and the step really is gone', raced.total === journal1.e.length - 1 && raced.dirty,
+  JSON.stringify(raced));
+await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-confirm-go').click();
+await page.locator('.markup-draw-player').waitFor({state: 'detached', timeout: 5000});
+
 // --- with no editable text behind it, the player is a viewer
 check('a drawing with no editor behind it offers no delete or save',
   await viewer.locator('.markup-draw-player-delete').count() === 0 &&
