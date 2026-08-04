@@ -379,9 +379,11 @@ tool.
 * **Class boxes** (name / attributes / operations compartments) and **labels on
   lines** (multiplicities, role names). The text tool puts text anywhere, but it
   is attached to nothing.
-* **Routing.** Lines are straight, point to point; orthogonal elbows would need
-  a multi-segment builder, which is a different input gesture as much as a
-  different shape.
+* **Routing.** Lines are straight, point to point. What blocks an elbow is the
+  gesture, not the geometry: js-draw drives a builder from one pointer-down..up
+  and `Pen.onPointerUp` discards it, so a click-per-vertex route needs a custom
+  `BaseTool` rather than another pen. Fitting an elbow out of a single freehand
+  drag instead is measured in [stroke-fitting.md](stroke-fitting.md).
 * **Retyping an arrow** from composition to aggregation -- needs §8.
 * **Protecting an arrow from the eraser.** It splits like any other stroke, so
   half an arrow is a reachable state. Making it atomic would mean a component
