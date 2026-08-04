@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '15';
+  const SCRIPT_REVISION = '16';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -136,11 +136,8 @@
     stepDuplicate: 'a duplicate',
     stepGroup: (n) => `a group of ${n} changes`,
     stepSomething: 'this step',
-    stepUndo: 'an undo',
-    stepRedo: 'a redo',
-    deleteStep: (what) => `Delete ${what}?`,
-    deleteStepBody: 'It comes out of the recorded history. Nothing reaches the markdown until you save.',
-    deleteStepWithDeps: (n) => `Delete this step and the ${n === 1 ? 'one' : n} that ${n === 1 ? 'builds' : 'build'} on it?`,
+    deleteStepWithDeps: (what, n) =>
+      `Delete ${what} and the ${n === 1 ? 'one' : n} that ${n === 1 ? 'builds' : 'build'} on it?`,
     deleteStepWithDepsBody: (n, list) =>
       `${n === 1 ? 'Step' : 'Steps'} ${list} ${n === 1 ? 'uses' : 'use'} what this one draws, and cannot be replayed without it, so ${n === 1 ? 'it goes' : 'they go'} too. Nothing reaches the markdown until you save.`,
     deleteConfirm: 'Delete',
@@ -1934,12 +1931,6 @@
     }
   }
 
-  const describeEntry = (entry) => {
-    if (entry[0] === OP_UNDO) return i18n.stepUndo;
-    if (entry[0] === OP_REDO) return i18n.stepRedo;
-    return describeCommand(entry[2]);
-  };
-
   // "4", "4 and 6", "4, 6 and 9" -- step numbers as the bar counts them
   const listSteps = (indexes) => {
     const numbers = indexes.map((i) => i + 1);
@@ -2318,13 +2309,17 @@
       if (elDelete.disabled) return;
       const at = position - 1;
       const dependents = dependentsOf(entries, at);
+      // Deleting one step on its own needs no question: nothing reaches the
+      // markdown until Save, so a mis-aimed click costs a click to undo -- close
+      // the player and nothing happened.  Taking other steps down with it is the
+      // case worth stopping for, because that is not obvious from the button.
+      if (!dependents.length) {
+        void applyDelete(at, []);
+        return;
+      }
       askConfirmation(elOverlay, {
-        title: dependents.length
-          ? i18n.deleteStepWithDeps(dependents.length)
-          : i18n.deleteStep(describeEntry(entries[at])),
-        body: dependents.length
-          ? i18n.deleteStepWithDepsBody(dependents.length, listSteps(dependents))
-          : i18n.deleteStepBody,
+        title: i18n.deleteStepWithDeps(describeCommand(entries[at][2]), dependents.length),
+        body: i18n.deleteStepWithDepsBody(dependents.length, listSteps(dependents)),
         confirm: i18n.deleteConfirm,
         cancel: i18n.deleteCancel,
         onConfirm: () => void applyDelete(at, dependents),

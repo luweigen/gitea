@@ -488,20 +488,13 @@ while (await stepText() !== '5 / 5') {
   await page.waitForTimeout(200);
 }
 check('the last step can be deleted', !await page.locator('.markup-draw-player-delete').isDisabled());
+// a step nothing builds on goes without a question: closing without saving is
+// the way back, and that is checked below
 await page.locator('.markup-draw-player-delete').click();
-await page.locator('.markup-draw-confirm').waitFor({timeout: 5000});
-const askedAbout = await page.locator('.markup-draw-confirm').textContent();
-check('deleting asks first, and names what it would remove',
-  /Delete a stroke\?/.test(askedAbout), askedAbout);
-await page.locator('.markup-draw-confirm-actions button').first().click();
-await page.waitForTimeout(400);
-check('declining the question keeps the step',
-  await stepText() === '5 / 5' && await page.locator('.markup-draw-player-save').isDisabled());
-
-await page.locator('.markup-draw-player-delete').click();
-await page.locator('.markup-draw-confirm-go').click();
 await page.waitForTimeout(700);
-check('confirming it shortens the log', await stepText() === '4 / 4', await stepText());
+check('deleting a lone step asks nothing',
+  await page.locator('.markup-draw-confirm').count() === 0);
+check('and shortens the log', await stepText() === '4 / 4', await stepText());
 check('and offers to save the result', !await page.locator('.markup-draw-player-save').isDisabled());
 
 await page.locator('.markup-draw-player-save').click();
@@ -543,7 +536,6 @@ await page.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000
 await page.locator('.markup-draw-player-step')
   .filter({hasText: '5 / 5'}).waitFor({timeout: 30000});
 await page.locator('.markup-draw-player-delete').click();
-await page.locator('.markup-draw-confirm-go').click();
 await page.waitForTimeout(700);
 const before = await source(page);
 await page.locator('.markup-draw-player-close').click();
@@ -595,6 +587,7 @@ await page.locator('.markup-draw-confirm').waitFor({timeout: 5000});
 const warned = await page.locator('.markup-draw-confirm').textContent();
 check('deleting a step others build on warns that they go too',
   /builds on it|build on it/.test(warned), warned);
+check('and names what it is about to remove', /Delete a stroke and/.test(warned), warned);
 check('and names which steps those are', /Step 3\b/.test(warned), warned);
 await screenshot(page, 'history-delete-dependents');
 

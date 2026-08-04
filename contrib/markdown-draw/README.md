@@ -292,14 +292,16 @@ Where the markdown behind the drawing can be reached -- a comment being written,
 a file being edited, the same condition the **Edit drawing** button goes by --
 two more buttons appear:
 
-* **✂︎Step** (*Delete this step*) takes the current step out of the history, and
-  always asks first, naming what it is about to remove -- "Delete a stroke?" --
-  so a mis-aimed click costs nothing.
+* **✂︎Step** (*Delete this step*) takes the current step out of the history. A
+  step nothing else builds on goes without a question: nothing reaches the
+  markdown until **Save**, so the way back from a mis-aimed click is to close
+  the player, and the markdown is exactly as it was.
 
-  A step that later ones build on cannot go on its own: removing a stroke while
-  a later step still moves it would leave a history that cannot be replayed. So
-  the question is a different one -- *Delete this step and the 2 that build on
-  it?* -- it names which steps those are, and confirming removes them together.
+  A step that later ones build on is the case worth stopping for, because it is
+  not visible from the button: removing a stroke while a later step still moves
+  it would leave a history that cannot be replayed, so the two cannot be
+  separated. There the click asks -- *Delete a stroke and the 2 that build on
+  it?* -- names which steps go with it, and removes them together.
 
   Which steps those are is read out of the log rather than found by trial:
   every recorded command names the components it works on by id, so
@@ -317,8 +319,10 @@ two more buttons appear:
   from that, and writes both back into the fence. The picture in the markdown is
   therefore always the picture the log produces.
 
-Edits live in the player until they are saved -- closing with unsaved ones asks
-first, and discarding leaves the markdown exactly as it was. On a drawing with no
+Edits live in the player until they are saved: **Save** is the only thing that
+writes into the markdown, so closing is always a way out. It asks before
+discarding unsaved edits, and discarding leaves the markdown byte for byte as it
+was. On a drawing with no
 editable text behind it, neither button appears and the player is a viewer with
 step controls.
 
