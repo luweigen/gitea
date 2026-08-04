@@ -1,35 +1,55 @@
-# UML relationship arrows
+# How the UML relationship pens came out this way
 
-Why the six UML class-diagram relationships -- composition, generalization
-("inheritance"), realization and the rest -- could not be drawn on the
-markdown-draw board, and how they were added.
+Notes for whoever maintains this next. [README.md](../README.md#uml-relationship-arrows)
+says what the pens do and how to configure them; this says **why they are built
+the way they are**, which decisions were forced rather than chosen, and which
+mistakes are already paid for. Most of it is here because it is not visible from
+the code: the geometry looks needlessly indirect until you know what it is
+avoiding.
 
-Against js-draw **1.33.0**, the version `install.sh` pins.
+Line references are to **js-draw 1.33.0**, `dist/mjs/…`, which is what
+`install.sh` pins. Re-check them after an upgrade -- there is a checklist at the
+end.
 
-The pens themselves are **shipped**: see
-[UML relationship arrows](../README.md#uml-relationship-arrows) for what they
-do. This is the design record -- the constraint that shaped them, what was
-measured rather than assumed, and what was deliberately left out.
+## 1. The decision everything else follows from
 
-## Short answer
+**An arrow is one `Stroke` with one style.** Everything -- shaft, dashes, head,
+hollow head -- is filled geometry in a single path with a single `fill`. There
+is no `stroke` anywhere in it.
 
-js-draw has exactly one arrowhead -- a solid filled triangle -- and no dashed
-lines, so none of the six UML relationship notations could be drawn except by
-hand, stroke by stroke.
+This is not a preference. It is forced by two facts that meet:
 
-They were added without touching js-draw, through
-`EditorSettings.pens.additionalPenTypes`, a documented extension point. The one
-thing that shaped the design is that **an arrow has to be a single stroke with a
-single style**; see [the constraint](#the-one-real-constraint-one-style-per-arrow).
+> `SVGRenderer.drawPath` merges consecutive parts that share a style into one
+> `<path d="…">` and starts a **new `<path>` element** as soon as the style
+> changes (`rendering/renderers/SVGRenderer.mjs`, `drawPath` +
+> `addPathToSVG`).
+>
+> `SVGLoader.addPath` creates **exactly one `Stroke` per `<path>`** -- its own
+> comment is "Adds a stroke with a single path" (`SVGLoader/SVGLoader.mjs`).
 
-## What UML needs and what js-draw has
+A drawing lives in the markdown as SVG text, so it is saved and reloaded
+constantly; a re-edit is a round trip. An arrow built the natural way -- a
+stroked shaft plus a filled head, two styles -- would look correct when drawn
+and come back as **two components** the next time anyone opened it. Then:
+selecting it takes two clicks, moving it needs both, undo takes two steps, and
+the alignment feature, which aligns whole components, lines the head up against
+its own shaft.
 
-A class diagram distinguishes its relationships by two things: the shape of the
+The failure would appear one session later than the change that caused it, in a
+feature that did not change. That is why this is section 1.
+
+**Consequence to keep in mind:** any future head shape must be expressible as
+filled geometry. If a shape seems to need a second style, it needs a second
+element, and that is a different feature (see §8).
+
+## 2. What UML needs, and what js-draw has
+
+A class diagram tells its relationships apart by two things: the shape of the
 head, and whether the line is solid or dashed.
 
-| Relationship | Line | Head | js-draw |
+| Relationship | Line | Head | js-draw has it? |
 |---|---|---|---|
-| Association | solid | open barbs `>` | no (its arrow is filled) |
+| Association | solid | open barbs `>` | no -- its arrow is filled |
 | Generalization (inheritance) | solid | hollow triangle `▷` | no |
 | Realization (implements) | **dashed** | hollow triangle `▷` | no |
 | Composition | solid | filled diamond `◆` | no |
@@ -37,30 +57,21 @@ head, and whether the line is solid or dashed.
 | Dependency | **dashed** | open barbs `>` | no |
 
 js-draw's pen offers eight stroke types
-(`dist/mjs/toolbar/widgets/PenToolWidget.mjs`): three freehand pens, then the
-shape pens *arrow*, *line*, *filled rectangle*, *outlined rectangle* and
-*outlined circle*. Of those:
+(`toolbar/widgets/PenToolWidget.mjs`): three freehand pens, then the shape pens
+*arrow*, *line*, *filled rectangle*, *outlined rectangle*, *outlined circle*.
 
-* **Arrow** (`components/builders/ArrowBuilder.mjs`) builds one closed,
-  filled path -- stem plus a solid triangular head. The head shape is not
-  configurable and it is always filled.
+* **Arrow** (`components/builders/ArrowBuilder.mjs`) is one closed filled path,
+  stem plus a solid triangular head. The head is not configurable and is always
+  filled.
 * **Nothing is dashed.** A stroke's style is
   `{fill: Color4, stroke?: {color, width}}` (`rendering/RenderingStyle.d.ts`) --
-  there is no dash array, and the SVG renderer writes only `fill`, `stroke` and
-  `stroke-width` (`rendering/renderers/SVGRenderer.mjs`).
+  no dash array, and the SVG renderer writes only `fill`, `stroke` and
+  `stroke-width`.
 
-So the six notations above need four new head shapes and a dashed shaft, none of
-which exist.
+So four head shapes and a dashed shaft had to be built. Nothing was extended;
+they are new builders that happen to sit in the same list.
 
-Two further gaps are worth naming, because they are what separates "UML arrows"
-from "UML diagrams": js-draw has **no connectors** (a line does not attach to a
-box, so moving the box leaves the line behind) and **no labels on lines**
-(multiplicities, role names). Those are out of scope here -- see
-[Out of scope](#out-of-scope).
-
-## The extension point
-
-js-draw takes custom pens as a public setting:
+## 3. The extension point, and why nothing here is a hack
 
 ```js
 new jsdraw.Editor(host, {
@@ -72,152 +83,178 @@ new jsdraw.Editor(host, {
 where the builder implements `getBBox()`, `build()`, `preview(renderer)` and
 `addPoint(point)` (`components/builders/types.d.ts`).
 
-This matters for this branch specifically: the **Align…** menu and the drag
-guides reach past js-draw's public API and are written to fail gracefully if it
-changes. Custom pens need none of that -- `additionalPenTypes` is public,
-documented and covered by js-draw's own examples. Nothing here is a hack.
+This is worth stating plainly because of what sits beside it in the same file:
+the **Align…** menu and the drag guides shadow members js-draw declares
+`private`, and are written to fail gracefully when it changes. The UML pens need
+none of that. `additionalPenTypes` is public, documented, and has js-draw's own
+examples pointing at it. **Do not "harmonise" the two -- they are different in
+kind, not in style.**
 
-Three details fall out of it for free:
+Three things fall out of it for free, all of which would otherwise be work:
 
 * **Icons.** `IconProvider.makeIconFromFactory` runs the builder from (10,10) to
-  (90,90) and renders the result, so each pen gets a toolbar icon that is
-  literally a picture of what it draws.
-* **Saved toolbar state.** `PenToolWidget` serializes the selected pen by its
+  (90,90) at `sqrt(thickness) * 3` and renders the result, so each pen's toolbar
+  icon is literally a picture of what it draws. It is also the reason for the
+  bug in §5.1 -- generating an icon is a *real invocation of the builder*, with
+  arguments no user gesture would produce.
+* **Saved toolbar state.** `PenToolWidget.deserializeFrom` matches on the pen's
   `id` string, not its index, so adding pens does not disturb what users already
-  have in `localStorage`, and an id that is gone falls back silently. The
-  branch's `TOOLBAR_STATE_KEY` needs no migration.
-* **Keyboard shortcuts** (Ctrl+1…9) index into the pen list; custom shape pens
-  are appended after the built-in shape pens, so the existing shortcuts keep
+  have in `localStorage`, and an id that has gone away falls back silently. The
+  `TOOLBAR_STATE_KEY` in `gitea-draw.js` needed no migration.
+* **Keyboard shortcuts.** Ctrl+1…9 index into the pen list, and custom shape
+  pens are appended *after* the built-in shape pens, so existing shortcuts keep
   pointing at the same pens.
 
-## The one real constraint: one style per arrow
+## 4. The geometry, and the shape it was nearly built in
 
-An arrow is naturally two things -- a shaft and a head -- and it is tempting to
-build it as one `Stroke` with two differently-styled parts (say, a stroked shaft
-and a filled head). **That breaks the round trip**, and this is the finding that
-shapes the whole design:
+Everything is assembled into one command list and handed to
+`new Path(from, commands)`, then one `pathToRenderable(path, {fill})`.
 
-* `SVGRenderer.drawPath` merges consecutive parts that share a style into a
-  single `<path d="…">`, and starts a new `<path>` element as soon as the style
-  changes.
-* `SVGLoader.addPath` creates **exactly one `Stroke` per `<path>`** ("Adds a
-  stroke with a single path").
+| helper | what it emits |
+|---|---|
+| `umlPolygon` | one closed subpath |
+| `umlSegment` | a straight run as a filled quad |
+| `umlDashedSegment` | that, broken into dashes -- several subpaths, same style |
+| `umlInsetPolygon` | a convex polygon offset inwards, corners mitered |
+| `umlBand` | the outline, then the inset outline **reversed** |
 
-A drawing lives in the markdown as SVG text, so every drawing is saved and
-reloaded constantly. A two-style arrow would come back as *two* components:
-selecting it would take two clicks, moving it would need both, undo would take
-two steps, and this branch's alignment feature -- which aligns whole components
--- would line up the head and the shaft against each other.
+`umlBand` is the load-bearing trick: SVG's default `fill-rule: nonzero` turns a
+subpath wound the opposite way into a **hole**, so a hollow head is a filled
+ring rather than a stroked outline. js-draw relies on the same thing for its
+outlined rectangle, where `Path.fromRect(rect, lineWidth)` builds exactly this
+outer/inner pair (`components/builders/RectangleBuilder.mjs`). js-draw writes no
+`fill-rule` into the paths it exports -- measured, not assumed -- so the default
+is what applies. **If it ever starts writing `fill-rule="evenodd"`, every hollow
+head fills in solid.**
 
-So: **each arrow must be a single `Stroke` with a single style**, which means
-building everything as filled geometry, the idiom `ArrowBuilder`, `LineBuilder`
-and `RectangleBuilder` already use.
+Each entry in `UML_HEADS` draws itself at the tip and returns **how much of the
+shaft it covers**, so a solid line does not show through a hollow head. Open
+barbs return `0`: they are not closed, so the line runs to the point.
 
-That is achievable for all six notations:
+### The dead end worth knowing about
 
-* **Shaft** -- a filled quad, as `LineBuilder` does.
-* **Dashed shaft** -- several filled quads, one per dash. Multiple subpaths in
-  one `d`, one style, one `<path>`.
-* **Filled head** (composition's diamond) -- a filled polygon.
-* **Hollow head** (the triangles and aggregation's diamond) -- a *band*: the
-  outer polygon, then the inset polygon wound in the opposite direction. SVG's
-  default `fill-rule: nonzero` turns the inner one into a hole. js-draw already
-  relies on this for its outlined rectangle, where `Path.fromRect(rect, width)`
-  builds the same outer/inner pair.
+The obvious alternative is `{fill: transparent, stroke: {color, width}}` -- draw
+centrelines and let SVG stroke them. js-draw's own `CircleBuilder` does exactly
+that, so it is a sanctioned idiom, and it makes five of the six notations
+trivial: the shaft is a line, the hollow heads are unfilled closed polygons,
+corners get js-draw's `stroke-linejoin: round` for free, and `umlInsetPolygon`
+would not need to exist.
 
-## What was verified
+It fails on **composition**, and only on composition. A filled diamond on a
+plain line needs fill *and* line in the same element, and under a stroke-only
+style the diamond comes out hollow -- which is precisely the notation for
+aggregation. Composition and aggregation differ *by that fill*; getting it wrong
+does not look like a rendering glitch, it silently draws the wrong relationship.
 
-A prototype of all six pens was run in Chromium against the pinned js-draw
-1.33.0 bundle. Results:
+Mixing the two idioms -- stroke style for five pens, fill style for composition
+-- would work and was rejected: two pens sitting next to each other in one
+dropdown would then respond differently to scaling (js-draw scales
+`stroke.width` with the geometry but fills follow the path), and a maintainer
+would have to know which pen they were touching. One idiom, six pens.
 
-* All six appear in the pen dropdown under **Shape**, with auto-generated
-  icons, from `additionalPenTypes` alone.
-* Six arrows drawn produced **six components and seven `<path>` elements** in
-  the exported SVG (the seventh is the background) -- one path per arrow, as
-  required.
-* Reloading that SVG into a fresh editor produced **six components** again, so
-  the round trip holds.
-* No `fill-rule` attribute is emitted, so the browser default `nonzero` applies
-  and the hollow heads render as holes. Confirmed visually: hollow triangle,
-  hollow diamond, filled diamond and open barbs all read correctly, solid and
-  dashed.
+## 5. Bugs already paid for
 
-The exported path for a generalization arrow, showing outer triangle, inner
-triangle and shaft in one `d`:
+These encode invariants. Each is a place where the obvious code is wrong.
 
-```
-M360,40l-30,16l0-32l30,16 m-25,-7l0,14l13,-7l-13,-7 m-295,4l290,0l0,6l-290,0
-```
+### 5.1 A zero-length shaft writes `NaN` into the path
 
-Two bugs the prototype run surfaced, both of which the shipped pens handle:
+When the arrow is shorter than its own head, the head eats the whole shaft, and
+`to.minus(from).normalized()` on a zero vector produces `NaN` -- which lands in
+the `d` attribute and the browser rejects the whole path.
 
-* A shaft of zero length -- when the arrow is shorter than its own head --
-  normalizes a zero vector and writes `NaN` into the path. This is not
-  hypothetical: `makeIconFromFactory` draws a 113-unit arrow at whatever the
-  current pen thickness is, so a thick pen hits it while merely *opening the
-  toolbar*.
-* Long pen names ("UML generalization") overflow the dropdown's grid cells.
+This is **not** an edge case a user has to work at. It was found by the very
+first prototype run, in the console, before a single deliberate short arrow had
+been drawn: `makeIconFromFactory` (§3) draws a 113-unit arrow at the current
+thickness to build each pen's toolbar icon, so a thick pen hits it *while merely
+opening the toolbar*.
 
-## What it is made of
+Two things fix it and **both are required**:
 
-All of it is one section of `custom/public/assets/js/gitea-draw.js`, plus a
-`umlPens` flag in `cfg` and a line in `giteaDrawDebug()`. Three parts are worth
-pointing at, because none of them is obvious from the code alone.
+* `UML_HEAD_LENGTHS` + `min(w, distance / (2 * length))` clamps the head to half
+  the arrow -- the same shape as `ArrowBuilder`'s
+  `Math.min(lineWidth, arrowLength / 2)`, which exists for the same reason.
+* `umlSegment` returns early on a degenerate run.
 
-**The head is clamped to the arrow.** `UML_HEAD_LENGTHS` gives each head a
-length in multiples of the pen width, and the builder uses
-`min(w, distance / (2 * length))` -- the same shape as `ArrowBuilder`'s
-`Math.min(lineWidth, arrowLength / 2)`. Together with an early return in
-`umlSegment` for a degenerate shaft, that is what keeps `NaN` out of the path.
-Both are load-bearing, not hardening: js-draw draws a 113-unit arrow at the
-current thickness to generate each pen's toolbar icon, so a thick pen would hit
-the zero-length shaft just by opening the toolbar. The suite drags six pixels to
-keep it that way.
+The suite drags six pixels to keep both honest.
 
-**Snap-to-grid is reimplemented.** Every shape pen js-draw ships is wrapped in
-`makeSnapToGridAutocorrect`, which is what snaps a shape when the pen is held
-still. It is not exported from the package, so `withSnapToGrid` reproduces it --
-a thin builder wrapper whose only call into js-draw, `viewport.snapToGrid`, is
-public. Without it these pens would behave differently from the ones beside them
-in the same dropdown, for no reason a user could see.
+### 5.2 "UML generalization" does not fit
 
-**The names are short on purpose.** js-draw lays pen types out in a grid whose
-cells "UML generalization" overflows; "Generalization" fits.
+js-draw lays pen types out in a grid; the longer name overflowed its cell and
+collided with its neighbours. The names are `Generalization`, `Realization`, …
+with no prefix. If a name ever needs lengthening, look at the grid first.
 
-`viewport.roundPoint` keeps the exported `d` free of long decimals, which
-matters more here than in most drawing tools: this is markdown someone has to
-read in a diff.
+### 5.3 The test harness: two things that are not guessable
 
-## Risk
+Both cost a debugging round, and neither is discoverable without dumping the DOM:
 
-Low. The whole feature is public API, so unlike **Align…** it cannot be broken
-by a js-draw internal changing. If `additionalPenTypes` ever disappeared, the
-`Editor` constructor would ignore the unknown setting and the pens would simply
-not appear.
+* js-draw names a pen type in **`label[title="Generalization"]`**, not in a text
+  node with a class of its own. Selecting on a `.toolbar-button-label`-style
+  class silently matches nothing.
+* Choosing a pen leaves the dropdown **open and covering the middle of the
+  canvas**. A drag started there hits the dropdown, not the drawing, so
+  `choosePen` closes it before returning.
 
-Drawings are unaffected in both directions: what these pens produce is ordinary
-filled SVG paths, so a drawing made with them opens, renders, erases and aligns
-in an install that does not have them -- and in js-draw itself.
+## 6. How it was built, and why in that order
 
-Two behaviours to document rather than fix:
+Worth recording because the order is what caught §5.1 before it reached anyone:
 
-* The eraser splits a UML arrow the way it splits any stroke -- half an arrow is
-  a possible state.
-* Head size scales with pen thickness, so a thick pen gives a big head. That is
-  consistent with js-draw's own arrow.
+1. **Read the pinned bundle, not the docs.** `js-draw-1.33.0.tgz` was unpacked
+   and `dist/mjs/` read directly -- `ArrowBuilder`, `RectangleBuilder`,
+   `CircleBuilder`, `PenToolWidget`, `SVGRenderer`, `SVGLoader`. The
+   one-style-per-arrow constraint (§1) is not in any documentation; it is two
+   facts in two files that only matter when you put them together.
+2. **Prototype against the real bundle in a bare page**, before touching
+   `gitea-draw.js`: all six builders, a plain `Editor`, drawn programmatically,
+   exported, reloaded, counted. This is where the `NaN` appeared and where the
+   round trip was first confirmed by counting components rather than by
+   eyeballing a screenshot.
+3. **Then** port into `gitea-draw.js` and drive it through the real harness.
 
-## Metadata on the path
+Step 2 is the cheap one to skip and the expensive one to have skipped: the
+prototype tests things the browser suite cannot reach easily, such as loading an
+exported SVG into a second editor and comparing component counts.
 
-Can an exported path say *what it is* -- `data-uml="composition"` rather than
-just an anonymous filled polygon? Yes, and it survives a full round trip, but
-not by the obvious route.
+## 7. Testing
+
+`test/suites/uml-pens.mjs`. Every check goes through **the saved SVG**, not
+js-draw's in-memory model -- what matters is the geometry that lands in the
+markdown, and the markdown is also the only thing the board can read back.
+
+The instrument for "is this the right notation" is **counting subpaths**
+(`[Mm]` in the `d`), which works because of §1: everything is one path, so the
+count is a direct statement about the geometry.
+
+* A hollow head is a band -- outline plus reversed inset -- so it is one subpath
+  more than the filled version of the same shape.
+* A dashed shaft is one subpath per dash, so it is far more than a solid one.
+  The check is `>= 6` against a `<= 3` for solid; the exact number follows from
+  the drag length and is not worth pinning.
+
+Also asserted:
+
+* **One arrow is one path, and still one path after a reload** -- with its `d`
+  unchanged. This is §1's regression test; if it ever fails, something has
+  started emitting two styles.
+* **A six-pixel drag produces no `NaN`** -- §5.1.
+* **An arrow records and replays** through the edit-history log. It works
+  because the recorder stores what a command serializes to rather than the pen
+  that produced it, so a UML arrow is a `Stroke` like any other. That is
+  asserted rather than assumed on purpose: a pen that built its shape out of
+  something js-draw could not serialize would break the log **for the whole
+  drawing**, not only for itself.
+
+## 8. Metadata on the path: designed, verified, not shipped
+
+Can an exported path say *what it is* -- `data-uml="composition"` rather than an
+anonymous filled polygon? Yes, and it survives a full round trip, but not by the
+obvious route. It is written up here because the obvious route **fails
+silently**, and the next person to want this should not have to rediscover that.
 
 ### What does not work
 
-js-draw already has the machinery: `AbstractComponent.attachLoadSaveData(key,
-data)` is public, and `'svgAttrs'` is the key `SVGLoader` itself uses for
-attributes it does not recognise. Attach `['data-uml', 'composition']` to a
-`Stroke` and `toSVGAsync()` writes it out:
+`AbstractComponent.attachLoadSaveData(key, data)` is public, and `'svgAttrs'` is
+the key `SVGLoader` itself uses for attributes it does not recognise. Attach
+`['data-uml', 'composition']` to a `Stroke` and `toSVGAsync()` writes it out:
 
 ```
 <path d="M300,40l-18,11l-18-11l18-11l18,11m-260-3l224,0l0,6l-224,0l0-6"
@@ -227,21 +264,21 @@ attributes it does not recognise. Attach `['data-uml', 'composition']` to a
 **But reading it back drops it.** `SVGLoader` only records unrecognised
 attributes when `storeUnknown` is set, and `storeUnknown = !sanitize`. The board
 loads with `editor.loadFromSVG(initialSvg, true)`, so on the first re-edit the
-attribute is gone, and the next save writes the drawing back without it. The
-failure is silent: the drawing looks right, the metadata has evaporated.
+attribute is gone and the next save writes the drawing back without it. Nothing
+reports this: the drawing looks right, the metadata has evaporated.
 
-Turning `sanitize` off would preserve it -- and would also preserve every *other*
-attribute in an attacker-authored fence, writing them back into the markdown
-verbatim. `onload="…"` would survive a round trip through another user's
-browser. The drawing is displayed through an `<img>` and a blob URL, so it would
-not execute today, but it makes the security note in the README false and the
-next refactor dangerous. Not an option.
+Turning `sanitize` off preserves it -- and preserves every *other* attribute in
+an attacker-authored fence, writing them back into the markdown verbatim.
+`onload="…"` would survive a round trip through another user's browser. It would
+not execute today, because drawings render through an `<img>` and a blob URL,
+but it makes the README's security note false and the next refactor dangerous.
+Not an option.
 
 ### What works
 
 `EditorSettings.svg.loaderPlugins` is public and independent of `sanitize`: a
 plugin's `visit(node, loader)` sees each node first, and returning `true` takes
-the node over. So the customization recognises **its own** attribute, and
+the node over. So the customization recognises **its own** attribute while
 sanitization keeps handling everything else:
 
 ```js
@@ -269,64 +306,89 @@ const umlLoaderPlugin = (jsdraw) => ({
 });
 ```
 
-The security property is not "we sanitize the value" but "**we never carry the
-file's string**": `kind` is only used after it has matched one of six literals,
-and what gets attached is that literal. A fence author cannot get an attribute
-of their choosing back out of the editor.
+The security property is not "the value is sanitized" but "**the file's string is
+never carried**": `kind` is used only after matching one of six literals, and
+what gets attached is that literal. A fence author cannot get an attribute of
+their choosing back out of the editor.
 
-### Verified
+Verified in Chromium against the pinned js-draw: the attribute reaches the
+export; a `sanitize = true` reload loses it and a `sanitize = false` reload
+keeps it (both confirming the analysis); with the plugin and `sanitize` still
+`true` it survives and the arrow is still one component and one `<path>`; it
+survives being moved, because `transformBy` clones and `AbstractComponent.clone`
+copies load/save data; and `<path data-uml="composition" onload="alert(1)">`
+comes back with `data-uml` kept and `onload` dropped.
 
-Run against the pinned js-draw 1.33.0 in Chromium:
-
-* Attached metadata reaches the exported SVG.
-* Reloading with `sanitize = true` -- what the board does -- **loses it**; with
-  `sanitize = false` it survives. Both confirm the analysis above.
-* With the plugin and `sanitize` still `true`: the attribute survives, and the
-  arrow is still **one component and one `<path>`**.
-* It survives being moved -- `transformBy` clones the component and
-  `AbstractComponent.clone` copies the load/save data.
-* A `<path data-uml="composition" onload="alert(1)">` in the same file comes
-  back with `data-uml` kept and `onload` **dropped**.
-* The `d` a plugin-loaded arrow re-exports is byte-identical to what js-draw's
-  own loader produces.
-
-One subtlety, in case the plugin is ever generalised: js-draw's `addPath` splits
-a path's `d` at each `M` into separate parts. It never fires on this
+One subtlety if the plugin is ever generalised: `SVGLoader.addPath` splits a
+path's `d` at each `M` into separate parts. It never fires on this
 customization's output, because js-draw writes subsequent subpaths with a
-relative `m` -- but a plugin that took over arbitrary paths would need to
-mirror the split to stay faithful.
+relative `m` -- but a plugin taking over arbitrary paths would need to mirror
+the split to stay faithful. (Both variants were measured; both re-export a
+byte-identical `d`.)
 
-### Worth it?
+### Why it is not shipped
 
-Only if something consumes it, and **nothing does yet**, which is why the
-shipped pens do not write it: they draw ink, and ink needs no label. Metadata is
-the enabling step for things that do not exist -- retyping an arrow from
+Nothing reads it. The pens draw ink, and ink needs no label. Metadata is the
+enabling step for things that do not exist yet -- retyping an arrow from
 composition to aggregation without redrawing it, telling arrows from boxes so a
-future anchoring feature knows what to anchor, or exporting a sketch to mermaid.
+future anchoring feature knows what to anchor, exporting a sketch to mermaid.
 
-The cost is ~60 lines and one new js-draw setting, but the real cost is that
+The cost is ~60 lines and one more js-draw setting; the real cost is that
 metadata nothing reads goes stale. Partial erase is the clearest case: the
 eraser splits a stroke into new `Stroke` objects, and half a composition arrow
 would either lose the label (fine) or keep it while no longer being one (a lie).
-Adding it later is no harder than adding it now -- an arrow drawn without
-`data-uml` is not corrupt, just unlabelled, and nothing needs migrating -- so it
-waits for the first feature that reads it.
+Adding it later is no harder than adding it now -- an arrow without `data-uml`
+is not corrupt, just unlabelled, and nothing needs migrating -- so it waits for
+the first feature that reads it.
 
-## Out of scope
+## 9. After a js-draw upgrade, re-check these
 
-These pens make UML arrows easier to *draw*. They do not make the board a UML
-tool:
+`giteaDrawDebug()` reports `umlPens`, which tells "the pens are configured on"
+apart from "the pens are configured on but js-draw no longer shows them".
 
-* **Connectors don't stick.** Move a class box and its arrows stay put. Real
+1. `EditorSettings.pens.additionalPenTypes` is still read, and custom shape
+   pens still land after the built-in ones (`PenToolWidget`'s constructor).
+2. `SVGLoader.addPath` still makes **one component per `<path>`**, and
+   `SVGRenderer.drawPath` still merges same-style parts into one `<path>`. §1
+   rests entirely on these two. *(If a `<path>` ever became more than one
+   component, or a style change stopped splitting them, most of §4 could be
+   simplified -- that would be the moment.)*
+3. No `fill-rule` is written into exported paths, so `nonzero` still applies and
+   `umlBand` still leaves a hole (§4).
+4. `PenToolWidget` still serializes the selected pen by `id` -- if it goes back
+   to an index, saved toolbar state needs a migration.
+5. `viewport.snapToGrid` and `viewport.roundPoint` are still public;
+   `makeSnapToGridAutocorrect` is still *not* exported (if it becomes exported,
+   drop `withSnapToGrid` and use it).
+6. `IconProvider.makeIconFromFactory` still invokes the builder to draw an icon
+   -- it is the reason the §5.1 clamps cannot be relaxed.
+7. `Stroke`, `Path`, `PathCommandType` (with `MoveTo`), `Vec2` and
+   `pathToRenderable` are all still on `window.jsdraw`.
+8. The pen dropdown still names pen types in `label[title]` -- the suite selects
+   on it (§5.3).
+
+## 10. Deliberately not done
+
+These pens make UML arrows easier to *draw*; they do not make the board a UML
+tool.
+
+* **Connectors that stick.** Move a class box and its arrows stay put. Real
   anchoring needs a component that references two others, which js-draw's
-  component model does not have -- a much larger piece of work than this one.
-* **No class boxes** (name / attributes / operations compartments) and **no
-  labels on lines** (multiplicities, role names). The text tool can put text
-  anywhere, but it is not attached to anything.
-* **No routing.** Lines are straight, point to point; orthogonal elbow routing
-  would need a multi-segment builder.
+  component model does not have. Much larger than this piece of work, and it
+  would need §8 first.
+* **Class boxes** (name / attributes / operations compartments) and **labels on
+  lines** (multiplicities, role names). The text tool puts text anywhere, but it
+  is attached to nothing.
+* **Routing.** Lines are straight, point to point; orthogonal elbows would need
+  a multi-segment builder, which is a different input gesture as much as a
+  different shape.
+* **Retyping an arrow** from composition to aggregation -- needs §8.
+* **Protecting an arrow from the eraser.** It splits like any other stroke, so
+  half an arrow is a reachable state. Making it atomic would mean a component
+  type of our own, and would cost the property that these drawings open in a
+  plain js-draw.
 
-For a *maintained* class diagram -- one that gets edited as the code changes --
-Gitea's built-in mermaid `classDiagram` is the better tool: it is text, it
-diffs, and its layout is computed. markdown-draw's place is the sketch that
-mermaid cannot express, and these pens are for making that sketch read as UML.
+For a class diagram that is *maintained* as the code changes, Gitea's built-in
+mermaid `classDiagram` is the better tool: it is text, it diffs, and its layout
+is computed. markdown-draw's place is the sketch mermaid cannot express, and
+these pens are for making that sketch read as UML.

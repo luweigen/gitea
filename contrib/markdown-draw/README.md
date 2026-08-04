@@ -207,8 +207,9 @@ tool. Arrows do not stick to what they point at, so moving a box leaves its
 arrows behind, and there are no class boxes or labels on lines. For a diagram
 that is *maintained* as the code changes, Gitea's built-in mermaid
 `classDiagram` is the better tool -- it is text, it diffs, and its layout is
-computed. See [doc/uml-arrows.md](doc/uml-arrows.md) for the design, including
-what it would take to go further.
+computed. [doc/uml-arrows.md](doc/uml-arrows.md) is the maintainer's note: why
+the pens are built the way they are, what is load-bearing, and what it would
+take to go further.
 
 ## The edit history
 
