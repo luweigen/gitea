@@ -69,6 +69,10 @@ From there the behaviour is the same:
   at the corner of the selection: next to js-draw's own *Duplicate* / *Delete* /
   *Copy* there is an **Align…** entry. See
   [Aligning what you drew](#aligning-what-you-drew).
+* **Draw a UML relationship**: the pen's *Shape* list has the six class-diagram
+  arrows -- generalization, realization, composition, aggregation, association
+  and dependency -- next to js-draw's own arrow and line. See
+  [UML relationship arrows](#uml-relationship-arrows).
 * **Read**: drawings render as images wherever markdown renders.
 
 In the file editor the insertion goes through Monaco's `executeEdits`, so a
@@ -153,6 +157,46 @@ were.
 Every action is one undoable step: a single Ctrl+Z takes back a whole alignment,
 however many elements moved.
 
+## UML relationship arrows
+
+A class diagram tells its relationships apart by two things: the shape of the
+head and whether the line is solid or dashed. js-draw has one arrowhead -- a
+solid filled triangle -- and no dashed lines at all, so none of the six could be
+drawn other than by hand. These add them to the pen's *Shape* list, beside
+js-draw's own arrow, line, rectangle and circle:
+
+| Pen | Line | Head |
+|---|---|---|
+| Generalization | solid | hollow triangle |
+| Realization | dashed | hollow triangle |
+| Composition | solid | filled diamond |
+| Aggregation | solid | hollow diamond |
+| Association | solid | open barbs |
+| Dependency | dashed | open barbs |
+
+Each is a shape pen like the ones next to it: drag from the tail to the head,
+and only the two ends matter. They take the pen's colour and thickness, and the
+head is sized from the thickness -- a thick pen draws a big head -- except on an
+arrow too short to hold one, where the head shrinks to fit rather than swallow
+the line. Holding the pen still snaps the arrow to the grid, as it does for
+js-draw's own shapes.
+
+An arrow is a single element, so it selects with one click, moves as a piece,
+undoes in one step and lines up with [Align…](#aligning-what-you-drew) as a
+whole. The eraser is the exception: it splits an arrow the way it splits any
+stroke, so half an arrow is a reachable state.
+
+Set `umlPens` to `false` in `giteaDrawConfig` to leave the pen list as js-draw
+ships it.
+
+These pens make UML arrows easier to *draw*; they do not make the board a UML
+tool. Arrows do not stick to what they point at, so moving a box leaves its
+arrows behind, and there are no class boxes or labels on lines. For a diagram
+that is *maintained* as the code changes, Gitea's built-in mermaid
+`classDiagram` is the better tool -- it is text, it diffs, and its layout is
+computed. See [docs/uml-arrows.md](docs/uml-arrows.md) for the design, including
+what it would take to go further.
+
 ## How it works
 
 Gitea's markdown renderer emits `<code class="chroma language-XXX display">` for
@@ -206,6 +250,21 @@ If js-draw changes either, the feature stops rather than misbehaves: the
 **Align…** entry does not appear, or drags stop snapping. `giteaDrawDebug()`
 reports `alignmentHooked` so that can be told apart from a stale cache.
 
+The UML pens need none of that: `EditorSettings.pens.additionalPenTypes` takes
+custom pens as public, documented API, and js-draw draws each one's toolbar icon
+itself by running the builder.
+
+What does constrain them is that **an arrow has to be one stroke with one
+style**. The SVG renderer starts a new `<path>` wherever the style changes and
+the loader makes one component per `<path>`; the drawing lives in the markdown
+as SVG text, so it makes that round trip every time it is opened. An arrow built
+out of two styles -- a stroked shaft and a filled head, say -- would look right
+when drawn and come back as two components the next time someone opened it. So
+everything is filled geometry, the idiom js-draw's own arrow and line builders
+use: the shaft is a quad, a dash is a shorter quad, and a hollow head is a band
+whose inner outline is wound backwards, which the default nonzero fill rule
+turns into a hole.
+
 ### Security
 
 The SVG in a fence is attacker-controlled content: any user who can comment can
@@ -235,6 +294,7 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
     edgeToolbarMaxWidth: 800,   // below this width, use the touch toolbar
     alignment: true,            // the "Align…" entry in the selection menu
     snapDistance: 8,            // screen px a drag snaps over, 0 to switch off
+    umlPens: true,              // the six UML relationship pens
   };
 </script>
 ```
@@ -284,10 +344,12 @@ with a finger. See [test/README.md](test/README.md).
 * Alignment works on whole elements. A stroke drawn as one gesture is one
   element, so it cannot be lined up with part of itself, and matching sizes
   scales pen widths along with the geometry.
-* js-draw's only arrowhead is a solid filled triangle and none of its lines are
-  dashed, so UML class-diagram relationships -- composition, generalization,
-  realization -- cannot be drawn other than by hand. See
-  [docs/uml-arrows.md](docs/uml-arrows.md) for what it would take to add them.
+* The UML pens draw arrows, not diagrams: an arrow does not stick to what it
+  points at, so moving a box leaves its arrows where they were, and there are no
+  class boxes or labels on lines. An arrow also carries no record of what it is
+  -- it is ink, so it cannot be retyped from composition to aggregation without
+  being redrawn. [docs/uml-arrows.md](docs/uml-arrows.md) covers why, and what
+  each of those would take.
 
 ## When the button does not show up
 

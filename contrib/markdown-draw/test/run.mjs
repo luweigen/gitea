@@ -19,6 +19,7 @@ const suitesDir = join(here, 'suites');
 const ALL_SUITES = [
   'combo-editor',
   'alignment',
+  'uml-pens',
   'mobile',
   'file-editor',
   'file-editor-layouts',

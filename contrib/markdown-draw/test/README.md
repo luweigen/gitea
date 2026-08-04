@@ -34,6 +34,7 @@ To poke at the harness by hand: `node server.mjs`, then open
 | --- | --- |
 | `combo-editor` | the shared markdown editor (issues, PRs, comments, wiki, releases): insert, render, hostile payloads, round trip |
 | `alignment` | the "Align…" entry in the selection menu, the guides that snap a drag, and the geometry both produce |
+| `uml-pens` | the six UML relationship pens: that each draws its notation, and that an arrow stays one element across a save and reload |
 | `mobile` | drawing with a finger, via raw CDP touch events on an iPhone-sized viewport, including a finger-driven alignment |
 | `file-editor` | the repository file editor against the real Monaco build Gitea pins |
 | `file-editor-layouts` | the same button across three generations of Gitea's editor markup |

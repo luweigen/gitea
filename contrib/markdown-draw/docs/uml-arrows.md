@@ -1,22 +1,26 @@
 # UML relationship arrows
 
-Analysis and implementation plan for drawing UML class-diagram relationships --
-composition, generalization ("inheritance") and realization -- on the
-markdown-draw board.
+Why the six UML class-diagram relationships -- composition, generalization
+("inheritance"), realization and the rest -- could not be drawn on the
+markdown-draw board, and how they were added.
 
 Against js-draw **1.33.0**, the version `install.sh` pins.
 
+The pens themselves are **shipped**: see
+[UML relationship arrows](../README.md#uml-relationship-arrows) for what they
+do. This is the design record -- the constraint that shaped them, what was
+measured rather than assumed, and what was deliberately left out.
+
 ## Short answer
 
-**No, not today.** js-draw has exactly one arrowhead -- a solid filled triangle
--- and no dashed lines, so none of the six UML relationship notations can be
-drawn except by hand, stroke by stroke.
+js-draw has exactly one arrowhead -- a solid filled triangle -- and no dashed
+lines, so none of the six UML relationship notations could be drawn except by
+hand, stroke by stroke.
 
-**It can be added without touching js-draw**, through
-`EditorSettings.pens.additionalPenTypes`, a documented extension point. A
-verified prototype draws all six notations correctly; see
-[What was verified](#what-was-verified). Estimated work: ~250 lines in
-`gitea-draw.js`, one test suite, a README section.
+They were added without touching js-draw, through
+`EditorSettings.pens.additionalPenTypes`, a documented extension point. The one
+thing that shaped the design is that **an arrow has to be a single stroke with a
+single style**; see [the constraint](#the-one-real-constraint-one-style-per-arrow).
 
 ## What UML needs and what js-draw has
 
@@ -145,7 +149,7 @@ triangle and shaft in one `d`:
 M360,40l-30,16l0-32l30,16 m-25,-7l0,14l13,-7l-13,-7 m-295,4l290,0l0,6l-290,0
 ```
 
-Two bugs the prototype run surfaced, both of which the plan below has to handle:
+Two bugs the prototype run surfaced, both of which the shipped pens handle:
 
 * A shaft of zero length -- when the arrow is shorter than its own head --
   normalizes a zero vector and writes `NaN` into the path. This is not
@@ -154,105 +158,35 @@ Two bugs the prototype run surfaced, both of which the plan below has to handle:
   toolbar*.
 * Long pen names ("UML generalization") overflow the dropdown's grid cells.
 
-## Implementation plan
+## What it is made of
 
-### 1. Geometry helpers in `gitea-draw.js` (~120 lines)
+All of it is one section of `custom/public/assets/js/gitea-draw.js`, plus a
+`umlPens` flag in `cfg` and a line in `giteaDrawDebug()`. Three parts are worth
+pointing at, because none of them is obvious from the code alone.
 
-A new section, following the existing alignment section's shape: pure functions,
-no js-draw internals.
+**The head is clamped to the arrow.** `UML_HEAD_LENGTHS` gives each head a
+length in multiples of the pen width, and the builder uses
+`min(w, distance / (2 * length))` -- the same shape as `ArrowBuilder`'s
+`Math.min(lineWidth, arrowLength / 2)`. Together with an early return in
+`umlSegment` for a degenerate shaft, that is what keeps `NaN` out of the path.
+Both are load-bearing, not hardening: js-draw draws a 113-unit arrow at the
+current thickness to generate each pen's toolbar icon, so a thick pen would hit
+the zero-length shaft just by opening the toolbar. The suite drags six pixels to
+keep it that way.
 
-```js
-polygon(out, points)              // closed subpath
-insetPolygon(points, d)           // offset each edge inwards, miter the corners
-band(out, points, w)              // polygon + reversed inset polygon -> a hole
-segment(out, from, to, w)         // filled quad
-dashedSegment(out, from, to, w, dash)
-```
+**Snap-to-grid is reimplemented.** Every shape pen js-draw ships is wrapped in
+`makeSnapToGridAutocorrect`, which is what snaps a shape when the pen is held
+still. It is not exported from the package, so `withSnapToGrid` reproduces it --
+a thin builder wrapper whose only call into js-draw, `viewport.snapToGrid`, is
+public. Without it these pens would behave differently from the ones beside them
+in the same dropdown, for no reason a user could see.
 
-Then a head table, each entry drawing into the command list and returning how
-much of the shaft it covers (zero for open barbs, whose shaft runs to the tip):
+**The names are short on purpose.** js-draw lays pen types out in a grid whose
+cells "UML generalization" overflows; "Generalization" fits.
 
-```js
-HEADS = {hollowTriangle, filledDiamond, hollowDiamond, openArrow}
-HEAD_LENGTHS = {hollowTriangle: 5, filledDiamond: 6, hollowDiamond: 6, openArrow: 4}
-```
-
-`HEAD_LENGTHS` is in multiples of the pen width and exists to clamp the head:
-`headWidth = min(w, distance / (2 * HEAD_LENGTHS[head]))`, which is what
-`ArrowBuilder` does with `Math.min(lineWidth, arrowLength / 2)`. Together with an
-early return in `segment` for a degenerate shaft, that closes the `NaN` hole
-above. **Both are required, not optional hardening.**
-
-### 2. The builder (~40 lines)
-
-One class parameterized by `{head, dashed}`, mirroring `RectangleBuilder`'s
-`filled` flag:
-
-```js
-buildPreview() {
-  // ... clamp the head, walk HEADS[this.head], then the shaft
-  const path = new Path(from, commands).mapPoints((p) => this.viewport.roundPoint(p));
-  return new Stroke([pathToRenderable(path, {fill: this.startPoint.color})]);
-}
-```
-
-`viewport.roundPoint` keeps the exported `d` free of long decimals -- this is
-markdown that lands in a diff, so it is worth the call.
-
-All of `Path`, `PathCommandType`, `Vec2`, `Stroke` and `pathToRenderable` are on
-`window.jsdraw`; nothing new needs loading.
-
-### 3. Snap-to-grid (~20 lines)
-
-Every built-in shape pen is wrapped in `makeSnapToGridAutocorrect`, which is what
-makes a shape snap to the grid when the pen is held still or Ctrl is used. It is
-**not** exported from the package, so it has to be re-implemented -- it is a
-thin builder wrapper whose only js-draw call is the public
-`viewport.snapToGrid`. Without it the UML pens would behave subtly differently
-from the pens next to them in the same dropdown.
-
-### 4. Wiring (~15 lines)
-
-```js
-editor = new jsdraw.Editor(elHost, {
-  wheelEventsEnabled: 'only-if-focused',
-  appInfo: {name: 'Gitea', description: 'markdown drawing'},
-  pens: cfg.umlPens ? {additionalPenTypes: umlPenTypes(jsdraw)} : null,
-});
-```
-
-Plus a `umlPens: true` entry in `cfg` (documented in the README's Configuration
-section alongside `alignment` and `snapDistance`), and a `umlPens` line in
-`giteaDrawDebug()`, so a missing pen can be told from a stale cache the same way
-`alignmentHooked` already does.
-
-Names go in the existing `i18n` object. Keep them short -- **Generalization**,
-**Realization**, **Composition**, **Aggregation**, **Association**,
-**Dependency** -- because of the grid overflow noted above. Prefixing each with
-"UML" is what caused it.
-
-Bump `SCRIPT_REVISION`.
-
-### 5. Tests (`test/suites/uml-pens.mjs`)
-
-Following the existing suites, driving the real board in the harness:
-
-1. The six pens appear in the pen dropdown.
-2. Drawing with one adds **exactly one** component.
-3. The exported SVG contains exactly one `<path>` for it.
-4. Reloading the export yields one component again (the round trip).
-5. The hollow heads' `d` contains two closed subpaths for the head, and the
-   dashed ones contain more subpaths than their solid counterparts.
-6. A very short drag -- shorter than the head -- produces a path with no `NaN`.
-   This is the regression test for the bug above.
-
-Register it in `run.mjs` next to the other suites.
-
-### 6. README
-
-A section under **Use**, a row in the toolbar description, `umlPens` in
-**Configuration**, and one line in **Limitations** saying what these pens are
-not (see below).
+`viewport.roundPoint` keeps the exported `d` free of long decimals, which
+matters more here than in most drawing tools: this is markdown someone has to
+read in a diff.
 
 ## Risk
 
@@ -364,19 +298,19 @@ mirror the split to stay faithful.
 
 ### Worth it?
 
-Only if something consumes it. Nothing in the plan above does: the pens draw
-ink, and ink needs no label. Metadata is the enabling step for things that do
-not exist yet -- retyping an arrow from composition to aggregation without
-redrawing it, telling arrows from boxes so a future anchoring feature knows what
-to anchor, or exporting a sketch to mermaid.
+Only if something consumes it, and **nothing does yet**, which is why the
+shipped pens do not write it: they draw ink, and ink needs no label. Metadata is
+the enabling step for things that do not exist -- retyping an arrow from
+composition to aggregation without redrawing it, telling arrows from boxes so a
+future anchoring feature knows what to anchor, or exporting a sketch to mermaid.
 
 The cost is ~60 lines and one new js-draw setting, but the real cost is that
-metadata that nothing reads goes stale. Partial erase is the clearest case: the
+metadata nothing reads goes stale. Partial erase is the clearest case: the
 eraser splits a stroke into new `Stroke` objects, and half a composition arrow
 would either lose the label (fine) or keep it while no longer being one (a lie).
-Adding it later is not harder than adding it now -- an arrow drawn without
-`data-uml` is not corrupt, just unlabelled -- so the recommendation is to ship
-the pens first and add metadata with the first feature that reads it.
+Adding it later is no harder than adding it now -- an arrow drawn without
+`data-uml` is not corrupt, just unlabelled, and nothing needs migrating -- so it
+waits for the first feature that reads it.
 
 ## Out of scope
 

@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '8';
+  const SCRIPT_REVISION = '9';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -40,6 +40,9 @@
     // element's edge or centre before it snaps onto it; 0 turns that off and
     // leaves only the menu
     snapDistance: 8,
+    // offer the six UML relationship pens in the pen dropdown, see the UML pens
+    // section
+    umlPens: true,
     ...(window.giteaDrawConfig ?? {}),
   };
 
@@ -75,6 +78,14 @@
     matchWidth: 'Match width',
     matchHeight: 'Match height',
     matchSize: 'Match width and height',
+    // kept short: js-draw lays the pen types out in a grid whose cells a longer
+    // name overflows
+    umlGeneralization: 'Generalization',
+    umlRealization: 'Realization',
+    umlComposition: 'Composition',
+    umlAggregation: 'Aggregation',
+    umlAssociation: 'Association',
+    umlDependency: 'Dependency',
   };
 
   // octicon-pencil, inlined so that no extra request is needed
@@ -1011,6 +1022,238 @@
     alignDebug.why = '';
   }
 
+  // ---------------------------------------------------------------- UML pens
+  //
+  // A class diagram tells its relationships apart by two things: the shape of
+  // the head, and whether the line is solid or dashed.  js-draw has one
+  // arrowhead -- a solid filled triangle, not configurable -- and no dashed
+  // lines at all: a stroke's style is {fill, stroke: {color, width}}, with no
+  // dash array anywhere.  So none of the six relationships below can be drawn
+  // with the pens it ships, other than by hand.
+  //
+  // These go in through EditorSettings.pens.additionalPenTypes, which is public
+  // API -- unlike the two hooks the alignment section above reaches for, this
+  // cannot be broken by a js-draw internal changing.  The toolbar icons come
+  // for free: js-draw generates one per pen by running the builder and drawing
+  // the result.
+  //
+  // Each arrow is ONE stroke with ONE style, and that is a requirement rather
+  // than a simplification.  The SVG renderer starts a new <path> wherever the
+  // style changes, and the loader makes one component per <path>; a drawing
+  // lives in the markdown as SVG text, so it makes that round trip every time
+  // it is opened.  An arrow built out of two styles -- say a stroked shaft and
+  // a filled head -- would come back as two components: two clicks to select,
+  // two steps to undo, and the alignment feature above lining a head up against
+  // its own shaft.
+  //
+  // So everything is filled geometry, the idiom js-draw's own arrow, line and
+  // rectangle builders use.  The shaft is a quad, a dash is a shorter quad, and
+  // a hollow head is a band: the outline, then the same outline inset and wound
+  // backwards, which the default nonzero fill rule turns into a hole.
+
+  // the six relationships, by head shape and line style
+  const UML_PENS = [
+    {id: 'uml-generalization', name: 'umlGeneralization', head: 'hollowTriangle', dashed: false},
+    {id: 'uml-realization', name: 'umlRealization', head: 'hollowTriangle', dashed: true},
+    {id: 'uml-composition', name: 'umlComposition', head: 'filledDiamond', dashed: false},
+    {id: 'uml-aggregation', name: 'umlAggregation', head: 'hollowDiamond', dashed: false},
+    {id: 'uml-association', name: 'umlAssociation', head: 'openArrow', dashed: false},
+    {id: 'uml-dependency', name: 'umlDependency', head: 'openArrow', dashed: true},
+  ];
+
+  // How long each head is, as a multiple of the pen width.  A head is scaled
+  // down when the arrow is too short to hold one at full size, the way js-draw's
+  // own arrow does with Math.min(lineWidth, arrowLength / 2).  This is not
+  // cosmetic: without it an arrow shorter than its head leaves no shaft, and
+  // normalizing that zero-length shaft writes NaN into the path.  js-draw draws
+  // a 113-unit arrow at the current thickness to make each pen's toolbar icon,
+  // so a thick pen would hit it just by opening the toolbar.
+  const UML_HEAD_LENGTHS = {hollowTriangle: 5, filledDiamond: 6, hollowDiamond: 6, openArrow: 4};
+
+  const umlLineTo = (jsdraw, point) => ({kind: jsdraw.PathCommandType.LineTo, point});
+  const umlMoveTo = (jsdraw, point) => ({kind: jsdraw.PathCommandType.MoveTo, point});
+
+  // a closed polygon, appended to the command list `out`
+  function umlPolygon(jsdraw, out, points) {
+    out.push(umlMoveTo(jsdraw, points[0]));
+    for (let i = 1; i < points.length; i++) out.push(umlLineTo(jsdraw, points[i]));
+    out.push(umlLineTo(jsdraw, points[0]));
+  }
+
+  // Inset a convex polygon by `d`: offset every edge inwards, then intersect
+  // each pair of neighbours, which is a miter join.
+  function umlInsetPolygon(points, d) {
+    const count = points.length;
+    const centroid = points.reduce((acc, point) => acc.plus(point)).times(1 / count);
+    const edges = points.map((point, i) => {
+      const direction = points[(i + 1) % count].minus(point).normalized();
+      let normal = direction.orthog();
+      if (centroid.minus(point).dot(normal) < 0) normal = normal.times(-1);
+      return {point: point.plus(normal.times(d)), direction};
+    });
+    return points.map((point, i) => {
+      const previous = edges[(i - 1 + count) % count];
+      const next = edges[i];
+      const denominator = previous.direction.x * next.direction.y -
+        previous.direction.y * next.direction.x;
+      // parallel neighbours have no miter point; the offset corner is as close
+      // as this gets, and a polygon that degenerate is not visible anyway
+      if (Math.abs(denominator) < 1e-9) return next.point;
+      const delta = next.point.minus(previous.point);
+      const t = (delta.x * next.direction.y - delta.y * next.direction.x) / denominator;
+      return previous.point.plus(previous.direction.times(t));
+    });
+  }
+
+  // the outline of `points`, `w` wide, as a filled ring: the inner outline is
+  // wound the other way, so the nonzero fill rule leaves the middle empty
+  function umlBand(jsdraw, out, points, w) {
+    umlPolygon(jsdraw, out, points);
+    umlPolygon(jsdraw, out, umlInsetPolygon(points, w).reverse());
+  }
+
+  // a straight run from `from` to `to`, as a filled quad `w` wide
+  function umlSegment(jsdraw, out, from, to, w) {
+    if (to.distanceTo(from) < 1e-6) return;
+    const normal = to.minus(from).normalized().orthog().times(w / 2);
+    umlPolygon(jsdraw, out, [
+      from.minus(normal), to.minus(normal), to.plus(normal), from.plus(normal),
+    ]);
+  }
+
+  // umlSegment, broken into dashes
+  function umlDashedSegment(jsdraw, out, from, to, w, dash) {
+    const total = to.distanceTo(from);
+    if (total < 1e-6) return;
+    const direction = to.minus(from).normalized();
+    for (let at = 0; at < total; at += dash * 2) {
+      umlSegment(
+        jsdraw, out,
+        from.plus(direction.times(at)),
+        from.plus(direction.times(Math.min(at + dash, total))),
+        w,
+      );
+    }
+  }
+
+  // Each head draws itself at `tip` and returns how much of the shaft it covers,
+  // so that a solid line does not show through a hollow head.  Open barbs cover
+  // nothing: the line runs all the way to the point.
+  const UML_HEADS = {
+    // generalization, realization
+    hollowTriangle(jsdraw, out, tip, direction, w) {
+      const length = w * 5, half = w * 2.6;
+      const normal = direction.orthog();
+      const base = tip.minus(direction.times(length));
+      umlBand(jsdraw, out, [
+        tip, base.plus(normal.times(half)), base.minus(normal.times(half)),
+      ], w * 0.9);
+      return length;
+    },
+    // composition
+    filledDiamond(jsdraw, out, tip, direction, w) {
+      const length = w * 6, half = w * 1.9;
+      const normal = direction.orthog();
+      const back = tip.minus(direction.times(length));
+      const waist = tip.minus(direction.times(length / 2));
+      umlPolygon(jsdraw, out, [
+        tip, waist.plus(normal.times(half)), back, waist.minus(normal.times(half)),
+      ]);
+      return length;
+    },
+    // aggregation
+    hollowDiamond(jsdraw, out, tip, direction, w) {
+      const length = w * 6, half = w * 1.9;
+      const normal = direction.orthog();
+      const back = tip.minus(direction.times(length));
+      const waist = tip.minus(direction.times(length / 2));
+      umlBand(jsdraw, out, [
+        tip, waist.plus(normal.times(half)), back, waist.minus(normal.times(half)),
+      ], w * 0.9);
+      return length;
+    },
+    // association, dependency
+    openArrow(jsdraw, out, tip, direction, w) {
+      const length = w * 4, half = w * 2.2;
+      const normal = direction.orthog();
+      const base = tip.minus(direction.times(length));
+      umlSegment(jsdraw, out, base.plus(normal.times(half)), tip, w);
+      umlSegment(jsdraw, out, base.minus(normal.times(half)), tip, w);
+      return 0;
+    },
+  };
+
+  function makeUmlBuilder(jsdraw, pen) {
+    return (startPoint, viewport) => {
+      let endPoint = startPoint;
+
+      const buildPreview = () => {
+        const from = startPoint.pos;
+        const tip = endPoint.pos;
+        const w = Math.max(startPoint.width, endPoint.width);
+        const distance = tip.distanceTo(from);
+        const commands = [];
+        if (distance > 1e-6) {
+          const direction = tip.minus(from).normalized();
+          const headWidth = Math.min(w, distance / (2 * UML_HEAD_LENGTHS[pen.head]));
+          const covered = UML_HEADS[pen.head](jsdraw, commands, tip, direction, headWidth);
+          const shaftEnd = tip.minus(direction.times(covered));
+          if (pen.dashed) umlDashedSegment(jsdraw, commands, from, shaftEnd, w, w * 2.5);
+          else umlSegment(jsdraw, commands, from, shaftEnd, w);
+        }
+        // rounding keeps the exported path free of long decimals -- this is
+        // markdown that someone has to read in a diff
+        const path = new jsdraw.Path(from, commands)
+          .mapPoints((point) => viewport.roundPoint(point));
+        return new jsdraw.Stroke([
+          jsdraw.pathToRenderable(path, {fill: startPoint.color}),
+        ]);
+      };
+
+      return {
+        getBBox: () => buildPreview().getBBox(),
+        build: buildPreview,
+        preview: (renderer) => buildPreview().render(renderer),
+        addPoint: (point) => { endPoint = point; },
+      };
+    };
+  }
+
+  // Every shape pen js-draw ships is wrapped in makeSnapToGridAutocorrect, which
+  // is what snaps a shape to the grid when the pen is held still.  It is not
+  // exported from the package, so it is reproduced here -- it is a thin wrapper
+  // whose only call into js-draw, viewport.snapToGrid, is public.  Without it
+  // these pens would behave differently from the ones beside them in the same
+  // dropdown, for no reason a user could see.
+  function withSnapToGrid(factory) {
+    return (startPoint, viewport) => {
+      const builder = factory(startPoint, viewport);
+      const points = [startPoint];
+      return {
+        ...builder,
+        addPoint: (point) => {
+          points.push(point);
+          builder.addPoint(point);
+        },
+        autocorrectShape: async () => {
+          const snap = (point) => ({...point, pos: viewport.snapToGrid(point.pos)});
+          const snapped = factory(snap(startPoint), viewport);
+          for (const point of points) snapped.addPoint(snap(point));
+          return snapped.build();
+        },
+      };
+    };
+  }
+
+  function umlPenTypes(jsdraw) {
+    return UML_PENS.map((pen) => ({
+      id: pen.id,
+      name: i18n[pen.name],
+      isShapeBuilder: true,
+      factory: withSnapToGrid(makeUmlBuilder(jsdraw, pen)),
+    }));
+  }
+
   // ---------------------------------------------------------------- the drawing board
 
   function restoreToolbarState(toolbar) {
@@ -1069,6 +1312,7 @@
     editor = new jsdraw.Editor(elHost, {
       wheelEventsEnabled: 'only-if-focused',
       appInfo: {name: 'Gitea', description: 'markdown drawing'},
+      pens: cfg.umlPens ? {additionalPenTypes: umlPenTypes(jsdraw)} : null,
     });
     setupAlignment(jsdraw, editor, elOverlay);
 
@@ -1257,6 +1501,8 @@
       // false after a board has been opened means the "Align…" entry is missing
       alignmentHooked: alignDebug.hooked,
       alignmentProblem: alignDebug.why,
+      // the ids to look for under "Shape" in the pen dropdown
+      umlPens: cfg.umlPens ? UML_PENS.map((pen) => pen.id) : [],
       codeEditors: (window.codeEditors ?? []).length,
       comboEditors: document.querySelectorAll('.combo-markdown-editor').length,
       markdownToolbars: document.querySelectorAll('.combo-markdown-editor markdown-toolbar').length,
