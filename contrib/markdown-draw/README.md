@@ -77,6 +77,9 @@ From there the behaviour is the same:
   says when the work it is about to take back was done. See
   [The edit history](#the-edit-history).
 * **Read**: drawings render as images wherever markdown renders.
+* **Watch**: a drawing that carries a recorded history gets a **▶ Play the edit
+  history** button under it, which replays how it was made -- in an issue, in a
+  file preview, anywhere it renders, with no editor involved.
 
 In the file editor the insertion goes through Monaco's `executeEdits`, so a
 single Ctrl+Z undoes it.
@@ -234,6 +237,29 @@ session with no time, because when the drawing was actually made is not somethin
 the file can say; the confirmation before undoing into it says so rather than
 inventing a date.
 
+### Watching it being drawn
+
+A rendered drawing that carries a history gets a **▶ Play the edit history**
+button beside it, which opens a player: the drawing appears stroke by stroke,
+with **Pause**, **Restart** and a progress bar.
+
+The timing is the recorded timing, with two adjustments, because a faithful
+replay is unwatchable. A pause inside a session is capped at `playbackMaxGap`,
+so somebody's lunch break does not become a minute of nothing; and the gap
+between two sessions -- hours, days, sometimes weeks -- is not acted out at all
+but written in the corner, "3 days later", which is what the absolute session
+anchors are for. `playbackSpeed` divides every wait.
+
+Playback runs on a click and never on its own. It deserializes the same
+attacker-written content the board does, and a page carrying a dozen drawings
+must not do that merely by being looked at, so rendering a drawing does not even
+fetch js-draw. The canvas is inert while it plays: a stroke drawn onto it by hand
+would put the picture out of step with the log being replayed into it.
+
+The player builds the drawing from the log, not from the SVG, so it shows the
+undo and redo as they happened -- the picture goes backwards where the author
+changed their mind.
+
 ### When a stored log is not used
 
 Three cases, none of which loses the drawing:
@@ -362,6 +388,11 @@ IP leak. The cleaned command is what gets written back on save, so a hostile
 payload is defused once rather than on every open. Keep that pass in front of
 `SerializableCommand.deserialize` if you change how logs are read.
 
+Playback goes through the same pass, and only ever on a click. Rendering a
+drawing must stay what it is today -- an `<img>`, and not even a fetch of js-draw
+-- because a page can carry many drawings from many authors, and none of them
+should get to run their content through a deserializer just by being displayed.
+
 `loadSaveData` is dropped rather than sanitized: js-draw refuses to restore it
 for the same reason (`AbstractComponent.deserialize` says so in a comment), so
 carrying it would be weight with no effect.
@@ -386,6 +417,11 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
     history: true,              // record every undoable action into the drawing
     historyMaxChars: 262144,    // past this the log collapses to a snapshot
     historyConfirmUndo: true,   // ask before undoing into an earlier session
+    playback: true,             // the "▶ Play the edit history" button
+    playbackMaxGap: 1200,       // longest pause, in ms, playback acts out
+    playbackSessionGap: 900,    // beat where one session ends and the next begins
+    playbackMinStep: 40,        // floor, so a burst of fast commands is followable
+    playbackSpeed: 1,           // divides every wait; 2 plays back twice as fast
   };
 </script>
 ```
@@ -426,6 +462,9 @@ with a finger. See [test/README.md](test/README.md).
 * **The history does not survive a hand edit of the SVG.** Editing the drawing's
   text directly is respected -- the log is dropped rather than replayed over it
   -- but the log is then gone, and a new one starts from the edited picture.
+* **Playback is a view, not an export.** There is no way yet to turn a recorded
+  history into a GIF or a self-playing SVG; it plays in the browser that opened
+  it, and nowhere else.
 * **The legacy EasyMDE editor is not covered.** Switching to it hides the
   markdown toolbar, so the button disappears with it; switch back to draw.
 * In the file editor the button only appears for the extensions listed in

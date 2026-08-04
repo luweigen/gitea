@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 7;
+  --markup-draw-css: 9;
 }
 
 .markup-draw {
@@ -243,6 +243,82 @@ body.markup-draw-open {
 .markup-draw-confirm-actions button:hover,
 .markup-draw-confirm-actions button:focus-visible {
   background: var(--background-color-3, rgb(0 0 0 / 8%));
+}
+
+/* --- playing a recorded history back.
+
+   The board's overlay with a control bar instead of a toolbar. The canvas is
+   inert: playback drives it, and a click that started drawing on it would put
+   the picture out of step with the log being replayed into it. */
+.markup-draw-player {
+  flex-direction: column;
+}
+
+.markup-draw-player-host .imageEditorContainer {
+  pointer-events: none;
+}
+
+.markup-draw-player-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--color-secondary);
+  background: var(--color-body);
+  color: var(--color-text);
+}
+
+.markup-draw-player-bar button {
+  padding: 5px 12px;
+  border: 1px solid var(--color-secondary);
+  border-radius: var(--border-radius);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1em;
+  white-space: nowrap;
+}
+
+.markup-draw-player-bar button:hover:not(:disabled),
+.markup-draw-player-bar button:focus-visible {
+  background: var(--color-secondary);
+}
+
+.markup-draw-player-bar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.markup-draw-player-progress {
+  flex: 1;
+  min-width: 60px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-secondary);
+}
+
+.markup-draw-player-fill {
+  width: 0;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--color-primary, #4183c4);
+  transition: width 80ms linear;
+}
+
+.markup-draw-player-caption {
+  flex: none;
+  min-width: 12em;
+  text-align: right;
+  font-size: 0.9em;
+  opacity: 0.75;
+}
+
+/* nothing to drive once playback has failed; only "close" still means anything */
+.markup-draw-player-dead .markup-draw-player-play,
+.markup-draw-player-dead .markup-draw-player-restart,
+.markup-draw-player-dead .markup-draw-player-progress {
+  display: none;
 }
 
 /* Guides shown while dragging. Rotated about their left edge, so one rule

@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '9';
+  const SCRIPT_REVISION = '11';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -48,6 +48,17 @@
     historyMaxChars: 256 * 1024,
     // ask before an undo reaches back into an earlier editing session
     historyConfirmUndo: true,
+    // offer a play button on drawings that carry a recorded history
+    playback: true,
+    // longest pause, in ms, that playback acts out; a real one can be an hour
+    playbackMaxGap: 1200,
+    // beat inserted where one editing session ends and the next begins -- the
+    // real gap there is days, and is captioned rather than waited out
+    playbackSessionGap: 900,
+    // floor, so a burst of fast commands is still something the eye can follow
+    playbackMinStep: 40,
+    // divides every wait, so 2 plays back twice as fast
+    playbackSpeed: 1,
     ...(window.giteaDrawConfig ?? {}),
   };
 
@@ -88,6 +99,16 @@
     undoAcrossUnknown: 'The next undo takes back the drawing as it was before this editing session.',
     undoAcrossConfirm: 'Undo it',
     undoAcrossCancel: 'Keep it',
+    play: 'Play the edit history',
+    playPause: 'Pause',
+    playResume: 'Play',
+    playRestart: 'Restart',
+    playClose: 'Close',
+    playFailed: 'This drawing\'s edit history could not be played back',
+    playFound: 'The drawing as it was found',
+    playNextSession: 'A later editing session',
+    playMoments: 'Moments later',
+    playDone: 'End of the recorded history',
   };
 
   // octicon-pencil, inlined so that no extra request is needed
@@ -723,14 +744,19 @@
     };
     let width = positive(root.getAttribute('width'));
     let height = positive(root.getAttribute('height'));
-    if (!width || !height) {
-      const box = (root.getAttribute('viewBox') ?? '').trim().split(/[\s,]+/).map(Number);
-      if (box.length === 4 && Number.isFinite(box[2]) && Number.isFinite(box[3])) {
-        width = box[2];
-        height = box[3];
-      }
+    // The viewBox also says *where* on the canvas the drawing sits, which is what
+    // playback needs to hold the view still while the drawing appears in it.
+    const box = (root.getAttribute('viewBox') ?? '').trim().split(/[\s,]+/).map(Number);
+    const framed = box.length === 4 && box.every((n) => Number.isFinite(n));
+    if ((!width || !height) && framed) {
+      width = box[2];
+      height = box[3];
     }
-    return {width: Math.round(width), height: Math.round(height)};
+    return {
+      width: Math.round(width),
+      height: Math.round(height),
+      viewBox: framed ? {x: box[0], y: box[1], width: box[2], height: box[3]} : null,
+    };
   }
 
   function showBlockError(elBlock, err) {
@@ -746,7 +772,7 @@
     // <img> reads and out of the size limit, which is about how much drawing a
     // page is asked to rasterize.  Counting it would push drawings that were
     // fine yesterday over the limit today.
-    const svgText = splitHistory(source.trim()).svg;
+    const {svg: svgText, stored} = splitHistory(source.trim());
     if (svgText.length > cfg.maxSourceChars) {
       throw new Error(`drawing source of ${svgText.length} characters exceeds the maximum allowed length of ${cfg.maxSourceChars}`);
     }
@@ -775,6 +801,9 @@
     elImg.src = blobUrl;
     elContainer.append(elImg);
 
+    const elActions = document.createElement('div');
+    elActions.className = 'markup-draw-actions';
+
     // Inside a markdown editor's own preview the drawing can be edited in place,
     // because the matching source fence is right there in the editor.
     const elMarkup = elPre.closest('.markup');
@@ -784,11 +813,21 @@
       elEdit.className = 'ui tiny basic button markup-draw-edit';
       elEdit.textContent = i18n.edit;
       elEdit.addEventListener('click', () => editPreviewedDrawing(elMarkup, elContainer));
-      const elActions = document.createElement('div');
-      elActions.className = 'markup-draw-actions';
       elActions.append(elEdit);
-      elContainer.append(elActions);
     }
+
+    // A drawing that carries its edit history can be watched being made,
+    // wherever it is rendered -- there is no editor involved.
+    if (stored && cfg.playback) {
+      const elPlay = document.createElement('button');
+      elPlay.type = 'button';
+      elPlay.className = 'ui tiny basic button markup-draw-play';
+      elPlay.textContent = `▶ ${i18n.play}`;
+      elPlay.addEventListener('click', () => void playDrawing(source));
+      elActions.append(elPlay);
+    }
+
+    if (elActions.children.length) elContainer.append(elActions);
 
     const elBlock = elPre.closest('.code-block-container') ?? elPre;
     elBlock.classList.remove('is-loading');
@@ -1643,6 +1682,249 @@
         if (current) source.replaceRange(current.start, current.end, makeFence(svgText));
       },
     });
+  }
+
+  // ---------------------------------------------------------------- playback
+  //
+  // The same log the board replays to restore an undo stack is a script of how
+  // the drawing was made, so a rendered drawing can play it back.
+  //
+  // Playback runs only on a click, never on its own: it deserializes the same
+  // attacker-written JSON the board does, and a page full of drawings must not
+  // do that merely by being looked at.  It goes through the same sanitizer.
+
+  const MINUTE = 60000, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
+
+  // The gap between two sessions is real time -- days, sometimes weeks -- and is
+  // never played out; it is said instead, which is what the absolute anchors in
+  // the log are for.
+  function describeGap(ms) {
+    const say = (n, unit) => `${n} ${unit}${n === 1 ? '' : 's'} later`;
+    if (ms < 2 * MINUTE) return i18n.playMoments;
+    if (ms < HOUR) return say(Math.round(ms / MINUTE), 'minute');
+    if (ms < DAY) return say(Math.round(ms / HOUR), 'hour');
+    if (ms < 30 * DAY) return say(Math.round(ms / DAY), 'day');
+    return say(Math.round(ms / (30 * DAY)), 'month');
+  }
+
+  // How long each session lasted, so a gap can be measured from the end of one
+  // to the start of the next rather than from start to start.
+  function sessionGaps(entries) {
+    const gaps = new Map();
+    let index = -1, startedAt = null, elapsed = 0, previousEnd = null;
+    for (const entry of entries) {
+      if (entry[0] !== OP_SESSION) {
+        elapsed += entry[1] ?? 0;
+        continue;
+      }
+      if (startedAt !== null) previousEnd = startedAt + elapsed;
+      index++;
+      startedAt = typeof entry[1] === 'number' ? entry[1] : null;
+      elapsed = 0;
+      if (index === 0 || startedAt === null || previousEnd === null) continue;
+      // clocks on two machines need not agree, so a gap can come out negative
+      gaps.set(index, Math.max(0, startedAt - previousEnd));
+    }
+    return gaps;
+  }
+
+  function makePlayerButton(className, label) {
+    const elButton = document.createElement('button');
+    elButton.type = 'button';
+    elButton.className = className;
+    elButton.textContent = label;
+    return elButton;
+  }
+
+  async function playDrawing(fenceSource) {
+    const {svg: svgText, stored} = splitHistory(fenceSource.trim());
+    if (!stored) return;
+
+    const elOverlay = document.createElement('div');
+    elOverlay.className = 'markup-draw-overlay markup-draw-player';
+    const elHost = document.createElement('div');
+    elHost.className = 'markup-draw-host markup-draw-player-host';
+    elHost.textContent = i18n.loading;
+    const elBar = document.createElement('div');
+    elBar.className = 'markup-draw-player-bar';
+    const elPlay = makePlayerButton('markup-draw-player-play', i18n.playPause);
+    const elRestart = makePlayerButton('markup-draw-player-restart', i18n.playRestart);
+    const elClose = makePlayerButton('markup-draw-player-close', i18n.playClose);
+    const elProgress = document.createElement('div');
+    elProgress.className = 'markup-draw-player-progress';
+    const elFill = document.createElement('div');
+    elFill.className = 'markup-draw-player-fill';
+    elProgress.append(elFill);
+    const elCaption = document.createElement('div');
+    elCaption.className = 'markup-draw-player-caption';
+    elBar.append(elPlay, elRestart, elProgress, elCaption, elClose);
+    elOverlay.append(elHost, elBar);
+    document.body.append(elOverlay);
+    document.body.classList.add('markup-draw-open');
+
+    let editor = null;
+    let run = 0; // bumped to abandon a playback in flight
+    let paused = false;
+    let waiting = null; // resolves when playback is let go again
+    // waits in flight, so that pausing can cut one short instead of letting it
+    // run out first -- a wait here can be a second and a bit long, and a button
+    // that takes that long to answer reads as broken
+    const sleepers = new Set();
+
+    // a declaration, not a const: Escape can close the player while js-draw is
+    // still loading, which reaches this from above
+    function setPaused(value) {
+      paused = value;
+      elPlay.textContent = paused ? i18n.playResume : i18n.playPause;
+      if (paused) {
+        for (const stop of [...sleepers]) stop();
+      } else if (waiting) {
+        const resume = waiting;
+        waiting = null;
+        resume();
+      }
+    }
+
+    const fail = (message) => {
+      elHost.textContent = message;
+      elBar.classList.add('markup-draw-player-dead');
+    };
+    // Abandons the playback in flight: bumping `run` makes it return at its next
+    // checkpoint, but a paused one is parked on a promise nobody would ever
+    // resolve, so it has to be let go as well or it keeps the editor alive.
+    const abandon = () => {
+      run++;
+      setPaused(false);
+    };
+    const close = () => {
+      abandon();
+      editor?.remove();
+      elOverlay.remove();
+      document.body.classList.remove('markup-draw-open');
+    };
+    elClose.addEventListener('click', close);
+    elOverlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') close();
+    });
+    elOverlay.tabIndex = -1;
+    elOverlay.focus();
+
+    let journal;
+    try {
+      journal = JSON.parse(await unpackHistory(stored.codec, stored.data));
+      if (!journal || !Array.isArray(journal.e)) throw new Error('unexpected shape');
+    } catch (err) {
+      fail(`${i18n.playFailed} (${err.message || err})`);
+      return;
+    }
+
+    let jsdraw;
+    try {
+      jsdraw = await loadJsDraw();
+    } catch (err) {
+      fail(String(err.message || err));
+      return;
+    }
+
+    elHost.textContent = '';
+    editor = new jsdraw.Editor(elHost, {wheelEventsEnabled: 'only-if-focused'});
+    // The view is pinned to where the finished drawing sits, so the picture
+    // fills in rather than sliding around under it.
+    const {viewBox} = parseSvgSize(svgText);
+    if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
+      const rect = new jsdraw.Rect2(viewBox.x, viewBox.y, viewBox.width, viewBox.height);
+      editor.dispatch(editor.image.setImportExportRect(rect), false);
+      editor.dispatch(editor.viewport.zoomTo(rect), false);
+    }
+
+    const gaps = sessionGaps(journal.e);
+    const report = {blockedImages: 0};
+    elPlay.addEventListener('click', () => setPaused(!paused));
+
+    const gate = () => (paused ? new Promise((resolve) => { waiting = resolve; }) : null);
+
+    // Pausing cuts the current wait short; the gate right behind it is what
+    // actually holds playback until it is let go again.
+    const wait = (ms) => new Promise((resolve) => {
+      const stop = () => {
+        clearTimeout(timer);
+        sleepers.delete(stop);
+        resolve();
+      };
+      const timer = setTimeout(stop, ms);
+      sleepers.add(stop);
+    });
+    const step = async (ms) => {
+      await wait(ms);
+      await gate();
+    };
+
+    async function play() {
+      const mine = ++run;
+      setPaused(false);
+      elPlay.disabled = false;
+      elCaption.textContent = '';
+      elFill.style.width = '0%';
+      let sessionIndex = -1;
+      for (const [at, entry] of journal.e.entries()) {
+        await gate();
+        if (mine !== run) return;
+        try {
+          if (entry[0] === OP_SESSION) {
+            sessionIndex++;
+            if (sessionIndex > 0) {
+              elCaption.textContent = gaps.has(sessionIndex)
+                ? describeGap(gaps.get(sessionIndex))
+                : i18n.playNextSession;
+              await step(cfg.playbackSessionGap / cfg.playbackSpeed);
+            } else if (typeof entry[1] !== 'number') {
+              elCaption.textContent = i18n.playFound;
+            }
+          } else if (entry[0] === OP_DO) {
+            editor.history.push(
+              jsdraw.SerializableCommand.deserialize(sanitizeCommandJson(entry[2], report), editor),
+              true,
+            );
+          } else if (entry[0] === OP_UNDO) {
+            await editor.history.undo();
+          } else if (entry[0] === OP_REDO) {
+            await editor.history.redo();
+          }
+        } catch (err) {
+          fail(`${i18n.playFailed} (${err.message || err})`);
+          return;
+        }
+        if (mine !== run) return;
+        elFill.style.width = `${Math.round(((at + 1) / journal.e.length) * 100)}%`;
+        // no wait after the last one: there is nothing left to pace, and it would
+        // only delay saying that the recording has run out
+        if (entry[0] !== OP_SESSION && at < journal.e.length - 1) {
+          // a real pause is capped: nobody wants to watch somebody's lunch break
+          const gap = Math.min(entry[1] ?? 0, cfg.playbackMaxGap);
+          await step(Math.max(cfg.playbackMinStep, gap) / cfg.playbackSpeed);
+        }
+      }
+      elCaption.textContent = i18n.playDone;
+      // there is nothing left to pause; Restart is the only thing that still means
+      // anything, and offering "Pause" for a finished playback reads as broken
+      elPlay.disabled = true;
+    }
+
+    elRestart.addEventListener('click', () => {
+      // js-draw cannot empty an editor, so starting over means a new one
+      abandon();
+      editor.remove();
+      elHost.textContent = '';
+      editor = new jsdraw.Editor(elHost, {wheelEventsEnabled: 'only-if-focused'});
+      if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
+        const rect = new jsdraw.Rect2(viewBox.x, viewBox.y, viewBox.width, viewBox.height);
+        editor.dispatch(editor.image.setImportExportRect(rect), false);
+        editor.dispatch(editor.viewport.zoomTo(rect), false);
+      }
+      void play();
+    });
+
+    await play();
   }
 
   function makeButton(className, withLabel) {

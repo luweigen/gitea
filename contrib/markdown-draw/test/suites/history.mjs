@@ -289,5 +289,83 @@ check('the history costs less than the drawing it describes', cost < 1,
 check('a busier drawing records every stroke',
   readJournal(await source(big)).e.filter((e) => e[0] === OP_DO).length === 13);
 
+// --- playing a recorded history back
+//
+// A fresh page, because the first thing to check is that a rendered drawing does
+// not deserialize anybody's recorded commands until somebody asks it to.
+
+const viewer = watchPage(await browser.newPage({viewport: {width: 1280, height: 900}}));
+await viewer.addInitScript(() => {
+  window.__cfgOverride = {playbackMinStep: 500, playbackMaxGap: 500, playbackSessionGap: 500};
+});
+await viewer.goto(BASE);
+await viewer.evaluate((text) => window.renderFence('standalone', text), stripFence(fence1));
+await viewer.locator('#standalone img.markup-draw-image').waitFor({timeout: 10000});
+await viewer.waitForTimeout(400);
+
+check('a drawing with a history offers a play button',
+  await viewer.locator('#standalone .markup-draw-play').count() === 1);
+check('rendering one does not load js-draw, let alone replay it',
+  await viewer.evaluate(() => performance.getEntriesByType('resource')
+    .every((r) => !r.name.includes('js-draw/bundle.js'))));
+
+await viewer.evaluate(() => window.renderFence('standalone',
+  '<svg viewBox="0 0 40 40" width="40" height="40" xmlns="http://www.w3.org/2000/svg"></svg>'));
+await viewer.waitForTimeout(300);
+check('a drawing without one does not', await viewer.locator('#standalone .markup-draw-play').count() === 1);
+
+await viewer.locator('#standalone .markup-draw-play').first().click();
+const player = viewer.locator('.markup-draw-player');
+await player.waitFor({timeout: 30000});
+await viewer.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+check('the play button opens a player', await player.count() === 1);
+
+const fill = () => viewer.locator('.markup-draw-player-fill').evaluate((el) => el.style.width);
+await viewer.waitForTimeout(700);
+await viewer.locator('.markup-draw-player-play').click(); // pause
+const early = await fill();
+const midway = await viewer.locator('.markup-draw-player-host').screenshot();
+await viewer.waitForTimeout(1200);
+check('pausing stops it where it was', await fill() === early, `stuck at ${early}`);
+
+await viewer.locator('.markup-draw-player-play').click(); // resume
+await viewer.waitForFunction(
+  () => document.querySelector('.markup-draw-player-fill')?.style.width === '100%',
+  null, {timeout: 30000},
+);
+check('it plays to the end', await fill() === '100%');
+await viewer.locator('.markup-draw-player-caption')
+  .filter({hasText: 'End of the recorded history'}).waitFor({timeout: 5000});
+check('and says so', true);
+check('a finished playback stops offering to pause itself',
+  await viewer.locator('.markup-draw-player-play').isDisabled());
+await viewer.locator('.markup-draw-player-restart').click();
+await viewer.waitForTimeout(300);
+check('restarting begins again from an empty canvas',
+  await fill() !== '100%' && !await viewer.locator('.markup-draw-player-play').isDisabled(),
+  `fill ${await fill()}`);
+const ended = await viewer.locator('.markup-draw-player-host').screenshot();
+check('the drawing appears as it goes, rather than all at once at the end',
+  Buffer.compare(midway, ended) !== 0);
+await screenshot(viewer, 'history-playback');
+
+await viewer.locator('.markup-draw-player-close').click();
+await player.waitFor({state: 'detached', timeout: 5000});
+check('closing the player puts the page back', await viewer.locator('.markup-draw-player').count() === 0);
+
+// --- a history that cannot be played says so instead of showing nothing
+
+await viewer.evaluate(() => window.renderFence('standalone',
+  '<svg viewBox="0 0 40 40" width="40" height="40" xmlns="http://www.w3.org/2000/svg">' +
+  '<!--gitea-draw-history:1:z:bm90IGRlZmxhdGVkIGF0IGFsbA==--></svg>'));
+await viewer.waitForTimeout(300);
+await viewer.locator('#standalone .markup-draw-play').last().click();
+await viewer.locator('.markup-draw-player').waitFor({timeout: 15000});
+await viewer.waitForTimeout(800);
+check('an unreadable history reports itself rather than hanging',
+  /could not be played back/.test(await viewer.locator('.markup-draw-player-host').textContent()));
+check('and only the close button is left to press',
+  await viewer.locator('.markup-draw-player-play').isVisible() === false);
+
 await browser.close();
 finish();
