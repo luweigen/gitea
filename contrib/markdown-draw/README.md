@@ -69,6 +69,13 @@ From there the behaviour is the same:
   at the corner of the selection: next to js-draw's own *Duplicate* / *Delete* /
   *Copy* there is an **Align…** entry. See
   [Aligning what you drew](#aligning-what-you-drew).
+* **Undo**: everything Ctrl+Z can take back is recorded into the drawing, so the
+  undo stack survives closing the board, the tab and the browser. Reopening a
+  drawing days later and pressing Ctrl+Z takes back the stroke drawn before it
+  was last saved. Because that can reach into work somebody else did, the board
+  asks before the first undo that crosses out of the current editing session, and
+  says when the work it is about to take back was done. See
+  [The edit history](#the-edit-history).
 * **Read**: drawings render as images wherever markdown renders.
 
 In the file editor the insertion goes through Monaco's `executeEdits`, so a
@@ -153,6 +160,114 @@ were.
 Every action is one undoable step: a single Ctrl+Z takes back a whole alignment,
 however many elements moved.
 
+## The edit history
+
+Every action that Ctrl+Z can take back is written into the drawing itself, so
+the undo stack outlives the tab and the same record can later be played back as
+an animation of how the drawing was made.
+
+### What is recorded
+
+Exactly what enters js-draw's undo history: strokes, erasures, text, moving and
+resizing a selection, duplicating, every **Align…** action, background and canvas
+size changes. Panning and zooming are not, because js-draw dispatches them
+outside the undo stack -- so "undoable" and "recorded" are the same set by
+construction, not by a rule that has to be kept in step.
+
+Undo and redo are recorded too, as events in their own right. A drawing
+therefore remembers not just what was drawn but what was drawn and taken back,
+which is what makes reopening it able to redo, and what will make an animation
+show the corrections rather than only the final path.
+
+Timing is recorded as the gap between one action and the next, plus one absolute
+timestamp per editing session. The gaps come from `performance.now()`, which is
+monotonic, so a system clock adjustment cannot produce a negative one; the
+session anchors come from `Date.now()`, and are what a cross-session gap is
+computed from -- relative gaps alone cannot express the time between one session
+ending and the next beginning, because no action happens in between to carry it.
+
+### Where it is stored
+
+Inside the SVG, as an XML comment just before `</svg>`:
+
+````markdown
+```js-draw
+<svg ...>...<!--gitea-draw-history:1:z:Ly8gZGVmbGF0ZWQgSlNPTiwgYmFzZTY0...--></svg>
+```
+````
+
+so one fence stays one self-contained drawing: copying it takes the history
+along, and every renderer that does not know about it -- Gitea's, GitHub's, an
+e-mail client's -- ignores a comment, so nowhere does a wall of base64 show up on
+screen. The payload is JSON, deflated through `CompressionStream` and base64'd;
+base64 cannot contain the `--` that would close the comment early. A browser
+without `CompressionStream` stores it uncompressed and marks it `p` instead of
+`z`, so either can be read back.
+
+Measured on the drawings the test suite makes, the history adds **about 60%** to
+the size of the drawing's SVG (a two-stroke sketch is worse, near 100%, because
+the fixed cost dominates). That is close to the floor: js-draw serializes a
+stroke's geometry as the same path string the SVG carries, so the log is
+essentially a compressed second copy of the drawing.
+
+The log has its own budget, `historyMaxChars`. It is not counted against
+`maxSourceChars`, which is about how much drawing a page is asked to rasterize
+-- counting it would push drawings that were fine yesterday over the limit today.
+
+### How a drawing comes back
+
+The log is a complete script starting from an empty canvas, not a patch on top
+of the SVG, and opening a drawing replays it rather than loading its SVG.
+
+That is forced by js-draw rather than chosen: component ids survive
+serialize/deserialize but not an SVG round trip -- js-draw writes no ids into its
+SVG and its loader makes fresh ones on the way back. A command recorded against
+an SVG-loaded image would, next time, name a component that no longer exists, and
+undoing it would delete the wrong thing. Replaying from JSON keeps every id, so
+the drawing that comes out is the drawing that went in. The SVG in the fence
+stays the thing that renders, regenerated from the replayed state on every save.
+
+A drawing with no log -- one made before this existed, or by an older install --
+is **adopted** on first open: everything on the canvas becomes the log's first
+command, so from then on the ids are fixed. That first command is recorded as a
+session with no time, because when the drawing was actually made is not something
+the file can say; the confirmation before undoing into it says so rather than
+inventing a date.
+
+### When a stored log is not used
+
+Three cases, none of which loses the drawing:
+
+* **The SVG was changed outside the board** -- a hand edit in the markdown,
+  another tool, a merge resolution. The log carries a fingerprint of the SVG it
+  produced; if it does not match, the log is dropped and the SVG is loaded,
+  because that edit is what the author meant and replaying would quietly undo it.
+* **The log cannot be read** -- written by a newer version of this script,
+  truncated, or not decompressible here.
+* **The log cannot be replayed** -- it parses but a command in it does not
+  deserialize. The half-built board is thrown away and a fresh one is opened
+  straight from the SVG, because js-draw cannot empty an editor again
+  (`loadFromSVG` replaces the background and adds the rest on top, so recovering
+  in place would show a mixture of the two).
+
+In all three the drawing loads from its SVG and a new log starts from there.
+`giteaDrawDebug().history` reports which happened, under `rejected`.
+
+The one case that does lose a history is a command that cannot be *serialized*,
+which would make everything after it replay onto a different picture. Recording
+stops there and the drawing is saved without a log rather than with a lying one;
+`problem` says so, and a warning goes to the console. No js-draw command in the
+undo stack behaves this way today -- this is the guard for the one that might.
+
+### When it gets too big
+
+Past `historyMaxChars` the log is collapsed on the next save into a single
+snapshot of the drawing as it then stands, and recording starts again from
+there. Undo can no longer reach back past that point; the drawing is untouched.
+Keeping the current session's actions on top of a snapshot taken when the board
+opened would be nicer, but an undo made during that session can reach back past
+it, and a log that cannot be replayed is worse than a short one.
+
 ## How it works
 
 Gitea's markdown renderer emits `<code class="chroma language-XXX display">` for
@@ -176,6 +291,23 @@ which is exactly what this uses.
 
 js-draw is only fetched when a board is actually opened, so pages that merely
 display drawings do not pay for it.
+
+The edit history needs three things from js-draw, all of them public. The
+`UndoRedoStackUpdated` event carries both the command and which of
+done/undone/redone happened, so one listener sees all three -- `CommandDone`
+alone cannot tell a fresh command from a redone one. Every command that reaches
+the undo stack is a `SerializableCommand`, whose `serialize()`/`deserialize()`
+pair exists for js-draw's collaborative editing support and preserves component
+ids. And `editor.history.push(command, apply)` replays a command into both the
+image and the undo stack without announcing it to a screen reader, which
+`dispatch` would do several hundred times over on a large drawing.
+
+The one liberty it takes is replacing `undo` on the board's own
+`editor.history` object, to ask before an undo reaches back into an earlier
+session. Both the toolbar button and the Ctrl+Z shortcut call
+`editor.history.undo()`, so that single instance property covers both; nothing is
+replaced on a prototype. If js-draw stops routing undo through it, the question
+stops being asked and undo goes back to being immediate.
 
 Alignment needs two things from js-draw, both of which it already offers:
 `AbstractComponent.transformBy()` gives an undoable command per element (united
@@ -218,6 +350,22 @@ references are not loaded. When a drawing is opened for editing it is passed to
 If you change this file, keep that property. `innerHTML = svgText` on markdown
 content would be a stored-XSS hole that bypasses Gitea's server-side sanitizer.
 
+A recorded edit history is the same attacker-controlled content as the SVG beside
+it, and the JSON route into js-draw is guarded *less* than the SVG one:
+`ImageComponent.deserializeFromJSON` assigns `src` straight through, while
+js-draw's SVG loader forces `data:image/` and re-encodes anything else through a
+canvas. Every recorded command is therefore run through a sanitizing pass before
+it is deserialized, which replaces any `src` that is not a `data:image/` URL with
+a blank pixel -- otherwise a drawing could call home to a URL of its author's
+choosing from every reader who opened the board, which is a tracking pixel and an
+IP leak. The cleaned command is what gets written back on save, so a hostile
+payload is defused once rather than on every open. Keep that pass in front of
+`SerializableCommand.deserialize` if you change how logs are read.
+
+`loadSaveData` is dropped rather than sanitized: js-draw refuses to restore it
+for the same reason (`AbstractComponent.deserialize` says so in a comment), so
+carrying it would be weight with no effect.
+
 Sources larger than `maxSourceChars` (512 KiB by default) are refused, the same
 guard `MERMAID_MAX_SOURCE_CHARACTERS` provides for mermaid.
 
@@ -235,6 +383,9 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
     edgeToolbarMaxWidth: 800,   // below this width, use the touch toolbar
     alignment: true,            // the "Align…" entry in the selection menu
     snapDistance: 8,            // screen px a drag snaps over, 0 to switch off
+    history: true,              // record every undoable action into the drawing
+    historyMaxChars: 262144,    // past this the log collapses to a snapshot
+    historyConfirmUndo: true,   // ask before undoing into an earlier session
   };
 </script>
 ```
@@ -257,10 +408,24 @@ with a finger. See [test/README.md](test/README.md).
   e-mails and other Git clients all see the raw fence text. This is the same
   trade-off mermaid makes.
 * **The markdown gets bigger.** js-draw's SVG is verbose; a busy sketch can be
-  tens of kilobytes of one-line SVG in the source. Fine for issue comments, worth
-  thinking about for files you expect to review line by line. If that matters,
-  upload drawings as attachments and link them instead -- but then they no longer
-  travel with the markdown.
+  tens of kilobytes of one-line SVG in the source, and the edit history adds
+  about 60% on top of that. Fine for issue comments, worth thinking about for
+  files you expect to review line by line. If that matters, upload drawings as
+  attachments and link them instead -- but then they no longer travel with the
+  markdown -- or set `history: false` to keep only the picture.
+* **The edit history says nothing about who.** It records what was done and
+  when, not by whom: a drawing edited by three people is one log, and the
+  confirmation before undoing across a session can say when that work was done
+  but not whose it was. Gitea's own history -- the commit or the comment edit --
+  is where that lives.
+* **A restored undo stack can reach other people's work.** That is the point of
+  it, and the reason for the confirmation, but it does mean a drawing can be
+  taken apart with repeated Ctrl+Z by someone who did not draw it. The markdown
+  itself is still the record; the surrounding commit or comment history is what
+  undoes an unwanted change.
+* **The history does not survive a hand edit of the SVG.** Editing the drawing's
+  text directly is respected -- the log is dropped rather than replayed over it
+  -- but the log is then gone, and a new one starts from the edited picture.
 * **The legacy EasyMDE editor is not covered.** Switching to it hides the
   markdown toolbar, so the button disappears with it; switch back to draw.
 * In the file editor the button only appears for the extensions listed in
@@ -316,6 +481,15 @@ loading, or your Gitea is too old to publish `window.codeEditors`.
 If the pencil button works but **Align…** is not in the selection menu, open a
 board first and run `giteaDrawDebug()` again: `alignmentHooked` is only set once
 a board has been opened, and `alignmentProblem` says what stopped it.
+
+`history` reports the recorder. With a board open it is an object:
+`commands` and `entries` are how much has been recorded, `undoStack` how far
+Ctrl+Z can still go, `sessions` how many editing sessions the drawing has been
+through, `rejected` why a stored log was not used (recording carries on
+regardless), and `problem` why this drawing will be saved without a log at all.
+After a board is closed it holds the last board's report. If a drawing that
+should have one does not, `drawingsWithHistory` on the page it is rendered on
+says whether the fence carries a log to begin with.
 * js-draw follows `prefers-color-scheme` for its own chrome rather than Gitea's
   theme setting. Drawings themselves get an opaque background so they stay
   readable under any theme.

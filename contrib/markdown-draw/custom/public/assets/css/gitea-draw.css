@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 6;
+  --markup-draw-css: 7;
 }
 
 .markup-draw {
@@ -194,6 +194,55 @@ body.markup-draw-open {
   border: 2px dashed #e0561a;
   border-radius: 2px;
   box-shadow: 0 0 0 1px rgb(255 255 255 / 60%) inset;
+}
+
+/* --- edit history.
+
+   Asked before an undo reaches back into an earlier editing session. Like the
+   align panel it lives inside the board, so it takes js-draw's palette rather
+   than Gitea's; unlike the align panel it must be readable rather than
+   see-through, because it is a question about work that is about to disappear. */
+.markup-draw-confirm {
+  max-width: 24em;
+  padding: 14px 16px;
+  border: 1px solid var(--background-color-3, rgb(0 0 0 / 20%));
+  border-radius: 8px;
+  background: var(--background-color-1, #fff);
+  color: var(--foreground-color-1, currentcolor);
+  box-shadow: 0 4px 20px rgb(0 0 0 / 25%);
+}
+
+.markup-draw-confirm::backdrop {
+  background: rgb(0 0 0 / 35%);
+}
+
+.markup-draw-confirm p {
+  margin: 0 0 10px;
+}
+
+.markup-draw-confirm-title {
+  font-weight: bold;
+}
+
+.markup-draw-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.markup-draw-confirm-actions button {
+  padding: 6px 12px;
+  border: 1px solid var(--background-color-3, rgb(0 0 0 / 20%));
+  border-radius: 4px;
+  background: var(--background-color-2, transparent);
+  color: inherit;
+  cursor: pointer;
+  font-size: 1em;
+}
+
+.markup-draw-confirm-actions button:hover,
+.markup-draw-confirm-actions button:focus-visible {
+  background: var(--background-color-3, rgb(0 0 0 / 8%));
 }
 
 /* Guides shown while dragging. Rotated about their left edge, so one rule
