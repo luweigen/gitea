@@ -335,9 +335,17 @@ They are offered one at a time rather than both together, for two reasons: the
 quick one should not have to wait for the slow one, and two downloads from a
 single click is exactly what a browser refuses -- Safari took only one of them,
 because by the time either file exists the click that asked for it is long over.
-For the same reason the finished file is also left on the bar as **⤓ name**,
-which downloads it again as a click in its own right if the automatic one did
-not arrive.
+
+That last point is also why an export sometimes ends with a question rather than
+a download. A browser only acts on a download while the click that asked for it
+still counts as a user action, which lapses after a few seconds. Building the SVG
+takes milliseconds and stays inside that window, so it simply downloads; a
+recording usually does not, so the file is offered with a **Save it** button,
+which makes the save a click in its own right. Which of the two happens is read
+from `navigator.userActivation`, not guessed -- so there is no second button
+parked in the bar for a case that most exports never reach.
+`exportAskBeforeSaving` overrides it: `always` for a browser where the automatic
+route cannot be trusted, `never` to rely on the download alone.
 
 While an export runs the bar shows what it is doing and how far it has got, and
 every control that would disturb it is switched off -- it is replaying the log
@@ -540,6 +548,7 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
     exportBitrate: 4000000,     // video bitrate
     exportTailMs: 1200,         // how long the finished drawing is held at the end
     exportName: 'drawing-history',  // base name for the two files
+    exportAskBeforeSaving: 'auto',  // 'always' / 'never' override the check
   };
 </script>
 ```
@@ -589,8 +598,8 @@ with a finger. See [test/README.md](test/README.md).
   cost -- it is built from a replay, not from a recording.
 * **A download that is not tied to a click** is refused or ignored by some
   browsers, Safari among them, and nothing built after an await can be tied to
-  one. Hence one file per action, and the **⤓ name** button that offers the
-  finished file again.
+  one. Hence one file per action, and the **Save it** question when the window
+  has lapsed.
 * **Stepping backwards costs a rebuild.** Each backward step replays the log
   from the start, so on a history of hundreds of steps it is noticeably slower
   than stepping forwards. Correctness is why: see the stepping section.

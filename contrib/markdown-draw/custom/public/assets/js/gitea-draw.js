@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '19';
+  const SCRIPT_REVISION = '20';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -66,6 +66,11 @@
     exportTailMs: 1200,
     // base name for the two downloaded files
     exportName: 'drawing-history',
+    // whether a finished export is offered with a question rather than simply
+    // downloaded: 'auto' asks only once the click that started it has lapsed,
+    // which is when a browser stops acting on a download by itself; 'always'
+    // asks every time, 'never' relies on the download alone
+    exportAskBeforeSaving: 'auto',
     ...(window.giteaDrawConfig ?? {}),
   };
 
@@ -162,9 +167,12 @@
     playExportCancel: 'Not now',
     playBuildingSvg: 'Building the SVG',
     playRecording: 'Recording',
-    playExportSaved: (name) => `${name} is ready`,
-    playExportGrab: (name) => `\u2913 ${name}`,
-    playExportGrabHint: 'Save the file, if the download did not start on its own',
+    playExportSaved: (name) => `${name} downloaded`,
+    playExportReady: (name) => `${name} is ready`,
+    playExportReadyBody: 'It took long enough to build that the browser will not save it on its own any more.',
+    playExportSaveNow: 'Save it',
+    playExportSaveNowHint: 'Downloads the file you just built.',
+    playExportDiscard: 'Throw it away',
     playExportStopped: 'Export stopped',
     playExportFailed: (why) => `The animation could not be exported: ${why}`,
     playSave: 'Save to markdown',
@@ -2275,11 +2283,6 @@
     const elRestart = makePlayerButton('markup-draw-player-restart', i18n.playRestartIcon, i18n.playRestart);
     const elDelete = makePlayerButton('markup-draw-player-delete', i18n.playDeleteIcon, i18n.playDelete);
     const elExport = makePlayerButton('markup-draw-player-export', i18n.playExportIcon, i18n.playExport);
-    // Safari will not act on a download that is no longer tied to a click, and a
-    // recording takes far too long to still count as one.  The file is offered
-    // here as well, where taking it is a click in its own right.
-    const elGrab = makePlayerButton('markup-draw-player-grab', '', i18n.playExportGrabHint);
-    elGrab.hidden = true;
     const elSave = makePlayerButton('markup-draw-player-save', i18n.playSaveIcon, i18n.playSave);
     const elClose = makePlayerButton('markup-draw-player-close', i18n.playCloseIcon, i18n.playClose);
     const elProgress = document.createElement('div');
@@ -2292,7 +2295,7 @@
     const elCaption = document.createElement('div');
     elCaption.className = 'markup-draw-player-caption';
     elBar.append(elBack, elPlay, elForward, elRestart, elProgress, elStep, elCaption);
-    if (cfg.exportAnimation) elBar.append(elExport, elGrab);
+    if (cfg.exportAnimation) elBar.append(elExport);
     if (editable) elBar.append(elDelete, elSave);
     elBar.append(elClose);
     elOverlay.append(elHost, elBar);
@@ -2311,7 +2314,6 @@
     let noteTimer = null;
     let busy = null; // {label, done, total} while an export is running
     let stopping = false; // an export was abandoned and should unwind
-    let ready = null; // {name, blob} the last export produced, for a second try
     // waits in flight, so that pausing can cut one short instead of letting it
     // run out first -- a wait here can be a second and a bit long, and a button
     // that takes that long to answer reads as broken
@@ -2733,16 +2735,35 @@
       });
     });
 
+    // A browser only acts on a download while the click that asked for it is
+    // still counted as a user action, and that lapses after a few seconds.
+    // Building the SVG takes milliseconds, so it is still inside that window and
+    // just downloads; a recording takes far longer than the window, so asking
+    // once at the end makes the save a click of its own.  Reading the window
+    // rather than guessing at it means no second button sitting in the bar for
+    // a case that usually does not arise.
     const offerFile = (name, blob) => {
-      ready = {name, blob};
-      elGrab.textContent = i18n.playExportGrab(name);
-      elGrab.hidden = false;
-      downloadBlob(name, blob);
-      note(i18n.playExportSaved(name));
+      const ask = cfg.exportAskBeforeSaving === 'always' ? true
+        : cfg.exportAskBeforeSaving === 'never' ? false
+          // no userActivation to read means no way to tell, so ask rather than
+          // hand the file to a browser that may drop it without a word
+          : !(navigator.userActivation?.isActive ?? false);
+      if (!ask) {
+        downloadBlob(name, blob);
+        note(i18n.playExportSaved(name));
+        return;
+      }
+      askChoice(elOverlay, {
+        title: i18n.playExportReady(name),
+        body: i18n.playExportReadyBody,
+        cancel: i18n.playExportDiscard,
+        choices: [{
+          label: i18n.playExportSaveNow,
+          hint: i18n.playExportSaveNowHint,
+          onPick: () => downloadBlob(name, blob),
+        }],
+      });
     };
-    elGrab.addEventListener('click', () => {
-      if (ready) downloadBlob(ready.name, ready.blob);
-    });
 
     // The SVG is only as slow as replaying the log; the video is recorded live
     // and so takes as long as watching it. Bundling them made the quick one wait

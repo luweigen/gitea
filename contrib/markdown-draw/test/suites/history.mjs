@@ -667,6 +667,22 @@ page.on('download', async (d) => {
   const path = await d.path();
   downloads.push({name: d.suggestedFilename(), bytes: path ? (await readFile(path)).length : 0, path});
 });
+// An export downloads by itself while the click that asked for it still counts
+// as a user action, and asks once that has lapsed. Which of the two a given
+// export gets depends on how long it took, so a test that wants the file rather
+// than the route has to take either.
+const takeDelivery = async (target, ms = 180000) => {
+  await target.waitForFunction(() => Boolean(
+    document.querySelector('.markup-draw-choice') ||
+    /downloaded/.test(document.querySelector('.markup-draw-player-caption')?.textContent ?? ''),
+  ), null, {timeout: ms});
+  if (await target.locator('.markup-draw-choice').count()) {
+    await target.locator('.markup-draw-choice-option').first().click();
+    return 'asked';
+  }
+  return 'downloaded';
+};
+
 // the download handler resolves a moment after the page says it is done
 const waitForDownload = async (match, ms = 20000) => {
   for (const deadline = Date.now() + ms; Date.now() < deadline;) {
@@ -699,7 +715,7 @@ await screenshot(page, 'history-export-menu');
 // --- the SVG, which must not wait for a playback
 await page.locator('.markup-draw-choice-option').first().click();
 const svgStarted = Date.now();
-await page.waitForFunction(() => /is ready/.test(
+await page.waitForFunction(() => /downloaded/.test(
   document.querySelector('.markup-draw-player-caption')?.textContent ?? ''), null, {timeout: 60000});
 const svgTook = Date.now() - svgStarted;
 const playbackMs = journal1.e.reduce((sum, e, i) =>
@@ -708,8 +724,12 @@ check('the SVG is ready without waiting out a playback',
   svgTook < Math.max(2000, playbackMs), `${svgTook}ms, a playback is ${playbackMs}ms`);
 const svgFile = await waitForDownload(/\.svg$/);
 check('and it downloaded', Boolean(svgFile), downloads.map((d) => d.name).join(', '));
-check('with a second way to take it, for browsers that refuse a detached download',
-  await page.locator('.markup-draw-player-grab').isVisible());
+// built inside the browser's user-action window, so it just downloads: no
+// dialog, and no second button parked in the bar for a case that did not arise
+check('a quick export downloads without asking',
+  await page.locator('.markup-draw-choice').count() === 0);
+check('and leaves no extra control behind in the bar',
+  await page.locator('.markup-draw-player-grab').count() === 0);
 
 const animated = svgFile ? await readFile(svgFile.path, 'utf8') : '';
 check('the SVG carries SMIL timing, so it plays by itself',
@@ -737,9 +757,10 @@ const progressed = await page.locator('.markup-draw-player-step').textContent();
 check('with a count of where it has got to', /\d+ \/ \d+/.test(progressed), progressed);
 await screenshot(page, 'history-export-busy');
 
-await page.waitForFunction(() => /is ready/.test(
-  document.querySelector('.markup-draw-player-caption')?.textContent ?? ''), null, {timeout: 120000});
+const videoRoute = await takeDelivery(page);
 const videoFile = await waitForDownload(/\.(mp4|webm)$/);
+check('the recording arrives by whichever route its length calls for',
+  ['asked', 'downloaded'].includes(videoRoute), videoRoute);
 check('the video downloaded too', Boolean(videoFile), downloads.map((d) => d.name).join(', '));
 check('and is a real file, not an empty one', (videoFile?.bytes ?? 0) > 1000,
   `${videoFile?.bytes ?? 0} bytes`);
@@ -770,6 +791,41 @@ const exportedEarly = await page.locator('#exported').screenshot();
 await page.waitForTimeout(2500);
 check('and animates on its own, with no script and no player',
   Buffer.compare(exportedEarly, await page.locator('#exported').screenshot()) !== 0);
+
+// --- an export the browser will not save by itself has to ask
+//
+// A download is only acted on while the click that asked for it still counts as
+// a user action, and a recording can easily outlive that -- which is how Safari
+// came to drop one silently. Whether a given export lands inside that window is
+// a matter of milliseconds, so the branch is driven by the setting rather than
+// by trying to time it: exportAskBeforeSaving is what an admin would reach for
+// on a browser where the automatic route cannot be relied on.
+
+const asks = watchPage(await context.newPage());
+await asks.addInitScript(() => {
+  window.__cfgOverride = {exportAskBeforeSaving: 'always'};
+});
+await asks.goto(BASE);
+const askDownloads = [];
+asks.on('download', (d) => askDownloads.push(d.suggestedFilename()));
+await asks.evaluate((text) => window.renderFence('standalone', text), stripFence(fence1));
+await asks.locator('#standalone img.markup-draw-image').waitFor({timeout: 10000});
+await asks.locator('#standalone .markup-draw-play').click();
+await asks.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+await asks.locator('.markup-draw-player-export').click();
+await asks.locator('.markup-draw-choice').waitFor({timeout: 10000});
+await asks.locator('.markup-draw-choice-option').first().click(); // the quick one
+
+await asks.locator('.markup-draw-choice').waitFor({timeout: 60000});
+check('an export that will not be saved on its own asks instead',
+  /is ready/.test(await asks.locator('.markup-draw-choice').textContent()));
+check('and does not quietly download it first', askDownloads.length === 0, askDownloads.join(', '));
+await screenshot(asks, 'history-export-ready');
+await asks.locator('.markup-draw-choice-option').first().click();
+await asks.waitForTimeout(2000);
+check('saving from that question downloads it',
+  askDownloads.some((name) => name.endsWith('.svg')), askDownloads.join(', '));
+await asks.close();
 
 // --- the control bar has to survive a phone
 //

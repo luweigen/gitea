@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 13;
+  --markup-draw-css: 14;
 }
 
 .markup-draw {
@@ -279,12 +279,6 @@ body.markup-draw-open {
   margin-top: 2px;
   font-size: 0.9em;
   opacity: 0.75;
-}
-
-/* offered after an export, because a download that is no longer tied to a click
-   is refused by some browsers -- taking it from here is a click of its own */
-.markup-draw-player-grab {
-  font-weight: bold;
 }
 
 /* --- playing a recorded history back.
