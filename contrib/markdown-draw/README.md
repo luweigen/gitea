@@ -172,6 +172,11 @@ Every action that Ctrl+Z can take back is written into the drawing itself, so
 the undo stack outlives the tab and the same record can later be played back as
 an animation of how the drawing was made.
 
+If you are about to change any of this, read
+[doc/action-history-recording.md](doc/action-history-recording.md) first: it
+records which parts of the design were forced by js-draw rather than chosen,
+what to re-check after a js-draw upgrade, and the bugs already paid for.
+
 ### What is recorded
 
 Exactly what enters js-draw's undo history: strokes, erasures, text, moving and
