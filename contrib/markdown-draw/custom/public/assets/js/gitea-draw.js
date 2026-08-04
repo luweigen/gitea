@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '11';
+  const SCRIPT_REVISION = '12';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -732,7 +732,7 @@
   // Parses the SVG only to read its intrinsic size.  DOMParser neither runs
   // scripts nor fetches subresources, and the parsed nodes never reach the live
   // document -- the drawing itself is displayed through an <img>, see below.
-  function parseSvgSize(svgText) {
+  function parseSvgFrame(svgText) {
     const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
     if (doc.querySelector('parsererror') || doc.documentElement.nodeName.toLowerCase() !== 'svg') {
       throw new Error(i18n.invalidSvg);
@@ -756,7 +756,46 @@
       width: Math.round(width),
       height: Math.round(height),
       viewBox: framed ? {x: box[0], y: box[1], width: box[2], height: box[3]} : null,
+      // js-draw marks a canvas that grows with its content by a class on the
+      // root, and reads it back the same way (svgLoaderAutoresizeClassName)
+      autoresize: root.classList.contains('js-draw--autoresize'),
     };
+  }
+
+  // Replaying a log reinstates the components and nothing else, but loadFromSVG
+  // also sets three things: where the drawing sits on the canvas, whether the
+  // canvas grows with its content, and the view onto it.  Without them a
+  // reopened drawing lands at js-draw's default 0 0 500 500 while the drawing
+  // itself may be anywhere else, which shows up as a board zoomed into one
+  // corner with the stray default region drawn beside it.
+  //
+  // All three are taken from the SVG rather than from the log.  The SVG is what
+  // the drawing renders as, so it is authoritative by definition, it is always
+  // there on the replay path, and taking them from it also repairs logs written
+  // before this was noticed.  Recording them instead would have been worse than
+  // it looks: setAutoresizeEnabled returns the non-serializable Command.empty
+  // when the value is unchanged, which would have made the whole log
+  // unserializable and switched recording off.
+  function restoreCanvasFrame(jsdraw, editor, svgText) {
+    let frame = null;
+    try {
+      frame = parseSvgFrame(svgText);
+    } catch {
+      // not parseable, so there is nothing to take the frame from
+    }
+    const box = frame?.viewBox;
+    if (!box || box.width <= 0 || box.height <= 0) {
+      // no usable viewBox: at least put the drawing on screen
+      const bounds = editor.image.getImportExportRect();
+      if (bounds?.maxDimension > 0) editor.dispatchNoAnnounce(editor.viewport.zoomTo(bounds), false);
+      return;
+    }
+    const rect = new jsdraw.Rect2(box.x, box.y, box.width, box.height);
+    // the order loadFrom uses; setImportExportRect turns autoresize off, so it
+    // has to go first
+    editor.dispatchNoAnnounce(editor.image.setImportExportRect(rect), false);
+    editor.dispatchNoAnnounce(editor.viewport.zoomTo(rect), false);
+    editor.dispatchNoAnnounce(editor.image.setAutoresizeEnabled(frame.autoresize), false);
   }
 
   function showBlockError(elBlock, err) {
@@ -776,7 +815,7 @@
     if (svgText.length > cfg.maxSourceChars) {
       throw new Error(`drawing source of ${svgText.length} characters exceeds the maximum allowed length of ${cfg.maxSourceChars}`);
     }
-    const {width, height} = parseSvgSize(svgText);
+    const {width, height} = parseSvgFrame(svgText);
 
     const elContainer = document.createElement('div');
     elContainer.className = 'markup-draw';
@@ -1537,8 +1576,9 @@
     }
   }
 
-  // the open board's recorder, so that giteaDrawDebug() can report on it
+  // the open board, so that giteaDrawDebug() can report on it
   let boardHistory = null;
+  let boardEditor = null;
 
   async function openDrawingBoard({initialSvg, onSave, ignoreHistory = null}) {
     const elOverlay = document.createElement('div');
@@ -1556,6 +1596,7 @@
       if (toolbar) saveToolbarState(toolbar);
       if (boardHistory) historyDebug.state = `last board: ${JSON.stringify(boardHistory.describe())}`;
       boardHistory = null;
+      boardEditor = null;
       editor?.remove();
       elOverlay.remove();
       document.body.classList.remove('markup-draw-open');
@@ -1612,6 +1653,7 @@
     if (journal) {
       try {
         await history.replay(journal);
+        restoreCanvasFrame(jsdraw, editor, baseSvg);
       } catch (err) {
         // A log that parsed but does not replay leaves the canvas half-built,
         // and js-draw has no way to empty an editor again -- loadFromSVG only
@@ -1645,6 +1687,7 @@
     }
     history?.start();
     boardHistory = history;
+    boardEditor = editor;
     editor.focus();
   }
 
@@ -1827,15 +1870,10 @@
     }
 
     elHost.textContent = '';
-    editor = new jsdraw.Editor(elHost, {wheelEventsEnabled: 'only-if-focused'});
-    // The view is pinned to where the finished drawing sits, so the picture
+    // The canvas is pinned to where the finished drawing sits, so the picture
     // fills in rather than sliding around under it.
-    const {viewBox} = parseSvgSize(svgText);
-    if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
-      const rect = new jsdraw.Rect2(viewBox.x, viewBox.y, viewBox.width, viewBox.height);
-      editor.dispatch(editor.image.setImportExportRect(rect), false);
-      editor.dispatch(editor.viewport.zoomTo(rect), false);
-    }
+    editor = new jsdraw.Editor(elHost, {wheelEventsEnabled: 'only-if-focused'});
+    restoreCanvasFrame(jsdraw, editor, svgText);
 
     const gaps = sessionGaps(journal.e);
     const report = {blockedImages: 0};
@@ -1916,11 +1954,7 @@
       editor.remove();
       elHost.textContent = '';
       editor = new jsdraw.Editor(elHost, {wheelEventsEnabled: 'only-if-focused'});
-      if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
-        const rect = new jsdraw.Rect2(viewBox.x, viewBox.y, viewBox.width, viewBox.height);
-        editor.dispatch(editor.image.setImportExportRect(rect), false);
-        editor.dispatch(editor.viewport.zoomTo(rect), false);
-      }
+      restoreCanvasFrame(jsdraw, editor, svgText);
       void play();
     });
 
@@ -2032,6 +2066,9 @@
     }
   }
 
+  const describeRect = (rect) =>
+    (rect ? {x: rect.x, y: rect.y, w: rect.w, h: rect.h} : null);
+
   // Paste giteaDrawDebug() in the browser console to find out what this script
   // sees on a page where the button does not show up.
   window.giteaDrawDebug = () => {
@@ -2049,6 +2086,15 @@
       alignmentProblem: alignDebug.why,
       // what the recorder is doing, or why it is not recording
       history: boardHistory ? boardHistory.describe() : historyDebug.state,
+      // With a board open: where the drawing sits on the canvas against where
+      // the board is looking.  A drawing that is not inside the view is what a
+      // replay that forgot to restore the canvas frame looks like -- the board
+      // opens on empty canvas somewhere else, with the drawing off to one side.
+      boardCanvas: boardEditor ? {
+        drawing: describeRect(boardEditor.image.getImportExportRect()),
+        visible: describeRect(boardEditor.viewport.visibleRect),
+        autoresize: boardEditor.image.getAutoresizeEnabled(),
+      } : null,
       // how many rendered drawings on this page carry a recorded history
       drawingsWithHistory: [...document.querySelectorAll(CODE_SELECTOR)]
         .filter((el) => historyRegExp().test(el.textContent ?? '')).length,

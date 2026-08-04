@@ -31,6 +31,17 @@ const makeFence = (svg, journal) => {
 
 const countPaths = (fence) => (fence.match(/<path/g) ?? []).length;
 
+// The canvas frame: where the drawing sits and whether it grows with its
+// content. loadFromSVG takes both from the SVG -- the viewBox and a class on the
+// root -- so a replay that only reinstates components has to put them back too.
+const frameOf = (fence) => {
+  const svg = stripFence(fence).replace(HISTORY_RE, '');
+  return {
+    viewBox: /viewBox="([^"]*)"/.exec(svg)?.[1] ?? null,
+    autoresize: svg.includes('js-draw--autoresize'),
+  };
+};
+
 const source = (page) => page.locator('textarea.markdown-text-editor').inputValue();
 
 const setSource = (page, text, caret = 20) =>
@@ -42,10 +53,11 @@ const setSource = (page, text, caret = 20) =>
 
 // giteaDrawDebug().history is a string until the recorder is up; the board is
 // open before that happens, so every read has to wait for the object.
-const historyOf = (page) => page.waitForFunction(() => {
-  const state = window.giteaDrawDebug().history;
-  return state && typeof state === 'object' ? state : null;
-}, null, {timeout: 20000}).then((handle) => handle.jsonValue());
+const historyOf = (page, field = 'history') => page.waitForFunction((key) => {
+  const report = window.giteaDrawDebug();
+  // the recorder is up last, so waiting for it means the board is fully open
+  return report.history && typeof report.history === 'object' ? report[key] : null;
+}, field, {timeout: 20000}).then((handle) => handle.jsonValue());
 
 const clickUndo = (page) =>
   page.locator('.markup-draw-overlay .toolwidget-tag--undo .toolbar-button').first().click();
@@ -57,6 +69,9 @@ await page.goto(BASE);
 // --- session one: a drawing made from scratch
 
 await openBoard(page);
+// what an empty board looks like, to tell "the drawing is off screen" apart
+// from "the drawing is there" further down
+const blankBoard = await page.locator('.markup-draw-overlay canvas').first().screenshot();
 const fresh = await historyOf(page);
 check('a new drawing starts recording', fresh.problem === null && fresh.rejected === null);
 check('the starting canvas is adopted as the log\'s first command', fresh.commands === 1);
@@ -70,6 +85,7 @@ await drawStroke(page, [
 const drawn = await historyOf(page);
 check('each stroke is recorded', drawn.commands === 3, `${drawn.commands} commands`);
 check('the strokes are on the undo stack', drawn.undoStack === 3);
+const drawnBoard = await page.locator('.markup-draw-overlay canvas').first().screenshot();
 await saveBoard(page);
 
 const fence1 = await source(page);
@@ -112,6 +128,38 @@ check('reopening replays the log rather than loading the SVG',
   reopened.rejected === null && reopened.commands === 3);
 check('the undo stack is restored across the session boundary', reopened.undoStack === 3);
 check('the log knows which session each command came from', reopened.sessions === 3);
+
+// A replay reinstates the strokes; the canvas they sit on comes from the SVG.
+// Without that the board opens on js-draw's default region somewhere else
+// entirely, so the drawing is off to one side of the view -- which is the whole
+// symptom: a board zoomed into one corner with a stray grey box beside it.
+const frame = await historyOf(page, 'boardCanvas');
+const inView = (rect, view) =>
+  rect.x + rect.w / 2 >= view.x && rect.x + rect.w / 2 <= view.x + view.w &&
+  rect.y + rect.h / 2 >= view.y && rect.y + rect.h / 2 <= view.y + view.h;
+check('a replayed drawing is inside the view, not off beside it',
+  inView(frame.drawing, frame.visible),
+  `drawing at ${JSON.stringify(frame.drawing)}, looking at ${JSON.stringify(frame.visible)}`);
+check('the board shows something rather than empty canvas',
+  Buffer.compare(await page.locator('.markup-draw-overlay canvas').first().screenshot(), blankBoard) !== 0);
+await screenshot(page, 'history-reopened-board');
+
+// Saving straight back out, with nothing touched in between, must reproduce the
+// same canvas. It gets its own open/save cycle because the undo tests below
+// empty the drawing, and an emptied autoresizing canvas legitimately shrinks.
+await saveBoard(page);
+const resaved = await source(page);
+check('a replayed drawing saves back onto the same canvas',
+  frameOf(resaved).viewBox === frameOf(fence1).viewBox,
+  `${frameOf(fence1).viewBox} -> ${frameOf(resaved).viewBox}`);
+check('and keeps whether that canvas grows with its content',
+  frameOf(resaved).autoresize === frameOf(fence1).autoresize,
+  `${frameOf(fence1).autoresize} -> ${frameOf(resaved).autoresize}`);
+check('a round trip does not multiply the drawing',
+  countPaths(resaved) === countPaths(fence1), `${countPaths(fence1)} -> ${countPaths(resaved)} paths`);
+
+await setSource(page, fence1);
+await openBoard(page);
 
 // --- undoing back past the start of this session asks first
 

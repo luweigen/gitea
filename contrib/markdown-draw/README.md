@@ -237,6 +237,17 @@ session with no time, because when the drawing was actually made is not somethin
 the file can say; the confirmation before undoing into it says so rather than
 inventing a date.
 
+Replaying reinstates the components and nothing else, but a drawing is more than
+its components: `loadFromSVG` also sets where the drawing sits on the canvas
+(the SVG's `viewBox`), whether the canvas grows with its content (a
+`js-draw--autoresize` class on the root), and the view onto it. All three are
+taken from the SVG after a replay, not from the log. The SVG is what the drawing
+renders as, so it is authoritative by definition, and taking them from there also
+repairs logs written before this was noticed. Recording them instead would be a
+trap: `setAutoresizeEnabled` returns the non-serializable `Command.empty` when
+the value is unchanged, which would make the whole log unserializable and switch
+recording off.
+
 ### Watching it being drawn
 
 A rendered drawing that carries a history gets a **▶ Play the edit history**
@@ -529,6 +540,11 @@ regardless), and `problem` why this drawing will be saved without a log at all.
 After a board is closed it holds the last board's report. If a drawing that
 should have one does not, `drawingsWithHistory` on the page it is rendered on
 says whether the fence carries a log to begin with.
+
+`boardCanvas` is filled in while a board is open: `drawing` is where the drawing
+sits on the canvas, `visible` is where the board is looking. If a reopened
+drawing shows up zoomed into a corner, or with a stray grey box beside it, these
+two will not overlap -- the drawing is somewhere the view is not.
 * js-draw follows `prefers-color-scheme` for its own chrome rather than Gitea's
   theme setting. Drawings themselves get an opaque background so they stay
   readable under any theme.
