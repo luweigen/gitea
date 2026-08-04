@@ -388,8 +388,10 @@ check('it plays to the end', await fill() === '100%');
 await viewer.locator('.markup-draw-player-caption')
   .filter({hasText: 'End of the recorded history'}).waitFor({timeout: 5000});
 check('and says so', true);
+// asserted on the accessible name, not the glyph: the label is a symbol now,
+// and the name is what actually has to stay right
 check('a finished playback offers to play again rather than to pause',
-  await viewer.locator('.markup-draw-player-play').textContent() === 'Play');
+  await viewer.locator('.markup-draw-player-play').getAttribute('aria-label') === 'Play');
 await viewer.locator('.markup-draw-player-restart').click();
 await viewer.waitForTimeout(300);
 check('restarting begins again from an empty canvas', await fill() !== '100%', `fill ${await fill()}`);
@@ -594,6 +596,47 @@ check('a drawing with no editor behind it offers no delete or save',
 check('but still offers the step controls',
   await viewer.locator('.markup-draw-player-back').count() === 1 &&
   await viewer.locator('.markup-draw-player-forward').count() === 1);
+
+// --- the control bar has to survive a phone
+//
+// Labels were shortened to glyphs for this; the point of the change is that
+// every control stays on screen and reachable, so that is what is checked
+// rather than how wide any of it came out.
+
+const phone = watchPage(await browser.newPage({viewport: {width: 390, height: 740}}));
+await phone.goto(BASE);
+// the preview pane, so the bar carries Delete and Save too -- the crowded case
+await setSource(phone, fence1);
+await phone.evaluate((text) => window.renderFence('preview', text), stripFence(fence1));
+await phone.locator('#preview img.markup-draw-image').waitFor({timeout: 10000});
+await phone.locator('#preview .markup-draw-play').click();
+await phone.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+await phone.waitForTimeout(600);
+
+const barFits = await phone.locator('.markup-draw-player-bar').evaluate(
+  (el) => el.scrollWidth <= el.clientWidth + 1);
+check('the control bar does not overflow a phone-width screen', barFits);
+
+const controls = ['back', 'play', 'forward', 'restart', 'delete', 'save', 'close'];
+const offscreen = [];
+for (const name of controls) {
+  const el = phone.locator(`.markup-draw-player-${name}`);
+  const rect = await el.boundingBox();
+  const named = await el.getAttribute('aria-label');
+  if (!rect || rect.x < 0 || rect.x + rect.width > 390 || rect.y + rect.height > 740) {
+    offscreen.push(name);
+  }
+  if (!named) offscreen.push(`${name} (unnamed)`);
+}
+check('every control is on screen and has an accessible name',
+  offscreen.length === 0, offscreen.join(', '));
+
+// a glyph the font does not have renders as a notdef box, which is as wide as
+// the button but tells the reader nothing -- so the name matters more than ever
+check('the glyph buttons carry their meaning in a tooltip',
+  await phone.locator('.markup-draw-player-close').getAttribute('title') === 'Close' &&
+  await phone.locator('.markup-draw-player-restart').getAttribute('title') === 'Restart');
+await screenshot(phone, 'history-player-phone');
 
 await browser.close();
 finish();

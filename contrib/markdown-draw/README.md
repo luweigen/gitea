@@ -276,6 +276,11 @@ changed their mind.
 ### Stepping through it, and editing it
 
 **⏮** and **⏭** move one step at a time, and the bar says which step you are on.
+The controls are glyphs so the bar fits a phone -- **▶** / **⏸** play and pause,
+**↺** restarts, **✂︎Step** deletes, **⎋** closes -- and each carries its name as
+a tooltip and as its accessible name, which is what a screen reader reads and
+what the tests assert on. Below about 560px the caption drops onto its own line
+rather than pushing a control off the edge.
 Stepping forward applies the next entry, exactly as opening the drawing does.
 Stepping backward rebuilds from the start: js-draw's `push` clears the redo
 stack, so after "draw A, undo, draw B" the command A is no longer anywhere the
@@ -287,13 +292,13 @@ Where the markdown behind the drawing can be reached -- a comment being written,
 a file being edited, the same condition the **Edit drawing** button goes by --
 two more buttons appear:
 
-* **Delete this step** takes the current step out of the history. The whole log
+* **✂︎Step** (*Delete this step*) takes the current step out of the history. The whole log
   is then replayed to check it still works; if a later step builds on the one
   being removed -- a move of a stroke that step drew -- the deletion is refused
   and says so, rather than leaving a history that cannot be replayed. The check
   covers the whole log, not just up to the deletion, because a break further on
   would otherwise only surface as a failure to save.
-* **Save to markdown** replays the edited log to its end, regenerates the SVG
+* **Save** (*Save to markdown*) replays the edited log to its end, regenerates the SVG
   from that, and writes both back into the fence. The picture in the markdown is
   therefore always the picture the log produces.
 

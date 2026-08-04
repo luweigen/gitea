@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 10;
+  --markup-draw-css: 11;
 }
 
 .markup-draw {
@@ -307,11 +307,31 @@ body.markup-draw-open {
 }
 
 .markup-draw-player-caption {
-  flex: none;
-  min-width: 12em;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   text-align: right;
   font-size: 0.9em;
   opacity: 0.75;
+}
+
+/* On a phone the buttons are what has to survive; the caption is commentary and
+   gives up its room first, then wraps onto a second line rather than pushing
+   anything off the edge. */
+@media (max-width: 560px) {
+  .markup-draw-player-bar {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+  }
+
+  .markup-draw-player-caption {
+    order: 1;
+    flex-basis: 100%;
+    text-align: left;
+  }
 }
 
 /* a transient message -- saved, or why a step could not be removed -- shown
@@ -329,9 +349,18 @@ body.markup-draw-open {
   opacity: 0.75;
 }
 
+/* The glyph buttons are given a floor so the bar keeps its shape: without it,
+   swapping play for pause would shuffle everything to its right. */
 .markup-draw-player-back,
-.markup-draw-player-forward {
-  padding: 5px 9px;
+.markup-draw-player-forward,
+.markup-draw-player-play,
+.markup-draw-player-restart,
+.markup-draw-player-close {
+  min-width: 2.6em;
+  padding: 5px 8px;
+  text-align: center;
+  /* the glyphs are punctuation, and inherit the surrounding font's idea of it */
+  line-height: 1.4;
 }
 
 .markup-draw-player-save:not(:disabled) {

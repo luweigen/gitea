@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '13';
+  const SCRIPT_REVISION = '14';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -100,20 +100,32 @@
     undoAcrossConfirm: 'Undo it',
     undoAcrossCancel: 'Keep it',
     play: 'Play the edit history',
+    // The control bar has to fit a phone, so everything that can be a glyph is
+    // one; the words move into the tooltip and the accessible name.  U+FE0E asks
+    // for the text rendering of glyphs a browser would otherwise turn into a
+    // colour emoji.
+    playPauseIcon: '\u23F8\uFE0E',
     playPause: 'Pause',
+    playIcon: '\u25B6\uFE0E',
     playResume: 'Play',
+    playRestartIcon: '\u21BA',
     playRestart: 'Restart',
+    playCloseIcon: '\u238B',
     playClose: 'Close',
     playFailed: 'This drawing\'s edit history could not be played back',
     playFound: 'The drawing as it was found',
     playNextSession: 'A later editing session',
     playMoments: 'Moments later',
     playDone: 'End of the recorded history',
+    playBackIcon: '\u23EE\uFE0E',
     playBack: 'Back one step',
+    playForwardIcon: '\u23ED\uFE0E',
     playForward: 'Forward one step',
     playStep: (at, total) => `${at} / ${total}`,
+    playDeleteIcon: '\u2702\uFE0EStep',
     playDelete: 'Delete this step',
     playDeleteBlocked: 'This step cannot be removed: a later one builds on it',
+    playSaveIcon: 'Save',
     playSave: 'Save to markdown',
     playSaved: 'Saved to the markdown',
     playSaveGone: 'This drawing is no longer in the text, so it was not saved',
@@ -1837,13 +1849,13 @@
     elHost.textContent = i18n.loading;
     const elBar = document.createElement('div');
     elBar.className = 'markup-draw-player-bar';
-    const elBack = makePlayerButton('markup-draw-player-back', '⏮', i18n.playBack);
-    const elPlay = makePlayerButton('markup-draw-player-play', i18n.playPause);
-    const elForward = makePlayerButton('markup-draw-player-forward', '⏭', i18n.playForward);
-    const elRestart = makePlayerButton('markup-draw-player-restart', i18n.playRestart);
-    const elDelete = makePlayerButton('markup-draw-player-delete', i18n.playDelete);
-    const elSave = makePlayerButton('markup-draw-player-save', i18n.playSave);
-    const elClose = makePlayerButton('markup-draw-player-close', i18n.playClose);
+    const elBack = makePlayerButton('markup-draw-player-back', i18n.playBackIcon, i18n.playBack);
+    const elPlay = makePlayerButton('markup-draw-player-play', i18n.playIcon, i18n.playResume);
+    const elForward = makePlayerButton('markup-draw-player-forward', i18n.playForwardIcon, i18n.playForward);
+    const elRestart = makePlayerButton('markup-draw-player-restart', i18n.playRestartIcon, i18n.playRestart);
+    const elDelete = makePlayerButton('markup-draw-player-delete', i18n.playDeleteIcon, i18n.playDelete);
+    const elSave = makePlayerButton('markup-draw-player-save', i18n.playSaveIcon, i18n.playSave);
+    const elClose = makePlayerButton('markup-draw-player-close', i18n.playCloseIcon, i18n.playClose);
     const elProgress = document.createElement('div');
     elProgress.className = 'markup-draw-player-progress';
     const elFill = document.createElement('div');
@@ -2002,7 +2014,12 @@
       elCaption.textContent = position >= total
         ? i18n.playDone
         : (position > 0 ? captions[position - 1] : '');
-      elPlay.textContent = playing && !paused ? i18n.playPause : i18n.playResume;
+      // the same button pauses and resumes, so its name has to follow it -- a
+      // glyph alone would leave a screen reader saying "button"
+      const willPause = playing && !paused;
+      elPlay.textContent = willPause ? i18n.playPauseIcon : i18n.playIcon;
+      elPlay.title = willPause ? i18n.playPause : i18n.playResume;
+      elPlay.setAttribute('aria-label', willPause ? i18n.playPause : i18n.playResume);
       elBack.disabled = position === 0;
       elForward.disabled = position >= total;
       // a session marker is a place in the log, not an action; there is nothing
