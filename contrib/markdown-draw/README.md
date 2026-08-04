@@ -284,6 +284,10 @@ with a finger. See [test/README.md](test/README.md).
 * Alignment works on whole elements. A stroke drawn as one gesture is one
   element, so it cannot be lined up with part of itself, and matching sizes
   scales pen widths along with the geometry.
+* js-draw's only arrowhead is a solid filled triangle and none of its lines are
+  dashed, so UML class-diagram relationships -- composition, generalization,
+  realization -- cannot be drawn other than by hand. See
+  [docs/uml-arrows.md](docs/uml-arrows.md) for what it would take to add them.
 
 ## When the button does not show up
 
