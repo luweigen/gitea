@@ -272,6 +272,112 @@ Two behaviours to document rather than fix:
 * Head size scales with pen thickness, so a thick pen gives a big head. That is
   consistent with js-draw's own arrow.
 
+## Metadata on the path
+
+Can an exported path say *what it is* -- `data-uml="composition"` rather than
+just an anonymous filled polygon? Yes, and it survives a full round trip, but
+not by the obvious route.
+
+### What does not work
+
+js-draw already has the machinery: `AbstractComponent.attachLoadSaveData(key,
+data)` is public, and `'svgAttrs'` is the key `SVGLoader` itself uses for
+attributes it does not recognise. Attach `['data-uml', 'composition']` to a
+`Stroke` and `toSVGAsync()` writes it out:
+
+```
+<path d="M300,40l-18,11l-18-11l18-11l18,11m-260-3l224,0l0,6l-224,0l0-6"
+      fill="#000000" data-uml="composition"/>
+```
+
+**But reading it back drops it.** `SVGLoader` only records unrecognised
+attributes when `storeUnknown` is set, and `storeUnknown = !sanitize`. The board
+loads with `editor.loadFromSVG(initialSvg, true)`, so on the first re-edit the
+attribute is gone, and the next save writes the drawing back without it. The
+failure is silent: the drawing looks right, the metadata has evaporated.
+
+Turning `sanitize` off would preserve it -- and would also preserve every *other*
+attribute in an attacker-authored fence, writing them back into the markdown
+verbatim. `onload="…"` would survive a round trip through another user's
+browser. The drawing is displayed through an `<img>` and a blob URL, so it would
+not execute today, but it makes the security note in the README false and the
+next refactor dangerous. Not an option.
+
+### What works
+
+`EditorSettings.svg.loaderPlugins` is public and independent of `sanitize`: a
+plugin's `visit(node, loader)` sees each node first, and returning `true` takes
+the node over. So the customization recognises **its own** attribute, and
+sanitization keeps handling everything else:
+
+```js
+const UML_TYPES = ['generalization', 'realization', 'composition',
+  'aggregation', 'association', 'dependency'];
+
+const umlLoaderPlugin = (jsdraw) => ({
+  async visit(node, loader) {
+    if (node.tagName.toLowerCase() !== 'path') return false;
+    const kind = node.getAttribute('data-uml');
+    // re-emit a value from this list, never the string the file supplied
+    if (!UML_TYPES.includes(kind)) return false;
+    const fill = node.getAttribute('fill');
+    if (!fill || fill === 'none') return false;
+    const stroke = new jsdraw.Stroke([
+      jsdraw.pathToRenderable(
+        jsdraw.Path.fromString(node.getAttribute('d')),
+        {fill: jsdraw.Color4.fromString(fill)},
+      ),
+    ]);
+    stroke.attachLoadSaveData('svgAttrs', ['data-uml', kind]);
+    await loader.addComponent(stroke);
+    return true;
+  },
+});
+```
+
+The security property is not "we sanitize the value" but "**we never carry the
+file's string**": `kind` is only used after it has matched one of six literals,
+and what gets attached is that literal. A fence author cannot get an attribute
+of their choosing back out of the editor.
+
+### Verified
+
+Run against the pinned js-draw 1.33.0 in Chromium:
+
+* Attached metadata reaches the exported SVG.
+* Reloading with `sanitize = true` -- what the board does -- **loses it**; with
+  `sanitize = false` it survives. Both confirm the analysis above.
+* With the plugin and `sanitize` still `true`: the attribute survives, and the
+  arrow is still **one component and one `<path>`**.
+* It survives being moved -- `transformBy` clones the component and
+  `AbstractComponent.clone` copies the load/save data.
+* A `<path data-uml="composition" onload="alert(1)">` in the same file comes
+  back with `data-uml` kept and `onload` **dropped**.
+* The `d` a plugin-loaded arrow re-exports is byte-identical to what js-draw's
+  own loader produces.
+
+One subtlety, in case the plugin is ever generalised: js-draw's `addPath` splits
+a path's `d` at each `M` into separate parts. It never fires on this
+customization's output, because js-draw writes subsequent subpaths with a
+relative `m` -- but a plugin that took over arbitrary paths would need to
+mirror the split to stay faithful.
+
+### Worth it?
+
+Only if something consumes it. Nothing in the plan above does: the pens draw
+ink, and ink needs no label. Metadata is the enabling step for things that do
+not exist yet -- retyping an arrow from composition to aggregation without
+redrawing it, telling arrows from boxes so a future anchoring feature knows what
+to anchor, or exporting a sketch to mermaid.
+
+The cost is ~60 lines and one new js-draw setting, but the real cost is that
+metadata that nothing reads goes stale. Partial erase is the clearest case: the
+eraser splits a stroke into new `Stroke` objects, and half a composition arrow
+would either lose the label (fine) or keep it while no longer being one (a lie).
+Adding it later is not harder than adding it now -- an arrow drawn without
+`data-uml` is not corrupt, just unlabelled -- so the recommendation is to ship
+the pens first and add metadata with the first feature that reads it.
+
 ## Out of scope
 
 These pens make UML arrows easier to *draw*. They do not make the board a UML
