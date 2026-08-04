@@ -33,7 +33,7 @@ To poke at the harness by hand: `node server.mjs`, then open
 | suite | what it drives |
 | --- | --- |
 | `combo-editor` | the shared markdown editor (issues, PRs, comments, wiki, releases): insert, render, hostile payloads, round trip |
-| `history` | recording every undoable action into the fence, replaying it into a later board, undoing across sessions, the three ways a stored log is refused, playing one back, and stepping through / deleting a step / saving the result |
+| `history` | recording every undoable action into the fence, replaying it into a later board, undoing across sessions, the three ways a stored log is refused, playing one back, stepping through / deleting a step / saving the result, and exporting the animation as a self-playing SVG and a video |
 | `alignment` | the "Align…" entry in the selection menu, the guides that snap a drag, and the geometry both produce |
 | `mobile` | drawing with a finger, via raw CDP touch events on an iPhone-sized viewport, including a finger-driven alignment |
 | `file-editor` | the repository file editor against the real Monaco build Gitea pins |

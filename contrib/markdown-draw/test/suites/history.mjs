@@ -5,6 +5,7 @@
 // fence, and replaying it into a later board so the undo stack outlives the tab.
 
 import {deflateRawSync, inflateRawSync} from 'node:zlib';
+import {readFile} from 'node:fs/promises';
 import {
   BASE, createChecks, drawStroke, launchBrowser, openBoard, saveBoard, scribbleOnCanvas,
   screenshot, stripFence, watchPage,
@@ -63,7 +64,8 @@ const clickUndo = (page) =>
   page.locator('.markup-draw-overlay .toolwidget-tag--undo .toolbar-button').first().click();
 
 const browser = await launchBrowser();
-const page = watchPage(await browser.newPage({viewport: {width: 1280, height: 900}}));
+const context = await browser.newContext({viewport: {width: 1280, height: 900}, acceptDownloads: true});
+const page = watchPage(await context.newPage());
 await page.goto(BASE);
 
 // --- session one: a drawing made from scratch
@@ -651,6 +653,75 @@ check('a drawing with no editor behind it offers no delete or save',
 check('but still offers the step controls',
   await viewer.locator('.markup-draw-player-back').count() === 1 &&
   await viewer.locator('.markup-draw-player-forward').count() === 1);
+
+// --- exporting the animation: one click, two files
+//
+// The point of choosing SMIL and MediaRecorder was that neither needs a
+// library, so both artifacts are checked for real: the SVG must actually carry
+// timed SMIL, and the video must be a non-empty file of a type the browser
+// named. js-draw is already loaded here, so this also confirms no other network
+// request appears.
+
+const downloads = [];
+page.on('download', async (d) => {
+  const path = await d.path();
+  downloads.push({name: d.suggestedFilename(), bytes: path ? (await readFile(path)).length : 0, path});
+});
+
+await setSource(page, fence1);
+await page.evaluate((text) => {
+  document.getElementById('preview').replaceChildren();
+  window.renderFence('preview', text);
+}, stripFence(fence1));
+await page.locator('#preview img.markup-draw-image').waitFor({timeout: 10000});
+await page.locator('#preview .markup-draw-play').click();
+await page.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+const beforeExport = await page.evaluate(() => performance.getEntriesByType('resource').length);
+await page.locator('.markup-draw-player-export').click();
+await page.waitForFunction(() => /Downloaded/.test(
+  document.querySelector('.markup-draw-player-caption')?.textContent ?? ''), null, {timeout: 120000});
+await page.waitForTimeout(1500);
+
+check('one click produced two files', downloads.length === 2,
+  downloads.map((d) => `${d.name} ${d.bytes}b`).join(', '));
+const svgFile = downloads.find((d) => d.name.endsWith('.svg'));
+const videoFile = downloads.find((d) => /\.(mp4|webm)$/.test(d.name));
+check('one of them is an SVG', Boolean(svgFile), downloads.map((d) => d.name).join(', '));
+check('the other is a video', Boolean(videoFile), downloads.map((d) => d.name).join(', '));
+check('the video is a real file, not an empty one', (videoFile?.bytes ?? 0) > 1000,
+  `${videoFile?.bytes ?? 0} bytes`);
+
+const animated = svgFile ? await readFile(svgFile.path, 'utf8') : '';
+check('the SVG carries SMIL timing, so it plays by itself',
+  /<set[^>]*attributeName="display"[^>]*begin="[\d.]+s"/.test(animated));
+check('the exported SVG keeps the finished drawing\'s size',
+  /viewBox="[^"]*[1-9]/.test(animated) && !/width="0"/.test(animated),
+  (/(<svg[^>]*>)/.exec(animated) ?? [''])[0].slice(0, 120));
+check('every step of the drawing is in it',
+  (animated.match(/<g\b/g) ?? []).length >= 2, `${(animated.match(/<g\b/g) ?? []).length} groups`);
+check('it needs no script to play', !/<script/i.test(animated));
+check('exporting fetched nothing from the network',
+  await page.evaluate(() => performance.getEntriesByType('resource').length) === beforeExport);
+
+await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-player').waitFor({state: 'detached', timeout: 5000});
+
+// the exported SVG has to survive the same <img> path a stored drawing goes
+// through, so it is put in one -- with the player closed, or the overlay covers it
+await page.evaluate((text) => {
+  document.getElementById('standalone').replaceChildren();
+  const img = document.createElement('img');
+  img.id = 'exported';
+  img.src = URL.createObjectURL(new Blob([text], {type: 'image/svg+xml'}));
+  document.getElementById('standalone').append(img);
+}, animated);
+await page.locator('#exported').waitFor({timeout: 10000});
+check('the exported SVG decodes as an image',
+  await page.locator('#exported').evaluate((el) => el.complete && el.naturalWidth > 0));
+const exportedEarly = await page.locator('#exported').screenshot();
+await page.waitForTimeout(2500);
+check('and animates on its own, with no script and no player',
+  Buffer.compare(exportedEarly, await page.locator('#exported').screenshot()) !== 0);
 
 // --- the control bar has to survive a phone
 //

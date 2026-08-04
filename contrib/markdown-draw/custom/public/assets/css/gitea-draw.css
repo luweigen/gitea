@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 11;
+  --markup-draw-css: 12;
 }
 
 .markup-draw {
@@ -373,6 +373,17 @@ body.markup-draw-open {
 .markup-draw-player-dead .markup-draw-player-restart,
 .markup-draw-player-dead .markup-draw-player-progress {
   display: none;
+}
+
+/* The editor an export replays into. Off to the side rather than hidden: js-draw
+   measures its container, and a box with no size renders nothing to record. */
+.markup-draw-export-host {
+  position: fixed;
+  top: 0;
+  left: -10000px;
+  width: 960px;
+  height: 720px;
+  pointer-events: none;
 }
 
 /* Guides shown while dragging. Rotated about their left edge, so one rule

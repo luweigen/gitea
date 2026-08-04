@@ -81,7 +81,8 @@ From there the behaviour is the same:
   history** button under it, which replays how it was made -- in an issue, in a
   file preview, anywhere it renders, with no editor involved. The player also
   steps through the history one action at a time, and where the markdown behind
-  the drawing can be reached it can delete a step and write the result back.
+  the drawing can be reached it can delete a step and write the result back, and
+  it exports the whole thing as a self-playing SVG and a video.
 
 In the file editor the insertion goes through Monaco's `executeEdits`, so a
 single Ctrl+Z undoes it.
@@ -321,6 +322,25 @@ two more buttons appear:
   from that, and writes both back into the fence. The picture in the markdown is
   therefore always the picture the log produces.
 
+**⤓** exports the animation as two files at once: a **self-playing SVG** and a
+**video** (MP4 where the browser can, WebM otherwise). It needs no editable text
+behind the drawing, so it works on a posted comment as well as in an editor.
+
+Those two formats are the ones that need no library, which is why they are the
+ones on offer. SMIL animation is declarative and -- unlike script -- runs inside
+an `<img>`, so a self-playing drawing stays on exactly the rendering path and
+trust model a still one is on; it is built by rendering each component through
+js-draw's own `SVGRenderer` and giving it a `<set>` at the time it appeared, so
+it comes out about the size of the drawing rather than the size of a film of it.
+The video is the replay canvas recorded through `MediaRecorder`, driven by
+`captureStream(0)` and `requestFrame()` so each step is held for as long as it
+actually lasted.
+
+Both replay in a second, off-screen editor, so exporting does not disturb the
+one being watched, and the canvas is pinned to the finished drawing's frame --
+left to autoresize it would grow as the replay adds strokes, and the picture
+would drift under the recording.
+
 Edits live in the player until they are saved: **Save** is the only thing that
 writes into the markdown, so closing is always a way out. It asks before
 discarding unsaved edits, and discarding leaves the markdown byte for byte as it
@@ -497,6 +517,10 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
     playbackSessionGap: 900,    // beat where one session ends and the next begins
     playbackMinStep: 40,        // floor, so a burst of fast commands is followable
     playbackSpeed: 1,           // divides every wait; 2 plays back twice as fast
+    exportAnimation: true,      // the "⤓" button: a self-playing SVG and a video
+    exportBitrate: 4000000,     // video bitrate
+    exportTailMs: 1200,         // how long the finished drawing is held at the end
+    exportName: 'drawing-history',  // base name for the two files
   };
 </script>
 ```
@@ -537,9 +561,14 @@ with a finger. See [test/README.md](test/README.md).
 * **The history does not survive a hand edit of the SVG.** Editing the drawing's
   text directly is respected -- the log is dropped rather than replayed over it
   -- but the log is then gone, and a new one starts from the edited picture.
-* **Playback is a view, not an export.** There is no way yet to turn a recorded
-  history into a GIF or a self-playing SVG; it plays in the browser that opened
-  it, and nowhere else.
+* **No GIF.** Browsers ship no GIF encoder -- `toBlob('image/gif')` quietly
+  returns a PNG -- so one would mean vendoring an encoder, and this
+  customization carries no dependency but js-draw. The self-playing SVG covers
+  the "shows up inline" case and the video covers "plays anywhere".
+* **Recording the video takes as long as watching it.** `MediaRecorder` encodes
+  a live stream; there is no faster-than-real-time path.
+* **Two downloads from one click** may make the browser ask once whether the
+  site may download multiple files.
 * **Stepping backwards costs a rebuild.** Each backward step replays the log
   from the start, so on a history of hundreds of steps it is noticeably slower
   than stepping forwards. Correctness is why: see the stepping section.

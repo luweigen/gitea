@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '17';
+  const SCRIPT_REVISION = '18';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -59,6 +59,13 @@
     playbackMinStep: 40,
     // divides every wait, so 2 plays back twice as fast
     playbackSpeed: 1,
+    // the export button: a self-playing SVG plus a video, both library-free
+    exportAnimation: true,
+    // video bitrate, and how long the finished drawing is held at the end
+    exportBitrate: 4_000_000,
+    exportTailMs: 1200,
+    // base name for the two downloaded files
+    exportName: 'drawing-history',
     ...(window.giteaDrawConfig ?? {}),
   };
 
@@ -143,6 +150,13 @@
     deleteConfirm: 'Delete',
     deleteCancel: 'Keep it',
     playSaveIcon: 'Save',
+    playExportIcon: '\u2913',
+    playExport: 'Download the animation (SVG and video)',
+    playExporting: (done, total) => `Exporting… ${done} / ${total}`,
+    playExportRecording: 'Recording the video…',
+    playExportDone: 'Downloaded',
+    playExportNoVideo: 'Downloaded the SVG; this browser cannot record video',
+    playExportFailed: (why) => `The animation could not be exported: ${why}`,
     playSave: 'Save to markdown',
     playSaved: 'Saved to the markdown',
     playSaveGone: 'This drawing is no longer in the text, so it was not saved',
@@ -1831,6 +1845,226 @@
     return gaps;
   }
 
+  // ---------------------------------------------------------------- export
+  //
+  // One click, two files: a self-playing SVG and a video.  Neither needs a
+  // library, which is why they are the two on offer.
+  //
+  // SMIL animation is declarative and, unlike script, it runs inside an <img> --
+  // checked, not assumed -- so a self-playing drawing stays on exactly the
+  // rendering path and trust model a still one is on.  The video comes off a
+  // canvas through MediaRecorder, which needs nothing either.  A GIF would be
+  // the odd one out: browsers ship no GIF encoder at all (toBlob('image/gif')
+  // quietly hands back a PNG), so it would mean vendoring one, and this
+  // customization deliberately carries no dependency but js-draw.
+
+  // How long each step is held, mirroring the player exactly so that what was
+  // watched is what comes out.
+  function stepDurations(entries) {
+    return entries.map((entry, at) => {
+      if (at >= entries.length - 1) return 0;
+      const gap = entry[0] === OP_SESSION
+        ? cfg.playbackSessionGap
+        : Math.max(cfg.playbackMinStep, Math.min(entry[1] ?? 0, cfg.playbackMaxGap));
+      return gap / cfg.playbackSpeed;
+    });
+  }
+
+  // A second editor to replay into, so exporting does not disturb the one being
+  // watched.  Off to the side rather than display:none, because js-draw measures
+  // its container and a box of no size renders nothing.
+  async function withScratchEditor(jsdraw, svgText, work) {
+    const elHost = document.createElement('div');
+    elHost.className = 'markup-draw-export-host';
+    document.body.append(elHost);
+    let editor = null;
+    try {
+      editor = new jsdraw.Editor(elHost, {wheelEventsEnabled: false});
+      restoreCanvasFrame(jsdraw, editor, svgText);
+      // Pin the canvas to the finished drawing.  Left to autoresize it would
+      // grow as the replay adds strokes, so every component would be rendered
+      // against a different viewport and the video would shift about under the
+      // drawing.  The stored SVG already describes the frame we want.
+      try {
+        const {viewBox} = parseSvgFrame(svgText);
+        if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
+          const rect = new jsdraw.Rect2(viewBox.x, viewBox.y, viewBox.width, viewBox.height);
+          // setImportExportRect turns autoresize off, which is the point
+          editor.dispatchNoAnnounce(editor.image.setImportExportRect(rect), false);
+          editor.dispatchNoAnnounce(editor.viewport.zoomTo(rect), false);
+        }
+      } catch {
+        // no usable frame in the SVG; the export still works, just unpinned
+      }
+      return await work(editor);
+    } finally {
+      editor?.remove();
+      elHost.remove();
+    }
+  }
+
+  // Replays the log a step at a time, telling the caller which components each
+  // step touched.  The ids come from the commands themselves rather than from
+  // comparing the whole image every step, which keeps it linear.
+  async function replayForExport(jsdraw, editor, entries, onStep) {
+    const report = {blockedImages: 0};
+    let taken = [];
+    const listener = editor.notifier.on(jsdraw.EditorEventType.UndoRedoStackUpdated, (event) => {
+      if (event.command) taken.push(event.command);
+    });
+    try {
+      for (const [at, entry] of entries.entries()) {
+        taken = [];
+        if (entry[0] === OP_DO) {
+          editor.history.push(
+            jsdraw.SerializableCommand.deserialize(sanitizeCommandJson(entry[2], report), editor), true,
+          );
+        } else if (entry[0] === OP_UNDO) {
+          await editor.history.undo();
+        } else if (entry[0] === OP_REDO) {
+          await editor.history.redo();
+        }
+        const touched = new Set();
+        for (const command of taken) {
+          try {
+            const refs = commandRefs(command.serialize());
+            for (const id of [...refs.makes, ...refs.needs]) touched.add(id);
+          } catch {
+            // a command that will not serialize tells us nothing; the membership
+            // check below still catches what it added or removed
+          }
+        }
+        await onStep(at, touched);
+      }
+    } finally {
+      listener?.remove?.();
+    }
+  }
+
+  const componentsById = (editor) => new Map(
+    [...editor.image.getBackgroundComponents(), ...editor.image.getAllComponents()]
+      .map((component) => [component.getId(), component]),
+  );
+
+  // Builds one SVG in which every element appears (and disappears) at the time it
+  // did.  A component is drawn again whenever a step touches it -- a move changes
+  // the path itself, so the old drawing is hidden and a new one shown, which is
+  // both simpler and more general than trying to animate the change.
+  function buildAnimatedSvg(jsdraw, editor, entries, durations, finalSvg) {
+    const viewport = editor.image.getImportExportViewport();
+    const doc = new DOMParser().parseFromString(finalSvg, 'image/svg+xml');
+    if (doc.querySelector('parsererror')) throw new Error(i18n.invalidSvg);
+    const root = doc.documentElement;
+    // keep the attributes and any stylesheet js-draw emitted, drop the picture
+    for (const node of [...root.childNodes]) {
+      if (node.nodeType !== 1 || !['style', 'defs'].includes(node.nodeName.toLowerCase())) node.remove();
+    }
+
+    const at = (ms) => `${(ms / 1000).toFixed(2)}s`;
+    const marker = (to, ms) => {
+      const el = doc.createElementNS(SVG_NS, 'set');
+      el.setAttribute('attributeName', 'display');
+      el.setAttribute('to', to);
+      el.setAttribute('begin', at(ms));
+      return el;
+    };
+
+    const groups = new Map();
+    let previous = new Map();
+    let clock = 0;
+
+    const render = (component) => {
+      const {element, renderer} = jsdraw.SVGRenderer.fromViewport(viewport, {
+        sanitize: true, useViewBoxForPositioning: true,
+      });
+      component.render(renderer);
+      return [...element.childNodes].map((node) => doc.importNode(node, true));
+    };
+
+    return {
+      step(index, touched, current) {
+        const ids = new Set(touched);
+        for (const id of current.keys()) if (!previous.has(id)) ids.add(id);
+        for (const id of previous.keys()) if (!current.has(id)) ids.add(id);
+        for (const id of ids) {
+          const open = groups.get(id);
+          if (open) {
+            open.append(marker('none', clock));
+            groups.delete(id);
+          }
+          const component = current.get(id);
+          if (!component) continue;
+          const group = doc.createElementNS(SVG_NS, 'g');
+          // at time zero there is nothing to wait for, and a hidden-then-shown
+          // group would flash on browsers that paint before the timeline starts
+          if (clock > 0) {
+            group.setAttribute('display', 'none');
+            group.append(marker('inline', clock));
+          }
+          group.append(...render(component));
+          groups.set(id, group);
+          root.append(group);
+        }
+        previous = current;
+        clock += durations[index] ?? 0;
+      },
+      finish: () => new XMLSerializer().serializeToString(doc),
+    };
+  }
+
+  // The video is the editor's own canvas, recorded as it is replayed.  There is
+  // no faster-than-real-time path: MediaRecorder encodes a live stream, so this
+  // takes about as long as watching it does.
+  async function recordAnimation(elCanvas, durations, onFrame) {
+    if (typeof MediaRecorder === 'undefined' || typeof elCanvas.captureStream !== 'function') return null;
+    const mime = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']
+      .find((type) => MediaRecorder.isTypeSupported(type));
+    if (!mime) return null;
+
+    // 0 frames a second means "only the ones asked for", so the recording holds
+    // each step for as long as the drawing did rather than however long a render
+    // happened to take
+    const stream = elCanvas.captureStream(0);
+    const track = stream.getVideoTracks()[0];
+    const chunks = [];
+    const recorder = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: cfg.exportBitrate});
+    recorder.ondataavailable = (event) => {
+      if (event.data?.size) chunks.push(event.data);
+    };
+    const stopped = new Promise((resolve) => { recorder.onstop = resolve; });
+    recorder.start();
+
+    await onFrame(async (index) => {
+      // js-draw paints on an animation frame, so the canvas is a frame behind
+      // until one has gone by
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      track.requestFrame();
+      const hold = durations[index] ?? 0;
+      if (hold > 0) await new Promise((resolve) => setTimeout(resolve, hold));
+    });
+
+    // hold the finished drawing, so it does not end the instant the last stroke lands
+    await new Promise((resolve) => setTimeout(resolve, cfg.exportTailMs));
+    track.requestFrame();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    recorder.stop();
+    await stopped;
+    if (!chunks.length) return null;
+    return new Blob(chunks, {type: mime});
+  }
+
+  function downloadBlob(name, blob) {
+    const url = URL.createObjectURL(blob);
+    const elLink = document.createElement('a');
+    elLink.href = url;
+    elLink.download = name;
+    document.body.append(elLink);
+    elLink.click();
+    elLink.remove();
+    // long enough for the browser to have taken it; revoking at once loses the file
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
   // --- what a step does, and what later steps need it to have happened
   //
   // Every recorded command names the components it works on by id, so what one
@@ -1982,6 +2216,7 @@
     const elForward = makePlayerButton('markup-draw-player-forward', i18n.playForwardIcon, i18n.playForward);
     const elRestart = makePlayerButton('markup-draw-player-restart', i18n.playRestartIcon, i18n.playRestart);
     const elDelete = makePlayerButton('markup-draw-player-delete', i18n.playDeleteIcon, i18n.playDelete);
+    const elExport = makePlayerButton('markup-draw-player-export', i18n.playExportIcon, i18n.playExport);
     const elSave = makePlayerButton('markup-draw-player-save', i18n.playSaveIcon, i18n.playSave);
     const elClose = makePlayerButton('markup-draw-player-close', i18n.playCloseIcon, i18n.playClose);
     const elProgress = document.createElement('div');
@@ -1994,6 +2229,7 @@
     const elCaption = document.createElement('div');
     elCaption.className = 'markup-draw-player-caption';
     elBar.append(elBack, elPlay, elForward, elRestart, elProgress, elStep, elCaption);
+    if (cfg.exportAnimation) elBar.append(elExport);
     if (editable) elBar.append(elDelete, elSave);
     elBar.append(elClose);
     elOverlay.append(elHost, elBar);
@@ -2394,6 +2630,49 @@
           cancel: i18n.deleteCancel,
           onConfirm: () => void exclusive(() => applyDelete(plan.steps)),
         });
+      });
+    });
+
+    elExport.addEventListener('click', () => {
+      if (elExport.disabled) return;
+      abandon();
+      elExport.disabled = true;
+      const durations = stepDurations(entries);
+      const total = entries.length;
+      void exclusive(async () => {
+        try {
+          // Two passes, each in its own editor: the SVG pass leaves the drawing
+          // finished, and the recording has to start from an empty canvas.
+          const animated = await withScratchEditor(jsdraw, svgText, async (scratch) => {
+            // the stored SVG, not one exported from the empty scratch editor:
+            // its root already carries the finished drawing's size and viewBox
+            const builder = buildAnimatedSvg(jsdraw, scratch, entries, durations, svgText);
+            await replayForExport(jsdraw, scratch, entries, async (at, touched) => {
+              builder.step(at, touched, componentsById(scratch));
+              if (at % 10 === 0) note(i18n.playExporting(at + 1, total));
+            });
+            return builder.finish();
+          });
+
+          note(i18n.playExportRecording);
+          const video = await withScratchEditor(jsdraw, svgText, async (scratch) => {
+            const elCanvas = scratch.getRootElement().querySelector('canvas:not(.wetInkCanvas)');
+            if (!elCanvas) return null;
+            return await recordAnimation(elCanvas, durations, async (frame) => {
+              await replayForExport(jsdraw, scratch, entries, (at) => frame(at));
+            });
+          });
+
+          downloadBlob(`${cfg.exportName}.svg`, new Blob([animated], {type: 'image/svg+xml'}));
+          if (video) {
+            downloadBlob(`${cfg.exportName}.${video.type.includes('mp4') ? 'mp4' : 'webm'}`, video);
+          }
+          note(video ? i18n.playExportDone : i18n.playExportNoVideo);
+        } catch (err) {
+          note(i18n.playExportFailed(String(err?.message || err)));
+        } finally {
+          elExport.disabled = false;
+        }
       });
     });
 
