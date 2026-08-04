@@ -18,6 +18,7 @@ const suitesDir = join(here, 'suites');
 // declared rather than globbed: the order is meaningful when reading the output
 const ALL_SUITES = [
   'combo-editor',
+  'history',
   'alignment',
   'uml-pens',
   'mobile',

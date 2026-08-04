@@ -33,8 +33,9 @@ To poke at the harness by hand: `node server.mjs`, then open
 | suite | what it drives |
 | --- | --- |
 | `combo-editor` | the shared markdown editor (issues, PRs, comments, wiki, releases): insert, render, hostile payloads, round trip |
+| `history` | recording every undoable action into the fence, replaying it into a later board, undoing across sessions, the three ways a stored log is refused, playing one back, stepping through / deleting a step / saving the result, and exporting the animation as a self-playing SVG and a video |
 | `alignment` | the "Align…" entry in the selection menu, the guides that snap a drag, and the geometry both produce |
-| `uml-pens` | the six UML relationship pens: that each draws its notation, and that an arrow stays one element across a save and reload |
+| `uml-pens` | the six UML relationship pens: that each draws its notation, that an arrow stays one element across a save and reload, and that it records and replays like any other stroke |
 | `mobile` | drawing with a finger, via raw CDP touch events on an iPhone-sized viewport, including a finger-driven alignment |
 | `file-editor` | the repository file editor against the real Monaco build Gitea pins |
 | `file-editor-layouts` | the same button across three generations of Gitea's editor markup |
@@ -50,6 +51,10 @@ Two habits worth keeping when adding to them:
   the result back out of the model, not out of the hidden textarea Monaco
   writes to. Faking the editor would have hidden the bug that the textarea is
   written *by* Monaco and never read from.
+* **Let the page fail the suite.** An uncaught error in the browser fails the
+  run even when every check passed -- `watchPage` records them and `finish()`
+  reports them. A stray call that threw after doing its work was passing 101
+  checks while printing a `TypeError` nobody was looking at.
 * **Assert on what ships.** The alignment suite measures the saved SVG rather
   than js-draw's in-memory model: what matters is the geometry that lands in
   the markdown. Where a number would have to be assumed -- the grid spacing,

@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '9';
+  const SCRIPT_REVISION = '21';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -43,6 +43,37 @@
     // offer the six UML relationship pens in the pen dropdown, see the UML pens
     // section
     umlPens: true,
+    // record everything Ctrl+Z can take back into the drawing, see the edit
+    // history section
+    history: true,
+    // size of the stored log, in characters of the fence, past which it is
+    // collapsed back to a snapshot of the drawing
+    historyMaxChars: 256 * 1024,
+    // ask before an undo reaches back into an earlier editing session
+    historyConfirmUndo: true,
+    // offer a play button on drawings that carry a recorded history
+    playback: true,
+    // longest pause, in ms, that playback acts out; a real one can be an hour
+    playbackMaxGap: 1200,
+    // beat inserted where one editing session ends and the next begins -- the
+    // real gap there is days, and is captioned rather than waited out
+    playbackSessionGap: 900,
+    // floor, so a burst of fast commands is still something the eye can follow
+    playbackMinStep: 40,
+    // divides every wait, so 2 plays back twice as fast
+    playbackSpeed: 1,
+    // the export button: a self-playing SVG plus a video, both library-free
+    exportAnimation: true,
+    // video bitrate, and how long the finished drawing is held at the end
+    exportBitrate: 4_000_000,
+    exportTailMs: 1200,
+    // base name for the two downloaded files
+    exportName: 'drawing-history',
+    // whether a finished export is offered with a question rather than simply
+    // downloaded: 'auto' asks only once the click that started it has lapsed,
+    // which is when a browser stops acting on a download by itself; 'always'
+    // asks every time, 'never' relies on the download alone
+    exportAskBeforeSaving: 'auto',
     ...(window.giteaDrawConfig ?? {}),
   };
 
@@ -86,6 +117,82 @@
     umlAggregation: 'Aggregation',
     umlAssociation: 'Association',
     umlDependency: 'Dependency',
+    undoAcross: 'Undo an earlier edit?',
+    undoAcrossFrom: (when) => `The next undo takes back work from ${when}, not from this editing session.`,
+    undoAcrossUnknown: 'The next undo takes back the drawing as it was before this editing session.',
+    undoAcrossConfirm: 'Undo it',
+    undoAcrossCancel: 'Keep it',
+    play: 'Play the edit history',
+    // The control bar has to fit a phone, so everything that can be a glyph is
+    // one; the words move into the tooltip and the accessible name.  U+FE0E asks
+    // for the text rendering of glyphs a browser would otherwise turn into a
+    // colour emoji.
+    playPauseIcon: '\u23F8\uFE0E',
+    playPause: 'Pause',
+    playIcon: '\u25B6\uFE0E',
+    playResume: 'Play',
+    playRestartIcon: '\u21BA',
+    playRestart: 'Restart',
+    playCloseIcon: '\u238B',
+    playClose: 'Close',
+    playFailed: 'This drawing\'s edit history could not be played back',
+    playFound: 'The drawing as it was found',
+    playNextSession: 'A later editing session',
+    playMoments: 'Moments later',
+    playDone: 'End of the recorded history',
+    playBackIcon: '\u23EE\uFE0E',
+    playBack: 'Back one step',
+    playForwardIcon: '\u23ED\uFE0E',
+    playForward: 'Forward one step',
+    playStep: (at, total) => `${at} / ${total}`,
+    playDeleteIcon: '\u2702\uFE0EStep',
+    playDelete: 'Delete this step',
+    playDeleteBlocked: (why) => `This step cannot be removed: ${why}`,
+    playDeletedWith: (n) => `${n} steps removed`,
+    stepStroke: 'a stroke',
+    stepText: 'a piece of text',
+    stepImage: 'an image',
+    stepBackground: 'the background',
+    stepShape: 'an imported shape',
+    stepErase: 'an erase',
+    stepMove: 'a move or resize',
+    stepDuplicate: 'a duplicate',
+    stepGroup: (n) => `a group of ${n} changes`,
+    stepSomething: 'this step',
+    deleteStepWithDeps: (what, n) =>
+      `Delete ${what} and the ${n === 1 ? 'one' : n} that ${n === 1 ? 'builds' : 'build'} on it?`,
+    deleteStepWithDepsBody: (n, list) =>
+      `${n === 1 ? 'Step' : 'Steps'} ${list} ${n === 1 ? 'uses' : 'use'} what this one draws, and cannot be replayed without it, so ${n === 1 ? 'it goes' : 'they go'} too. Nothing reaches the markdown until you save.`,
+    deleteConfirm: 'Delete',
+    deleteCancel: 'Keep it',
+    playSaveIcon: 'Save',
+    playExportIcon: '\u2913',
+    playExport: 'Download the animation',
+    playExportBody: 'Both are built here in the browser, with no server and no library.',
+    playExportSvg: 'Animated SVG',
+    playExportSvgHint: 'Plays by itself wherever an image can go. Ready at once.',
+    playExportVideo: 'Video (MP4 or WebM)',
+    playExportVideoHint: (seconds) =>
+      `Plays anywhere. Recorded as it plays, so it takes about ${seconds}s.`,
+    playExportVideoUnavailable: 'This browser cannot record video',
+    playExportCancel: 'Not now',
+    playBuildingSvg: 'Building the SVG',
+    playRecording: 'Recording',
+    playExportSaved: (name) => `${name} downloaded`,
+    playExportReady: (name) => `${name} is ready`,
+    playExportReadyBody: 'It took long enough to build that the browser will not save it on its own any more.',
+    playExportSaveNow: 'Save it',
+    playExportSaveNowHint: 'Downloads the file you just built.',
+    playExportDiscard: 'Throw it away',
+    playExportStopped: 'Export stopped',
+    playExportFailed: (why) => `The animation could not be exported: ${why}`,
+    playSave: 'Save to markdown',
+    playSaved: 'Saved to the markdown',
+    playSaveGone: 'This drawing is no longer in the text, so it was not saved',
+    playDiscard: 'Discard the changes?',
+    playDiscardBody: 'This drawing\'s history has been edited but not saved. Closing now leaves the markdown as it was.',
+    playDiscardConfirm: 'Discard them',
+    playDiscardCancel: 'Keep editing',
   };
 
   // octicon-pencil, inlined so that no extra request is needed
@@ -253,12 +360,523 @@
     source.replaceRange(pos, pos, before + block + after);
   }
 
+  // ---------------------------------------------------------------- edit history
+  //
+  // Every action Ctrl+Z can take back is written into the drawing itself, so the
+  // undo stack outlives the browser tab: reopening a drawing restores the stack
+  // it was closed with, and the same log is a script of how the drawing was made.
+  //
+  // What is recorded is exactly what enters js-draw's UndoRedoHistory -- panning
+  // and zooming dispatch with `addToHistory` false, so "undoable" and "recorded"
+  // are the same set by construction rather than by a rule kept in step by hand.
+  // `UndoRedoStackUpdated` carries the command *and* which of done/undone/redone
+  // happened, so one listener sees all three; `CommandDone` on its own cannot
+  // tell a fresh command from a redone one.
+  //
+  // The log is a complete script starting from an empty canvas, never a patch on
+  // top of the SVG.  js-draw forces that: component ids survive
+  // serialize/deserialize but not an SVG round trip -- js-draw writes no ids into
+  // its SVG and SVGLoader makes fresh ones on the way back -- so a command
+  // recorded against an SVG-loaded image would, next time, name a component that
+  // no longer exists.  Replaying from JSON keeps every id, and the drawing that
+  // comes out is the drawing that went in.  The SVG in the fence stays the thing
+  // that renders, and is regenerated from the replayed state on every save.
+
+  const HISTORY_VERSION = 1;
+  const HISTORY_MARK = 'gitea-draw-history';
+
+  // entry shapes, kept numeric because an unsupported browser stores them as
+  // plain base64 JSON with no compression to hide the verbosity
+  const OP_SESSION = 0; // [0, startedAt | null]  -- a board was opened
+  const OP_DO = 1; //      [1, dt, commandJson]
+  const OP_UNDO = 2; //    [2, dt]
+  const OP_REDO = 3; //    [3, dt]
+
+  const historyRegExp = () =>
+    new RegExp(`<!--${HISTORY_MARK}:(\\d+):([a-z]):([A-Za-z0-9+/=]*)-->`);
+
+  // --- payload framing
+  //
+  // The log rides inside the SVG, as an XML comment just before </svg>.  That
+  // keeps one fence equal to one self-contained drawing: copying the fence takes
+  // the history with it, and every renderer -- Gitea's, GitHub's, an e-mail
+  // client's -- ignores a comment, so nothing anywhere shows a wall of base64.
+  // The payload is base64, which cannot contain the "--" that would end the
+  // comment early.
+
+  function splitHistory(svgText) {
+    const match = historyRegExp().exec(svgText);
+    if (!match) return {svg: svgText, stored: null};
+    return {
+      svg: svgText.slice(0, match.index) + svgText.slice(match.index + match[0].length),
+      stored: {version: Number(match[1]), codec: match[2], data: match[3]},
+    };
+  }
+
+  function attachHistory(svgText, stored) {
+    const close = svgText.lastIndexOf('</svg>');
+    if (close < 0) return svgText;
+    const comment = `<!--${HISTORY_MARK}:${HISTORY_VERSION}:${stored.codec}:${stored.data}-->`;
+    return svgText.slice(0, close) + comment + svgText.slice(close);
+  }
+
+  const bytesToBase64 = (bytes) => {
+    let binary = '';
+    // in chunks: String.fromCharCode(...bytes) blows the argument limit on a
+    // drawing of any size
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(binary);
+  };
+
+  const base64ToBytes = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+
+  // CompressionStream is native everywhere this matters; where it is missing the
+  // log is still written, just uncompressed, and the codec letter says which.
+  async function packHistory(text) {
+    const bytes = new TextEncoder().encode(text);
+    if (typeof CompressionStream !== 'function') return {codec: 'p', data: bytesToBase64(bytes)};
+    const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    return {codec: 'z', data: bytesToBase64(new Uint8Array(await new Response(stream).arrayBuffer()))};
+  }
+
+  async function unpackHistory(codec, data) {
+    const bytes = base64ToBytes(data);
+    if (codec === 'p') return new TextDecoder().decode(bytes);
+    if (codec !== 'z') throw new Error(`unknown history encoding "${codec}"`);
+    if (typeof DecompressionStream !== 'function') throw new Error('this browser cannot decompress the history');
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return await new Response(stream).text();
+  }
+
+  // FNV-1a.  Only ever compared against itself, and only to notice that the SVG
+  // was changed by something that is not this script -- a hand edit in the
+  // markdown, another tool, a merge resolution.  Replaying a log against a
+  // drawing it did not produce would quietly throw that edit away, so a mismatch
+  // drops the log and keeps the text.
+  function svgFingerprint(text) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(36);
+  }
+
+  // --- sanitising a recorded command
+  //
+  // A log is markdown written by whoever wrote the drawing, so it is exactly as
+  // hostile as the SVG beside it -- and the JSON way into js-draw is guarded
+  // *less* than the SVG way: ImageComponent.deserializeFromJSON assigns `src`
+  // straight through, while its SVG loader forces `data:image/` and re-encodes
+  // anything else through a canvas.  Left alone, a recorded drawing would fetch
+  // a URL of its author's choosing from every reader who opened the board.
+
+  const SAFE_IMAGE_SRC = /^data:image\//i;
+  // 1x1 transparent PNG, so a blocked image leaves a hole rather than an error
+  const BLANK_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+  function sanitizeCommandJson(value, report, depth = 0) {
+    if (depth > 64) throw new Error('recorded command is nested too deeply');
+    if (Array.isArray(value)) return value.map((item) => sanitizeCommandJson(item, report, depth + 1));
+    if (!value || typeof value !== 'object') return value;
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+      // js-draw refuses to restore loadSaveData -- AbstractComponent.deserialize
+      // says why -- so carrying it is pure weight, and for a drawing adopted from
+      // an SVG it is a second copy of every source attribute.
+      if (key === 'loadSaveData') continue;
+      if ((key === 'src' || key === 'base64Url') && typeof item === 'string' && !SAFE_IMAGE_SRC.test(item)) {
+        report.blockedImages++;
+        out[key] = BLANK_IMAGE;
+        continue;
+      }
+      out[key] = sanitizeCommandJson(item, report, depth + 1);
+    }
+    return out;
+  }
+
+  // --- the recorder
+  //
+  // One of these is built per board.  It owns the log, replays a stored one into
+  // the editor, keeps track of which editing session every command on the live
+  // undo stack came from, and writes the log back out on save.
+
+  const historyDebug = {state: 'no drawing board opened yet'};
+
+  // A short menu inside an overlay: a title, and one button per choice with a
+  // line saying what picking it means.
+  function askChoice(elParent, {title, body, choices, cancel}) {
+    const elDialog = document.createElement('dialog');
+    elDialog.className = 'markup-draw-confirm markup-draw-choice';
+    const elTitle = document.createElement('p');
+    elTitle.className = 'markup-draw-confirm-title';
+    elTitle.textContent = title;
+    elDialog.append(elTitle);
+    if (body) {
+      const elBody = document.createElement('p');
+      elBody.textContent = body;
+      elDialog.append(elBody);
+    }
+    for (const choice of choices) {
+      const elChoice = document.createElement('button');
+      elChoice.type = 'button';
+      elChoice.className = 'markup-draw-choice-option';
+      const elLabel = document.createElement('span');
+      elLabel.className = 'markup-draw-choice-label';
+      elLabel.textContent = choice.label;
+      const elHint = document.createElement('span');
+      elHint.className = 'markup-draw-choice-hint';
+      elHint.textContent = choice.hint;
+      elChoice.append(elLabel, elHint);
+      elChoice.addEventListener('click', () => {
+        elDialog.close();
+        choice.onPick();
+      });
+      elDialog.append(elChoice);
+    }
+    const elActions = document.createElement('div');
+    elActions.className = 'markup-draw-confirm-actions';
+    const elCancel = document.createElement('button');
+    elCancel.type = 'button';
+    elCancel.textContent = cancel;
+    elCancel.addEventListener('click', () => elDialog.close());
+    elActions.append(elCancel);
+    elDialog.append(elActions);
+    elDialog.addEventListener('close', () => elDialog.remove(), {once: true});
+    elParent.append(elDialog);
+    elDialog.showModal();
+    elDialog.querySelector('.markup-draw-choice-option')?.focus();
+  }
+
+  // A yes/no question inside an overlay.  It goes in a <dialog> so that Escape
+  // dismisses the question rather than the board behind it -- both overlays
+  // already let a key through when one is open.
+  function askConfirmation(elParent, {title, body, confirm, cancel, onConfirm}) {
+    const elDialog = document.createElement('dialog');
+    elDialog.className = 'markup-draw-confirm';
+    const elTitle = document.createElement('p');
+    elTitle.className = 'markup-draw-confirm-title';
+    elTitle.textContent = title;
+    const elBody = document.createElement('p');
+    elBody.textContent = body;
+    const elActions = document.createElement('div');
+    elActions.className = 'markup-draw-confirm-actions';
+    const elCancel = document.createElement('button');
+    elCancel.type = 'button';
+    elCancel.textContent = cancel;
+    const elConfirm = document.createElement('button');
+    elConfirm.type = 'button';
+    elConfirm.className = 'markup-draw-confirm-go';
+    elConfirm.textContent = confirm;
+    elCancel.addEventListener('click', () => elDialog.close());
+    elConfirm.addEventListener('click', () => {
+      elDialog.close();
+      onConfirm();
+    });
+    elDialog.addEventListener('close', () => elDialog.remove(), {once: true});
+    elActions.append(elCancel, elConfirm);
+    elDialog.append(elTitle, elBody, elActions);
+    elParent.append(elDialog);
+    elDialog.showModal();
+    elConfirm.focus();
+  }
+
+  function createHistory(jsdraw, editor, elOverlay) {
+    const entries = []; // the whole log, oldest first
+    const sessions = []; // when each session started; null means "not known"
+    const report = {blockedImages: 0};
+    const confirmed = new Set(); // sessions the reader already agreed to undo into
+    let stackSessions = []; // which session each command on the live undo stack came from
+    let redoSessions = []; // ... and on the redo stack
+    let current = -1; // the session commands are being attributed to right now
+    let live = -1; // this board's own session
+    let liveEmitted = false; // its OP_SESSION entry is written on first use, not on open
+    let recording = false;
+    let replaying = false;
+    let compact = false; // the stored log was over budget: start again from a snapshot
+    let problem = null; // recording is off and the drawing will be saved without a log
+    let note = null; // a stored log was rejected; recording carries on from scratch
+    let lastAt = 0;
+
+    const now = () => performance.now();
+
+    // Two very different failures, and conflating them loses drawings' histories.
+    //
+    // A stored log that cannot be used -- wrong version, corrupt, or describing
+    // some other SVG -- is recoverable: the drawing loads from its SVG and a
+    // fresh log starts from there, exactly as it does for a drawing made before
+    // any of this existed.  Only the reason is worth reporting.
+    function reject(why) {
+      note ??= why;
+    }
+
+    // A command that cannot be serialized is not recoverable: everything after it
+    // would replay onto a different picture.  The log stops dead rather than
+    // drifting, the drawing is saved without one, and the next open adopts it.
+    function giveUp(why) {
+      problem ??= why;
+    }
+
+    function record(op, command) {
+      if (problem) return;
+      if (!liveEmitted) {
+        entries.push([OP_SESSION, sessions[live]]);
+        liveEmitted = true;
+      }
+      const at = now();
+      // rounded: 10ms is finer than anyone draws, and fewer distinct values
+      // compress much better
+      const dt = Math.max(0, Math.round((at - lastAt) / 10) * 10);
+      lastAt = at;
+      if (op !== OP_DO) {
+        entries.push([op, dt]);
+        return;
+      }
+      let json;
+      try {
+        json = command.serialize();
+      } catch (err) {
+        giveUp(`a command could not be recorded (${err.message || err})`);
+        return;
+      }
+      entries.push([OP_DO, dt, json]);
+    }
+
+    // js-draw caps its own undo stack at 700 and drops the oldest; the log keeps
+    // them, so the two lengths have to be reconciled rather than assumed equal.
+    function trim(undoSize, redoSize) {
+      if (stackSessions.length > undoSize) stackSessions = stackSessions.slice(-undoSize);
+      if (redoSessions.length > redoSize) redoSessions = redoSessions.slice(-redoSize);
+    }
+
+    editor.notifier.on(jsdraw.EditorEventType.UndoRedoStackUpdated, (event) => {
+      const kind = event.stackUpdateType;
+      if (kind === jsdraw.UndoEventType.CommandDone) {
+        stackSessions.push(current);
+        redoSessions = [];
+        if (recording) record(OP_DO, event.command);
+      } else if (kind === jsdraw.UndoEventType.CommandUndone) {
+        redoSessions.push(stackSessions.pop() ?? current);
+        if (recording) record(OP_UNDO);
+      } else if (kind === jsdraw.UndoEventType.CommandRedone) {
+        stackSessions.push(redoSessions.pop() ?? current);
+        if (recording) record(OP_REDO);
+      }
+      trim(event.undoStackSize, event.redoStackSize);
+    });
+
+    // Everything on the canvas as one command, without applying it: used both to
+    // adopt a drawing made before there was any recording, and to restart a log
+    // that has outgrown its budget.  getAllComponents leaves the background out,
+    // so it is fetched separately -- otherwise a replayed drawing would come back
+    // transparent.  Each component carries its own z-index through serialization,
+    // so the order here only has to be complete, not sorted.
+    function snapshot() {
+      const components = [
+        ...editor.image.getBackgroundComponents(),
+        ...editor.image.getAllComponents(),
+      ];
+      if (!components.length) return null;
+      return jsdraw.uniteCommands(components.map((c) => jsdraw.EditorImage.addComponent(c)));
+    }
+
+    function adopt() {
+      const command = snapshot();
+      if (!command) return;
+      let json;
+      try {
+        json = command.serialize();
+      } catch (err) {
+        giveUp(`this drawing could not be recorded (${err.message || err})`);
+        return;
+      }
+      // Its own session, with no time: this is the drawing as it was found, and
+      // when it was actually made is not something the file can say.
+      sessions.push(null);
+      current = sessions.length - 1;
+      entries.push([OP_SESSION, null], [OP_DO, 0, json]);
+      // The components are already on the canvas, so this only puts the command
+      // on the undo stack.  Without it, "undo past the start of this session"
+      // would do nothing in the session that adopts a drawing and everything in
+      // every later one.
+      editor.history.push(command, false);
+    }
+
+    async function replay(journal) {
+      replaying = true;
+      try {
+        for (const entry of journal.e) {
+          const op = entry?.[0];
+          if (op === OP_SESSION) {
+            sessions.push(typeof entry[1] === 'number' ? entry[1] : null);
+            current = sessions.length - 1;
+            entries.push([OP_SESSION, sessions[current]]);
+          } else if (op === OP_DO) {
+            // sanitised on the way in and kept that way: what is written back is
+            // the cleaned command, so a hostile payload is defused once and for all
+            const json = sanitizeCommandJson(entry[2], report);
+            // push, not dispatch: dispatch announces every command to a screen
+            // reader, and a few hundred replayed strokes would be a scream
+            editor.history.push(jsdraw.SerializableCommand.deserialize(json, editor), true);
+            entries.push([OP_DO, entry[1] ?? 0, json]);
+          } else if (op === OP_UNDO) {
+            await editor.history.undo();
+            entries.push([OP_UNDO, entry[1] ?? 0]);
+          } else if (op === OP_REDO) {
+            await editor.history.redo();
+            entries.push([OP_REDO, entry[1] ?? 0]);
+          }
+        }
+      } finally {
+        replaying = false;
+      }
+    }
+
+    // Reads a stored payload, or explains why it will not be used.  Returning
+    // null is never fatal: the caller falls back to loading the SVG, which is
+    // what happened before any of this existed.
+    async function load(stored, baseSvg) {
+      if (stored.version !== HISTORY_VERSION) {
+        reject(`the recorded history is version ${stored.version}, this script reads ${HISTORY_VERSION}`);
+        return null;
+      }
+      let journal;
+      try {
+        journal = JSON.parse(await unpackHistory(stored.codec, stored.data));
+      } catch (err) {
+        reject(`the recorded history could not be read (${err.message || err})`);
+        return null;
+      }
+      if (!journal || !Array.isArray(journal.e)) {
+        reject('the recorded history is not in the expected shape');
+        return null;
+      }
+      if (journal.h && journal.h !== svgFingerprint(baseSvg)) {
+        reject('the drawing was edited outside the board, so its history no longer describes it');
+        return null;
+      }
+      // Over budget already: this session's edits are kept, everything older is
+      // replaced by a snapshot when it is saved.
+      if (stored.data.length > cfg.historyMaxChars) compact = true;
+      return journal;
+    }
+
+    // --- undoing past the start of this session
+    //
+    // Restoring the stack means a reader can Ctrl+Z away work somebody else did
+    // days ago, which was simply impossible before.  Asking once per session
+    // crossed keeps that deliberate without nagging.
+
+    function askBeforeUndo(session, proceed) {
+      const at = sessions[session];
+      askConfirmation(elOverlay, {
+        title: i18n.undoAcross,
+        body: typeof at === 'number'
+          ? i18n.undoAcrossFrom(new Date(at).toLocaleString())
+          : i18n.undoAcrossUnknown,
+        confirm: i18n.undoAcrossConfirm,
+        cancel: i18n.undoAcrossCancel,
+        onConfirm: () => {
+          confirmed.add(session);
+          proceed();
+        },
+      });
+    }
+
+    // Both the toolbar button and Ctrl+Z call editor.history.undo(), so shadowing
+    // it on the instance covers both.  It is a prototype method, replaced here
+    // only on this board's own history object.
+    function guardUndo() {
+      const original = editor.history.undo.bind(editor.history);
+      editor.history.undo = () => {
+        if (replaying || !cfg.historyConfirmUndo) return original();
+        const owner = stackSessions[stackSessions.length - 1];
+        if (owner === undefined || owner === live || confirmed.has(owner)) return original();
+        askBeforeUndo(owner, original);
+        return undefined;
+      };
+    }
+
+    return {
+      load,
+      replay,
+      adopt,
+      rejectStored: reject,
+
+      // Starts recording.  Everything before this -- replaying a stored log,
+      // adopting an SVG -- is setup, and must not be recorded as if the reader
+      // had just done it.
+      start() {
+        sessions.push(Date.now());
+        live = sessions.length - 1;
+        current = live;
+        lastAt = now();
+        recording = true;
+        guardUndo();
+        historyDebug.state = problem ? `not recording: ${problem}` : 'recording';
+      },
+
+      // Called with the SVG js-draw just produced; returns it with the log
+      // attached, or unchanged when there is nothing trustworthy to attach.
+      async attach(svgText) {
+        if (problem) {
+          // eslint-disable-next-line no-console
+          console.warn(`markdown-draw: saved without an edit history -- ${problem}`);
+          return svgText;
+        }
+        let list = entries;
+        if (compact) {
+          // Collapse to the drawing as it stands.  Keeping only this session's
+          // entries on top of a snapshot taken at open would be nicer, but an
+          // undo from this session can reach back past that snapshot, and a log
+          // that cannot be replayed is worse than a short one.
+          const command = snapshot();
+          if (!command) return svgText;
+          try {
+            list = [[OP_SESSION, null], [OP_DO, 0, command.serialize()]];
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn(`markdown-draw: saved without an edit history -- ${err.message || err}`);
+            return svgText;
+          }
+        }
+        if (!list.length) return svgText;
+        const stored = await packHistory(JSON.stringify({
+          v: HISTORY_VERSION, h: svgFingerprint(svgText), e: list,
+        }));
+        // Still too big after collapsing: the drawing itself is the size problem,
+        // and doubling the fence to say so helps nobody.
+        if (compact && stored.data.length > cfg.historyMaxChars) {
+          // eslint-disable-next-line no-console
+          console.warn('markdown-draw: this drawing is too large to carry an edit history');
+          return svgText;
+        }
+        return attachHistory(svgText, stored);
+      },
+
+      describe: () => ({
+        entries: entries.length,
+        sessions: sessions.length,
+        commands: entries.filter((e) => e[0] === OP_DO).length,
+        undoStack: stackSessions.length,
+        blockedImages: report.blockedImages,
+        compacted: compact,
+        // why a stored log was not used; recording carries on regardless
+        rejected: note,
+        // set only when this drawing will be saved without any log at all
+        problem,
+      }),
+    };
+  }
+
   // ---------------------------------------------------------------- rendering
 
   // Parses the SVG only to read its intrinsic size.  DOMParser neither runs
   // scripts nor fetches subresources, and the parsed nodes never reach the live
   // document -- the drawing itself is displayed through an <img>, see below.
-  function parseSvgSize(svgText) {
+  function parseSvgFrame(svgText) {
     const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
     if (doc.querySelector('parsererror') || doc.documentElement.nodeName.toLowerCase() !== 'svg') {
       throw new Error(i18n.invalidSvg);
@@ -270,14 +888,58 @@
     };
     let width = positive(root.getAttribute('width'));
     let height = positive(root.getAttribute('height'));
-    if (!width || !height) {
-      const box = (root.getAttribute('viewBox') ?? '').trim().split(/[\s,]+/).map(Number);
-      if (box.length === 4 && Number.isFinite(box[2]) && Number.isFinite(box[3])) {
-        width = box[2];
-        height = box[3];
-      }
+    // The viewBox also says *where* on the canvas the drawing sits, which is what
+    // playback needs to hold the view still while the drawing appears in it.
+    const box = (root.getAttribute('viewBox') ?? '').trim().split(/[\s,]+/).map(Number);
+    const framed = box.length === 4 && box.every((n) => Number.isFinite(n));
+    if ((!width || !height) && framed) {
+      width = box[2];
+      height = box[3];
     }
-    return {width: Math.round(width), height: Math.round(height)};
+    return {
+      width: Math.round(width),
+      height: Math.round(height),
+      viewBox: framed ? {x: box[0], y: box[1], width: box[2], height: box[3]} : null,
+      // js-draw marks a canvas that grows with its content by a class on the
+      // root, and reads it back the same way (svgLoaderAutoresizeClassName)
+      autoresize: root.classList.contains('js-draw--autoresize'),
+    };
+  }
+
+  // Replaying a log reinstates the components and nothing else, but loadFromSVG
+  // also sets three things: where the drawing sits on the canvas, whether the
+  // canvas grows with its content, and the view onto it.  Without them a
+  // reopened drawing lands at js-draw's default 0 0 500 500 while the drawing
+  // itself may be anywhere else, which shows up as a board zoomed into one
+  // corner with the stray default region drawn beside it.
+  //
+  // All three are taken from the SVG rather than from the log.  The SVG is what
+  // the drawing renders as, so it is authoritative by definition, it is always
+  // there on the replay path, and taking them from it also repairs logs written
+  // before this was noticed.  Recording them instead would have been worse than
+  // it looks: setAutoresizeEnabled returns the non-serializable Command.empty
+  // when the value is unchanged, which would have made the whole log
+  // unserializable and switched recording off.
+  function restoreCanvasFrame(jsdraw, editor, svgText) {
+    let frame = null;
+    try {
+      frame = parseSvgFrame(svgText);
+    } catch {
+      // not parseable, so there is nothing to take the frame from
+    }
+    const box = frame?.viewBox;
+    if (!box || box.width <= 0 || box.height <= 0) {
+      // no usable viewBox: at least put the drawing on screen
+      const bounds = editor.image.getImportExportRect();
+      if (bounds?.maxDimension > 0) editor.dispatchNoAnnounce(editor.viewport.zoomTo(bounds), false);
+      return;
+    }
+    const rect = new jsdraw.Rect2(box.x, box.y, box.width, box.height);
+    // the order loadFrom uses; setImportExportRect turns autoresize off, so it
+    // has to go first
+    editor.dispatchNoAnnounce(editor.image.setImportExportRect(rect), false);
+    editor.dispatchNoAnnounce(editor.viewport.zoomTo(rect), false);
+    editor.dispatchNoAnnounce(editor.image.setAutoresizeEnabled(frame.autoresize), false);
   }
 
   function showBlockError(elBlock, err) {
@@ -289,11 +951,15 @@
   }
 
   function renderDrawing(elPre, source) {
-    const svgText = source.trim();
+    // The edit history is metadata, not picture: it is kept out of the blob the
+    // <img> reads and out of the size limit, which is about how much drawing a
+    // page is asked to rasterize.  Counting it would push drawings that were
+    // fine yesterday over the limit today.
+    const {svg: svgText, stored} = splitHistory(source.trim());
     if (svgText.length > cfg.maxSourceChars) {
       throw new Error(`drawing source of ${svgText.length} characters exceeds the maximum allowed length of ${cfg.maxSourceChars}`);
     }
-    const {width, height} = parseSvgSize(svgText);
+    const {width, height} = parseSvgFrame(svgText);
 
     const elContainer = document.createElement('div');
     elContainer.className = 'markup-draw';
@@ -318,6 +984,9 @@
     elImg.src = blobUrl;
     elContainer.append(elImg);
 
+    const elActions = document.createElement('div');
+    elActions.className = 'markup-draw-actions';
+
     // Inside a markdown editor's own preview the drawing can be edited in place,
     // because the matching source fence is right there in the editor.
     const elMarkup = elPre.closest('.markup');
@@ -327,11 +996,23 @@
       elEdit.className = 'ui tiny basic button markup-draw-edit';
       elEdit.textContent = i18n.edit;
       elEdit.addEventListener('click', () => editPreviewedDrawing(elMarkup, elContainer));
-      const elActions = document.createElement('div');
-      elActions.className = 'markup-draw-actions';
       elActions.append(elEdit);
-      elContainer.append(elActions);
     }
+
+    // A drawing that carries its edit history can be watched being made,
+    // wherever it is rendered -- there is no editor involved.
+    if (stored && cfg.playback) {
+      const elPlay = document.createElement('button');
+      elPlay.type = 'button';
+      elPlay.className = 'ui tiny basic button markup-draw-play';
+      elPlay.textContent = `▶ ${i18n.play}`;
+      // elMarkup is passed so the player can find the text behind the drawing:
+      // where there is one, its steps can be edited and written back.
+      elPlay.addEventListener('click', () => void playDrawing(source, elMarkup ? {elMarkup, elContainer} : null));
+      elActions.append(elPlay);
+    }
+
+    if (elActions.children.length) elContainer.append(elActions);
 
     const elBlock = elPre.closest('.code-block-container') ?? elPre;
     elBlock.classList.remove('is-loading');
@@ -1273,7 +1954,13 @@
     }
   }
 
-  async function openDrawingBoard({initialSvg, onSave}) {
+  // the open board, so that giteaDrawDebug() can report on it
+  let boardHistory = null;
+  let boardEditor = null;
+  // ... and the open player
+  let playerState = null;
+
+  async function openDrawingBoard({initialSvg, onSave, ignoreHistory = null}) {
     const elOverlay = document.createElement('div');
     elOverlay.className = 'markup-draw-overlay';
     const elHost = document.createElement('div');
@@ -1287,6 +1974,9 @@
     let toolbar = null;
     const close = () => {
       if (toolbar) saveToolbarState(toolbar);
+      if (boardHistory) historyDebug.state = `last board: ${JSON.stringify(boardHistory.describe())}`;
+      boardHistory = null;
+      boardEditor = null;
       editor?.remove();
       elOverlay.remove();
       document.body.classList.remove('markup-draw-open');
@@ -1325,23 +2015,60 @@
     toolbar.addDefaults();
     restoreToolbarState(toolbar);
     toolbar.addExitButton(() => close());
+
+    const {svg: baseSvg, stored} = splitHistory(initialSvg);
+    const history = cfg.history ? createHistory(jsdraw, editor, elOverlay) : null;
+
     toolbar.addSaveButton(async () => {
       const svgElem = await editor.toSVGAsync();
-      onSave(new XMLSerializer().serializeToString(svgElem));
+      let svgText = new XMLSerializer().serializeToString(svgElem);
+      if (history) svgText = await history.attach(svgText);
+      onSave(svgText);
       close();
     });
 
-    if (initialSvg.trim()) {
-      // sanitize=true: the SVG was written by whoever wrote the markdown
-      await editor.loadFromSVG(initialSvg, true);
+    // Replaying the log is the normal way in; loading the SVG is the fallback for
+    // a drawing that has no log yet, or whose log cannot be trusted.
+    if (ignoreHistory) history?.rejectStored(ignoreHistory);
+    const journal = history && stored && !ignoreHistory ? await history.load(stored, baseSvg) : null;
+    if (journal) {
+      try {
+        await history.replay(journal);
+        restoreCanvasFrame(jsdraw, editor, baseSvg);
+      } catch (err) {
+        // A log that parsed but does not replay leaves the canvas half-built,
+        // and js-draw has no way to empty an editor again -- loadFromSVG only
+        // replaces the background and adds the rest on top.  Throwing the board
+        // away and opening a fresh one straight from the SVG is the one recovery
+        // that cannot leave a drawing showing a mixture of the two.
+        close();
+        await openDrawingBoard({
+          initialSvg,
+          onSave,
+          ignoreHistory: `the recorded history could not be replayed (${err.message || err})`,
+        });
+        return;
+      }
     } else {
-      // an opaque background keeps dark ink visible whatever theme the reader uses
-      editor.dispatch(editor.setBackgroundStyle({
-        color: jsdraw.Color4.white,
-        type: jsdraw.BackgroundComponentBackgroundType.SolidColor,
-        autoresize: true,
-      }), false);
+      if (baseSvg.trim()) {
+        // sanitize=true: the SVG was written by whoever wrote the markdown
+        await editor.loadFromSVG(baseSvg, true);
+      } else {
+        // an opaque background keeps dark ink visible whatever theme the reader uses
+        editor.dispatch(editor.setBackgroundStyle({
+          color: jsdraw.Color4.white,
+          type: jsdraw.BackgroundComponentBackgroundType.SolidColor,
+          autoresize: true,
+        }), false);
+      }
+      // The background is dispatched outside the undo stack, so it is invisible
+      // to the recorder; adopting picks it up along with everything else and
+      // makes the starting picture the log's own first command.
+      history?.adopt();
     }
+    history?.start();
+    boardHistory = history;
+    boardEditor = editor;
     editor.focus();
   }
 
@@ -1379,6 +2106,1007 @@
         if (current) source.replaceRange(current.start, current.end, makeFence(svgText));
       },
     });
+  }
+
+  // ---------------------------------------------------------------- playback
+  //
+  // The same log the board replays to restore an undo stack is a script of how
+  // the drawing was made, so a rendered drawing can play it back.
+  //
+  // Playback runs only on a click, never on its own: it deserializes the same
+  // attacker-written JSON the board does, and a page full of drawings must not
+  // do that merely by being looked at.  It goes through the same sanitizer.
+
+  const MINUTE = 60000, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
+
+  // The gap between two sessions is real time -- days, sometimes weeks -- and is
+  // never played out; it is said instead, which is what the absolute anchors in
+  // the log are for.
+  function describeGap(ms) {
+    const say = (n, unit) => `${n} ${unit}${n === 1 ? '' : 's'} later`;
+    if (ms < 2 * MINUTE) return i18n.playMoments;
+    if (ms < HOUR) return say(Math.round(ms / MINUTE), 'minute');
+    if (ms < DAY) return say(Math.round(ms / HOUR), 'hour');
+    if (ms < 30 * DAY) return say(Math.round(ms / DAY), 'day');
+    return say(Math.round(ms / (30 * DAY)), 'month');
+  }
+
+  // How long each session lasted, so a gap can be measured from the end of one
+  // to the start of the next rather than from start to start.
+  function sessionGaps(entries) {
+    const gaps = new Map();
+    let index = -1, startedAt = null, elapsed = 0, previousEnd = null;
+    for (const entry of entries) {
+      if (entry[0] !== OP_SESSION) {
+        elapsed += entry[1] ?? 0;
+        continue;
+      }
+      if (startedAt !== null) previousEnd = startedAt + elapsed;
+      index++;
+      startedAt = typeof entry[1] === 'number' ? entry[1] : null;
+      elapsed = 0;
+      if (index === 0 || startedAt === null || previousEnd === null) continue;
+      // clocks on two machines need not agree, so a gap can come out negative
+      gaps.set(index, Math.max(0, startedAt - previousEnd));
+    }
+    return gaps;
+  }
+
+  // ---------------------------------------------------------------- export
+  //
+  // One click, two files: a self-playing SVG and a video.  Neither needs a
+  // library, which is why they are the two on offer.
+  //
+  // SMIL animation is declarative and, unlike script, it runs inside an <img> --
+  // checked, not assumed -- so a self-playing drawing stays on exactly the
+  // rendering path and trust model a still one is on.  The video comes off a
+  // canvas through MediaRecorder, which needs nothing either.  A GIF would be
+  // the odd one out: browsers ship no GIF encoder at all (toBlob('image/gif')
+  // quietly hands back a PNG), so it would mean vendoring one, and this
+  // customization deliberately carries no dependency but js-draw.
+
+  // How long each step is held, mirroring the player exactly so that what was
+  // watched is what comes out.
+  function stepDurations(entries) {
+    return entries.map((entry, at) => {
+      if (at >= entries.length - 1) return 0;
+      const gap = entry[0] === OP_SESSION
+        ? cfg.playbackSessionGap
+        : Math.max(cfg.playbackMinStep, Math.min(entry[1] ?? 0, cfg.playbackMaxGap));
+      return gap / cfg.playbackSpeed;
+    });
+  }
+
+  // A second editor to replay into, so exporting does not disturb the one being
+  // watched.  Off to the side rather than display:none, because js-draw measures
+  // its container and a box of no size renders nothing.
+  async function withScratchEditor(jsdraw, svgText, work) {
+    const elHost = document.createElement('div');
+    elHost.className = 'markup-draw-export-host';
+    document.body.append(elHost);
+    let editor = null;
+    try {
+      editor = new jsdraw.Editor(elHost, {wheelEventsEnabled: false});
+      restoreCanvasFrame(jsdraw, editor, svgText);
+      // Pin the canvas to the finished drawing.  Left to autoresize it would
+      // grow as the replay adds strokes, so every component would be rendered
+      // against a different viewport and the video would shift about under the
+      // drawing.  The stored SVG already describes the frame we want.
+      try {
+        const {viewBox} = parseSvgFrame(svgText);
+        if (viewBox && viewBox.width > 0 && viewBox.height > 0) {
+          const rect = new jsdraw.Rect2(viewBox.x, viewBox.y, viewBox.width, viewBox.height);
+          // setImportExportRect turns autoresize off, which is the point
+          editor.dispatchNoAnnounce(editor.image.setImportExportRect(rect), false);
+          editor.dispatchNoAnnounce(editor.viewport.zoomTo(rect), false);
+        }
+      } catch {
+        // no usable frame in the SVG; the export still works, just unpinned
+      }
+      return await work(editor);
+    } finally {
+      editor?.remove();
+      elHost.remove();
+    }
+  }
+
+  // Replays the log a step at a time, telling the caller which components each
+  // step touched.  The ids come from the commands themselves rather than from
+  // comparing the whole image every step, which keeps it linear.
+  const EXPORT_STOPPED = 'markdown-draw:export-stopped';
+
+  async function replayForExport(jsdraw, editor, entries, onStep) {
+    const report = {blockedImages: 0};
+    let taken = [];
+    const listener = editor.notifier.on(jsdraw.EditorEventType.UndoRedoStackUpdated, (event) => {
+      if (event.command) taken.push(event.command);
+    });
+    try {
+      for (const [at, entry] of entries.entries()) {
+        taken = [];
+        if (entry[0] === OP_DO) {
+          editor.history.push(
+            jsdraw.SerializableCommand.deserialize(sanitizeCommandJson(entry[2], report), editor), true,
+          );
+        } else if (entry[0] === OP_UNDO) {
+          await editor.history.undo();
+        } else if (entry[0] === OP_REDO) {
+          await editor.history.redo();
+        }
+        const touched = new Set();
+        for (const command of taken) {
+          try {
+            const refs = commandRefs(command.serialize());
+            for (const id of [...refs.makes, ...refs.needs]) touched.add(id);
+          } catch {
+            // a command that will not serialize tells us nothing; the membership
+            // check below still catches what it added or removed
+          }
+        }
+        await onStep(at, touched);
+      }
+    } finally {
+      listener?.remove?.();
+    }
+  }
+
+  const componentsById = (editor) => new Map(
+    [...editor.image.getBackgroundComponents(), ...editor.image.getAllComponents()]
+      .map((component) => [component.getId(), component]),
+  );
+
+  // Builds one SVG in which every element appears (and disappears) at the time it
+  // did.  A component is drawn again whenever a step touches it -- a move changes
+  // the path itself, so the old drawing is hidden and a new one shown, which is
+  // both simpler and more general than trying to animate the change.
+  function buildAnimatedSvg(jsdraw, editor, entries, durations, finalSvg) {
+    const viewport = editor.image.getImportExportViewport();
+    const doc = new DOMParser().parseFromString(finalSvg, 'image/svg+xml');
+    if (doc.querySelector('parsererror')) throw new Error(i18n.invalidSvg);
+    const root = doc.documentElement;
+    // keep the attributes and any stylesheet js-draw emitted, drop the picture
+    for (const node of [...root.childNodes]) {
+      if (node.nodeType !== 1 || !['style', 'defs'].includes(node.nodeName.toLowerCase())) node.remove();
+    }
+
+    const at = (ms) => `${(ms / 1000).toFixed(2)}s`;
+    const marker = (to, ms) => {
+      const el = doc.createElementNS(SVG_NS, 'set');
+      el.setAttribute('attributeName', 'display');
+      el.setAttribute('to', to);
+      el.setAttribute('begin', at(ms));
+      return el;
+    };
+
+    const groups = new Map();
+    let previous = new Map();
+    let clock = 0;
+
+    const render = (component) => {
+      const {element, renderer} = jsdraw.SVGRenderer.fromViewport(viewport, {
+        sanitize: true, useViewBoxForPositioning: true,
+      });
+      component.render(renderer);
+      return [...element.childNodes].map((node) => doc.importNode(node, true));
+    };
+
+    return {
+      step(index, touched, current) {
+        const ids = new Set(touched);
+        for (const id of current.keys()) if (!previous.has(id)) ids.add(id);
+        for (const id of previous.keys()) if (!current.has(id)) ids.add(id);
+        for (const id of ids) {
+          const open = groups.get(id);
+          if (open) {
+            open.append(marker('none', clock));
+            groups.delete(id);
+          }
+          const component = current.get(id);
+          if (!component) continue;
+          const group = doc.createElementNS(SVG_NS, 'g');
+          // at time zero there is nothing to wait for, and a hidden-then-shown
+          // group would flash on browsers that paint before the timeline starts
+          if (clock > 0) {
+            group.setAttribute('display', 'none');
+            group.append(marker('inline', clock));
+          }
+          group.append(...render(component));
+          groups.set(id, group);
+          root.append(group);
+        }
+        previous = current;
+        clock += durations[index] ?? 0;
+      },
+      finish: () => new XMLSerializer().serializeToString(doc),
+    };
+  }
+
+  // The video is the editor's own canvas, recorded as it is replayed.  There is
+  // no faster-than-real-time path: MediaRecorder encodes a live stream, so this
+  // takes about as long as watching it does.
+  async function recordAnimation(elCanvas, durations, onFrame, onProgress) {
+    if (typeof MediaRecorder === 'undefined' || typeof elCanvas.captureStream !== 'function') return null;
+    const mime = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']
+      .find((type) => MediaRecorder.isTypeSupported(type));
+    if (!mime) return null;
+
+    // 0 frames a second means "only the ones asked for", so the recording holds
+    // each step for as long as the drawing did rather than however long a render
+    // happened to take
+    const stream = elCanvas.captureStream(0);
+    const track = stream.getVideoTracks()[0];
+    const chunks = [];
+    const recorder = new MediaRecorder(stream, {mimeType: mime, videoBitsPerSecond: cfg.exportBitrate});
+    recorder.ondataavailable = (event) => {
+      if (event.data?.size) chunks.push(event.data);
+    };
+    const stopped = new Promise((resolve) => { recorder.onstop = resolve; });
+    recorder.start();
+
+    await onFrame(async (index) => {
+      // js-draw paints on an animation frame, so the canvas is a frame behind
+      // until one has gone by
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      track.requestFrame();
+      const hold = durations[index] ?? 0;
+      onProgress?.(index);
+      if (hold > 0) await new Promise((resolve) => setTimeout(resolve, hold));
+    });
+
+    // hold the finished drawing, so it does not end the instant the last stroke lands
+    await new Promise((resolve) => setTimeout(resolve, cfg.exportTailMs));
+    track.requestFrame();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    recorder.stop();
+    await stopped;
+    if (!chunks.length) return null;
+    return new Blob(chunks, {type: mime});
+  }
+
+  function downloadBlob(name, blob) {
+    const url = URL.createObjectURL(blob);
+    const elLink = document.createElement('a');
+    elLink.href = url;
+    elLink.download = name;
+    document.body.append(elLink);
+    elLink.click();
+    elLink.remove();
+    // long enough for the browser to have taken it; revoking at once loses the file
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  // --- what a step does, and what later steps need it to have happened
+  //
+  // Every recorded command names the components it works on by id, so what one
+  // step needs from another can be read straight out of the log without applying
+  // any of it.  The six command types js-draw registers each carry those ids
+  // somewhere different; `union` and `inverse` wrap another command and are
+  // walked into.
+
+  // how many times a deletion may be replayed while working out what goes with
+  // it; past this something is wrong with the log rather than with the deletion
+  const MAX_DELETE_PROBES = 50;
+
+  const COMPONENT_WORDS = {
+    'stroke': 'stepStroke',
+    'text': 'stepText',
+    'image-component': 'stepImage',
+    'image-background': 'stepBackground',
+    'unknown-svg-object': 'stepShape',
+    'svg-global-attributes': 'stepShape',
+  };
+
+  function commandRefs(json, into = {makes: new Set(), needs: new Set()}, depth = 0) {
+    if (depth > 32 || !json || typeof json !== 'object') return into;
+    const data = json.data;
+    switch (json.commandType) {
+      case 'union':
+        for (const child of Array.isArray(data?.data) ? data.data : []) {
+          commandRefs(child, into, depth + 1);
+        }
+        break;
+      case 'inverse': {
+        // An inverse undoes what it wraps, so what that one makes, this one
+        // needs.  Counting both as "needs" keeps the analysis on the safe side:
+        // it can flag a step as dependent that would have survived, never the
+        // other way round.
+        const inner = commandRefs(data, {makes: new Set(), needs: new Set()}, depth + 1);
+        for (const id of [...inner.makes, ...inner.needs]) into.needs.add(id);
+        break;
+      }
+      case 'add-element':
+        if (data?.elemData?.id) into.makes.add(String(data.elemData.id));
+        break;
+      case 'transform-element':
+        if (data?.id) into.needs.add(String(data.id));
+        break;
+      case 'selection-tool-transform':
+        for (const id of Array.isArray(data?.elems) ? data.elems : []) into.needs.add(String(id));
+        break;
+      case 'erase':
+        for (const elem of Array.isArray(data) ? data : []) {
+          const id = typeof elem === 'string' ? elem : elem?.id;
+          if (id) into.needs.add(String(id));
+        }
+        break;
+      case 'duplicate':
+        for (const id of Array.isArray(data?.originalIds) ? data.originalIds : []) into.needs.add(String(id));
+        for (const id of Array.isArray(data?.cloneIds) ? data.cloneIds : []) into.makes.add(String(id));
+        break;
+      default:
+        break;
+    }
+    return into;
+  }
+
+  // The steps after `at` that could not stand without it.  One forward pass is
+  // enough for the whole chain: a step can only depend on an earlier one, so
+  // anything a doomed step made is already known to be going by the time the
+  // steps that use it are reached.
+  function dependentsOf(entries, at) {
+    if (entries[at]?.[0] !== OP_DO) return [];
+    const gone = commandRefs(entries[at][2]).makes;
+    if (!gone.size) return [];
+    const found = [];
+    for (let i = at + 1; i < entries.length; i++) {
+      if (entries[i][0] !== OP_DO) continue;
+      const refs = commandRefs(entries[i][2]);
+      if (![...refs.needs].some((id) => gone.has(id))) continue;
+      found.push(i);
+      for (const id of refs.makes) gone.add(id);
+    }
+    return found;
+  }
+
+  function describeCommand(json, depth = 0) {
+    if (depth > 8 || !json || typeof json !== 'object') return i18n.stepSomething;
+    const data = json.data;
+    switch (json.commandType) {
+      case 'add-element':
+        return i18n[COMPONENT_WORDS[data?.elemData?.name]] ?? i18n.stepSomething;
+      case 'erase': return i18n.stepErase;
+      case 'transform-element':
+      case 'selection-tool-transform': return i18n.stepMove;
+      case 'duplicate': return i18n.stepDuplicate;
+      case 'inverse': return describeCommand(data, depth + 1);
+      case 'union': {
+        const children = Array.isArray(data?.data) ? data.data : [];
+        return children.length === 1
+          ? describeCommand(children[0], depth + 1)
+          : i18n.stepGroup(children.length);
+      }
+      default: return i18n.stepSomething;
+    }
+  }
+
+  // "4", "4 and 6", "4, 6 and 9" -- step numbers as the bar counts them
+  const listSteps = (indexes) => {
+    const numbers = indexes.map((i) => i + 1);
+    if (numbers.length === 1) return String(numbers[0]);
+    return `${numbers.slice(0, -1).join(', ')} and ${numbers[numbers.length - 1]}`;
+  };
+
+  // `title` is given for the symbol-only buttons, which need a name for a screen
+  // reader and a tooltip for everyone else.
+  function makePlayerButton(className, label, title = '') {
+    const elButton = document.createElement('button');
+    elButton.type = 'button';
+    elButton.className = className;
+    elButton.textContent = label;
+    if (title) {
+      elButton.title = title;
+      elButton.setAttribute('aria-label', title);
+    }
+    return elButton;
+  }
+
+  async function playDrawing(fenceSource, target = null) {
+    const {svg: svgText, stored} = splitHistory(fenceSource.trim());
+    if (!stored) return;
+
+    // Changing the history means writing a new fence back, which is only
+    // possible where the markdown behind the drawing can be reached -- the same
+    // condition the "Edit drawing" button already goes by.  Elsewhere (a posted
+    // comment, a file view) the player is a viewer with step controls.
+    const source = target ? sourceForMarkup(target.elMarkup) : null;
+    const fenceIndex = source
+      ? [...target.elMarkup.querySelectorAll('.markup-draw')].indexOf(target.elContainer)
+      : -1;
+    const editable = Boolean(source) && fenceIndex >= 0;
+
+    const elOverlay = document.createElement('div');
+    elOverlay.className = 'markup-draw-overlay markup-draw-player';
+    const elHost = document.createElement('div');
+    elHost.className = 'markup-draw-host markup-draw-player-host';
+    elHost.textContent = i18n.loading;
+    const elBar = document.createElement('div');
+    elBar.className = 'markup-draw-player-bar';
+    const elBack = makePlayerButton('markup-draw-player-back', i18n.playBackIcon, i18n.playBack);
+    const elPlay = makePlayerButton('markup-draw-player-play', i18n.playIcon, i18n.playResume);
+    const elForward = makePlayerButton('markup-draw-player-forward', i18n.playForwardIcon, i18n.playForward);
+    const elRestart = makePlayerButton('markup-draw-player-restart', i18n.playRestartIcon, i18n.playRestart);
+    const elDelete = makePlayerButton('markup-draw-player-delete', i18n.playDeleteIcon, i18n.playDelete);
+    const elExport = makePlayerButton('markup-draw-player-export', i18n.playExportIcon, i18n.playExport);
+    const elSave = makePlayerButton('markup-draw-player-save', i18n.playSaveIcon, i18n.playSave);
+    const elClose = makePlayerButton('markup-draw-player-close', i18n.playCloseIcon, i18n.playClose);
+    const elProgress = document.createElement('div');
+    elProgress.className = 'markup-draw-player-progress';
+    const elFill = document.createElement('div');
+    elFill.className = 'markup-draw-player-fill';
+    elProgress.append(elFill);
+    const elStep = document.createElement('div');
+    elStep.className = 'markup-draw-player-step';
+    const elCaption = document.createElement('div');
+    elCaption.className = 'markup-draw-player-caption';
+    elBar.append(elBack, elPlay, elForward, elRestart, elProgress, elStep, elCaption);
+    if (cfg.exportAnimation) elBar.append(elExport);
+    if (editable) elBar.append(elDelete, elSave);
+    elBar.append(elClose);
+    elOverlay.append(elHost, elBar);
+    document.body.append(elOverlay);
+    document.body.classList.add('markup-draw-open');
+
+    let editor = null;
+    let entries = null; // the log, which the step controls may edit
+    let captions = [];
+    let position = 0; // how many entries have been applied
+    let dirty = false; // entries differ from what is in the markdown
+    let playing = false;
+    let run = 0; // bumped to abandon a playback in flight
+    let paused = false;
+    let waiting = null; // resolves when playback is let go again
+    let noteTimer = null;
+    let busy = null; // {label, done, total} while an export is running
+    let stopping = false; // an export was abandoned and should unwind
+    // waits in flight, so that pausing can cut one short instead of letting it
+    // run out first -- a wait here can be a second and a bit long, and a button
+    // that takes that long to answer reads as broken
+    const sleepers = new Set();
+    const report = {blockedImages: 0};
+
+    // a declaration, not a const: Escape can close the player while js-draw is
+    // still loading, which reaches this from above
+    function setPaused(value) {
+      paused = value;
+      if (paused) {
+        for (const stop of [...sleepers]) stop();
+      } else if (waiting) {
+        const resume = waiting;
+        waiting = null;
+        resume();
+      }
+      refresh();
+    }
+
+    const fail = (message) => {
+      elHost.textContent = message;
+      elBar.classList.add('markup-draw-player-dead');
+    };
+    // Abandons the playback in flight: bumping `run` makes it return at its next
+    // checkpoint, but a paused one is parked on a promise nobody would ever
+    // resolve, so it has to be let go as well or it keeps the editor alive.
+    const abandon = () => {
+      run++;
+      playing = false;
+      setPaused(false);
+    };
+    const setBusy = (label, done, total) => {
+      busy = {label, done, total};
+      refresh();
+    };
+    const clearBusy = () => {
+      busy = null;
+      refresh();
+    };
+    // an export unwinds by throwing this out of its replay
+    const stopIfAsked = () => {
+      if (stopping) throw new Error(EXPORT_STOPPED);
+    };
+    const shutDown = () => {
+      abandon();
+      stopping = true; // let an export in flight unwind instead of finishing
+      playerState = null;
+      clearTimeout(noteTimer);
+      editor?.remove();
+      elOverlay.remove();
+      document.body.classList.remove('markup-draw-open');
+    };
+    // Edits live in the player until they are saved, so leaving with unsaved
+    // ones is the moment to ask -- there is nowhere else they are kept.
+    const close = () => {
+      if (!dirty) {
+        shutDown();
+        return;
+      }
+      askConfirmation(elOverlay, {
+        title: i18n.playDiscard,
+        body: i18n.playDiscardBody,
+        confirm: i18n.playDiscardConfirm,
+        cancel: i18n.playDiscardCancel,
+        onConfirm: shutDown,
+      });
+    };
+    elClose.addEventListener('click', close);
+    elOverlay.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (elOverlay.querySelector('dialog[open]')) return;
+      close();
+    });
+    elOverlay.tabIndex = -1;
+    elOverlay.focus();
+
+    let journal;
+    try {
+      journal = JSON.parse(await unpackHistory(stored.codec, stored.data));
+      if (!journal || !Array.isArray(journal.e)) throw new Error('unexpected shape');
+    } catch (err) {
+      fail(`${i18n.playFailed} (${err.message || err})`);
+      return;
+    }
+    entries = journal.e;
+
+    let jsdraw;
+    try {
+      jsdraw = await loadJsDraw();
+    } catch (err) {
+      fail(String(err.message || err));
+      return;
+    }
+
+    // What to say once entry n has been applied.  Worked out up front so that
+    // stepping to any position says the same thing playing to it would.
+    function buildCaptions(list) {
+      const gaps = sessionGaps(list);
+      const out = new Array(list.length).fill('');
+      let sessionIndex = -1;
+      let current = '';
+      for (const [at, entry] of list.entries()) {
+        if (entry[0] === OP_SESSION) {
+          sessionIndex++;
+          if (sessionIndex === 0) {
+            current = typeof entry[1] === 'number' ? '' : i18n.playFound;
+          } else {
+            current = gaps.has(sessionIndex) ? describeGap(gaps.get(sessionIndex)) : i18n.playNextSession;
+          }
+        }
+        out[at] = current;
+      }
+      return out;
+    }
+    captions = buildCaptions(entries);
+
+    function note(text) {
+      elCaption.textContent = text;
+      elCaption.classList.add('markup-draw-player-note');
+      clearTimeout(noteTimer);
+      noteTimer = setTimeout(() => {
+        elCaption.classList.remove('markup-draw-player-note');
+        refresh();
+      }, 4000);
+    }
+
+    const controls = () => [elBack, elPlay, elForward, elRestart, elDelete, elSave, elExport];
+
+    function refresh() {
+      const total = entries.length;
+      if (busy) {
+        // Nothing else may touch the log or the canvas while an export is
+        // replaying it: the buttons go dead rather than queueing up behind it.
+        elFill.style.width = `${Math.round((busy.done / Math.max(1, busy.total)) * 100)}%`;
+        elStep.textContent = `${busy.done} / ${busy.total}`;
+        elCaption.classList.remove('markup-draw-player-note');
+        elCaption.textContent = busy.label;
+        for (const el of controls()) el.disabled = true;
+        return;
+      }
+      playerState = {
+        position,
+        total,
+        dirty,
+        editable,
+        // what is actually on the canvas at this step, so that where the player
+        // has got to can be checked exactly rather than guessed from pixels
+        components: editor ? editor.image.getAllComponents().length : 0,
+        drawing: describeRect(editor?.image.getImportExportRect()),
+      };
+      elFill.style.width = `${total ? Math.round((position / total) * 100) : 0}%`;
+      elStep.textContent = i18n.playStep(position, total);
+      // A note -- "saved", "is ready" -- borrows the caption for a few seconds.
+      // Only the caption: letting it skip the rest of this left every button the
+      // busy state had switched off dead until the note timed out.
+      if (!elCaption.classList.contains('markup-draw-player-note')) {
+        elCaption.textContent = position >= total
+          ? i18n.playDone
+          : (position > 0 ? captions[position - 1] : '');
+      }
+      // the same button pauses and resumes, so its name has to follow it -- a
+      // glyph alone would leave a screen reader saying "button"
+      const willPause = playing && !paused;
+      elPlay.textContent = willPause ? i18n.playPauseIcon : i18n.playIcon;
+      elPlay.title = willPause ? i18n.playPause : i18n.playResume;
+      elPlay.setAttribute('aria-label', willPause ? i18n.playPause : i18n.playResume);
+      // every control the busy state switched off has to be switched back on
+      // here, or an export leaves them dead for good
+      elPlay.disabled = false;
+      elRestart.disabled = false;
+      elExport.disabled = false;
+      elBack.disabled = position === 0;
+      elForward.disabled = position >= total;
+      // a session marker is a place in the log, not an action; there is nothing
+      // in the drawing to take away
+      elDelete.disabled = position === 0 || entries[position - 1][0] === OP_SESSION;
+      elSave.disabled = !dirty;
+    }
+
+    // Applying entry n is exactly what opening a drawing does.  There is no
+    // matching "unapply": js-draw's push clears the redo stack, so after
+    // "do A, undo, do B" the command A is no longer anywhere the editor can
+    // reach, and stepping back over the undo cannot be done with redo alone.
+    // Going backwards therefore rebuilds from the start -- slower, but it cannot
+    // drift away from what playing to the same point would have shown.
+    async function applyEntry(entry) {
+      if (entry[0] === OP_DO) {
+        editor.history.push(
+          jsdraw.SerializableCommand.deserialize(sanitizeCommandJson(entry[2], report), editor),
+          true,
+        );
+      } else if (entry[0] === OP_UNDO) {
+        await editor.history.undo();
+      } else if (entry[0] === OP_REDO) {
+        await editor.history.redo();
+      }
+    }
+
+    function freshEditor() {
+      // js-draw cannot empty an editor, so starting over means a new one
+      editor?.remove();
+      elHost.textContent = '';
+      editor = new jsdraw.Editor(elHost, {wheelEventsEnabled: 'only-if-focused'});
+      restoreCanvasFrame(jsdraw, editor, svgText);
+      position = 0;
+    }
+
+    async function rebuildTo(count) {
+      freshEditor();
+      while (position < count) {
+        await applyEntry(entries[position]);
+        position++;
+      }
+    }
+
+    // Replays a candidate log and reports the first entry that will not go
+    // through, or null if it all does.  Used to work out what a deletion really
+    // takes with it; it leaves the canvas on the candidate, so the caller has to
+    // put it back.
+    async function probe(list) {
+      freshEditor();
+      for (let i = 0; i < list.length; i++) {
+        try {
+          await applyEntry(list[i]);
+        } catch (err) {
+          return {index: i, error: String(err?.message || err)};
+        }
+      }
+      return null;
+    }
+
+    async function seek(to) {
+      const wanted = Math.max(0, Math.min(to, entries.length));
+      if (wanted < position) {
+        await rebuildTo(wanted);
+      } else {
+        while (position < wanted) {
+          await applyEntry(entries[position]);
+          position++;
+        }
+      }
+      refresh();
+    }
+
+    const guard = async (work) => {
+      try {
+        await work();
+        return true;
+      } catch (err) {
+        fail(`${i18n.playFailed} (${err.message || err})`);
+        return false;
+      }
+    };
+
+    // Everything that touches the editor goes through here, one at a time.
+    // Abandoning a playback only asks it to stop at its *next* checkpoint, so a
+    // step already in flight keeps running -- and applyEntry reads the current
+    // editor when it runs, not when it was queued.  Without this, that stray step
+    // lands on the editor a delete or a rebuild has just put in its place, which
+    // surfaces as a deletion that is agreed to and then refused: the replay that
+    // was meant to verify it runs on a canvas somebody else was still drawing on.
+    let chain = Promise.resolve();
+    const exclusive = (work) => {
+      const next = chain.then(work, work);
+      chain = next.then(() => {}, () => {});
+      return next;
+    };
+
+    const gate = () => (paused ? new Promise((resolve) => { waiting = resolve; }) : null);
+
+    // Pausing cuts the current wait short; the gate right behind it is what
+    // actually holds playback until it is let go again.
+    const wait = (ms) => new Promise((resolve) => {
+      const stop = () => {
+        clearTimeout(timer);
+        sleepers.delete(stop);
+        resolve();
+      };
+      const timer = setTimeout(stop, ms);
+      sleepers.add(stop);
+    });
+    const pace = async (ms) => {
+      await wait(ms);
+      await gate();
+    };
+
+    async function play() {
+      const mine = ++run;
+      playing = true;
+      setPaused(false);
+      // at the end, Play means "again"
+      if (position >= entries.length && !await exclusive(() => guard(() => seek(0)))) return;
+      while (position < entries.length) {
+        await gate();
+        if (mine !== run) return;
+        const entry = entries[position];
+        if (!await exclusive(() => guard(() => seek(position + 1)))) return;
+        if (mine !== run) return;
+        // no wait after the last one: there is nothing left to pace, and it would
+        // only delay saying that the recording has run out
+        if (position < entries.length) {
+          // a real pause is capped: nobody wants to watch somebody's lunch break
+          const gap = entry[0] === OP_SESSION
+            ? cfg.playbackSessionGap
+            : Math.max(cfg.playbackMinStep, Math.min(entry[1] ?? 0, cfg.playbackMaxGap));
+          await pace(gap / cfg.playbackSpeed);
+        }
+      }
+      if (mine !== run) return;
+      playing = false;
+      refresh();
+    }
+
+    elPlay.addEventListener('click', () => {
+      if (playing) {
+        setPaused(!paused);
+      } else {
+        void play();
+      }
+    });
+    elBack.addEventListener('click', () => {
+      abandon();
+      void exclusive(() => guard(() => seek(position - 1)));
+    });
+    elForward.addEventListener('click', () => {
+      abandon();
+      void exclusive(() => guard(() => seek(position + 1)));
+    });
+    elRestart.addEventListener('click', () => {
+      abandon();
+      // play() takes the lock a step at a time, so it must not be held across it
+      void exclusive(() => guard(() => seek(0))).then(() => play());
+    });
+
+    // Removing a step that later ones build on takes those with it -- leaving
+    // them behind would mean a history that cannot be replayed.  Which is why
+    // every deletion asks first, and one that carries others away says so and
+    // names them.
+    // Everything that has to go along with the step at `at`.
+    //
+    // Reading ids out of the log is only a first guess.  js-draw does not fail
+    // uniformly on a missing component -- `transform-element` throws,
+    // `selection-tool-transform` warns and carries on without it -- and a way of
+    // depending on a step that this does not model would otherwise show up as a
+    // deletion that is agreed to and then refused.  So the guess is *replayed*,
+    // and whatever will not go through is added and the replay tried again. That
+    // makes the answer right whatever the dependency turns out to be.
+    async function planDelete(at) {
+      const doomed = new Set([at, ...dependentsOf(entries, at)]);
+      let error = null;
+      for (let attempt = 0; attempt < MAX_DELETE_PROBES; attempt++) {
+        const keep = entries.map((_, i) => i).filter((i) => !doomed.has(i));
+        const failure = await probe(keep.map((i) => entries[i]));
+        if (!failure) return {steps: [...doomed].sort((a, b) => a - b), error: null};
+        error = failure.error;
+        doomed.add(keep[failure.index]);
+      }
+      return {steps: [...doomed].sort((a, b) => a - b), error};
+    }
+
+    async function applyDelete(steps) {
+      abandon();
+      const at = steps[0];
+      const doomed = [...steps].sort((a, b) => b - a); // last first, so the indexes hold
+      const removed = doomed.map((i) => [i, entries[i]]);
+      for (const i of doomed) entries.splice(i, 1);
+      captions = buildCaptions(entries);
+      try {
+        await rebuildTo(entries.length);
+      } catch (err) {
+        for (const [i, entry] of [...removed].reverse()) entries.splice(i, 0, entry);
+        captions = buildCaptions(entries);
+        if (!await guard(() => rebuildTo(at + 1))) return;
+        note(i18n.playDeleteBlocked(String(err?.message || err)));
+        return;
+      }
+      dirty = true;
+      // back to the step the reader was looking at, which is now the one before
+      // the deleted step
+      if (!await guard(() => rebuildTo(at))) return;
+      refresh();
+      if (steps.length > 1) note(i18n.playDeletedWith(steps.length));
+    }
+
+    elDelete.addEventListener('click', () => {
+      if (elDelete.disabled) return;
+      const at = position - 1;
+      const was = position;
+      elDelete.disabled = true;
+      // abandon first, so a playback in flight stops at its next checkpoint, then
+      // queue behind whatever step it was already running
+      abandon();
+      void exclusive(async () => {
+        const plan = await planDelete(at);
+        // planning replays candidate logs through the canvas, so put it back
+        if (!await guard(() => rebuildTo(was))) return;
+        refresh();
+        if (plan.error) {
+          note(i18n.playDeleteBlocked(plan.error));
+          return;
+        }
+        const others = plan.steps.filter((i) => i !== at);
+        // Deleting one step on its own needs no question: nothing reaches the
+        // markdown until Save, so the way back from a mis-aimed click is to close
+        // the player.  Taking other steps down with it is the case worth stopping
+        // for, because that is not visible from the button.
+        if (!others.length) {
+          void exclusive(() => applyDelete(plan.steps));
+          return;
+        }
+        askConfirmation(elOverlay, {
+          title: i18n.deleteStepWithDeps(describeCommand(entries[at][2]), others.length),
+          body: i18n.deleteStepWithDepsBody(others.length, listSteps(others)),
+          confirm: i18n.deleteConfirm,
+          cancel: i18n.deleteCancel,
+          onConfirm: () => void exclusive(() => applyDelete(plan.steps)),
+        });
+      });
+    });
+
+    // A browser only acts on a download while the click that asked for it is
+    // still counted as a user action, and that lapses after a few seconds.
+    // Building the SVG takes milliseconds, so it is still inside that window and
+    // just downloads; a recording takes far longer than the window, so asking
+    // once at the end makes the save a click of its own.  Reading the window
+    // rather than guessing at it means no second button sitting in the bar for
+    // a case that usually does not arise.
+    const offerFile = (name, blob) => {
+      const ask = cfg.exportAskBeforeSaving === 'always' ? true
+        : cfg.exportAskBeforeSaving === 'never' ? false
+          // no userActivation to read means no way to tell, so ask rather than
+          // hand the file to a browser that may drop it without a word
+          : !(navigator.userActivation?.isActive ?? false);
+      if (!ask) {
+        downloadBlob(name, blob);
+        note(i18n.playExportSaved(name));
+        return;
+      }
+      askChoice(elOverlay, {
+        title: i18n.playExportReady(name),
+        body: i18n.playExportReadyBody,
+        cancel: i18n.playExportDiscard,
+        choices: [{
+          label: i18n.playExportSaveNow,
+          hint: i18n.playExportSaveNowHint,
+          onPick: () => downloadBlob(name, blob),
+        }],
+      });
+    };
+
+    // The SVG is only as slow as replaying the log; the video is recorded live
+    // and so takes as long as watching it. Bundling them made the quick one wait
+    // for the slow one -- and two downloads from one click is exactly what
+    // Safari refuses, since by then neither is tied to the click any more.
+    async function exportAnimatedSvg() {
+      const durations = stepDurations(entries);
+      setBusy(i18n.playBuildingSvg, 0, entries.length);
+      const animated = await withScratchEditor(jsdraw, svgText, async (scratch) => {
+        const builder = buildAnimatedSvg(jsdraw, scratch, entries, durations, svgText);
+        await replayForExport(jsdraw, scratch, entries, async (at, touched) => {
+          stopIfAsked();
+          builder.step(at, touched, componentsById(scratch));
+          setBusy(i18n.playBuildingSvg, at + 1, entries.length);
+        });
+        return builder.finish();
+      });
+      offerFile(`${cfg.exportName}.svg`, new Blob([animated], {type: 'image/svg+xml'}));
+    }
+
+    async function exportVideo() {
+      const durations = stepDurations(entries);
+      setBusy(i18n.playRecording, 0, entries.length);
+      const video = await withScratchEditor(jsdraw, svgText, async (scratch) => {
+        const elCanvas = scratch.getRootElement().querySelector('canvas:not(.wetInkCanvas)');
+        if (!elCanvas) return null;
+        return await recordAnimation(elCanvas, durations, async (frame) => {
+          await replayForExport(jsdraw, scratch, entries, async (at) => {
+            stopIfAsked();
+            await frame(at);
+          });
+        }, (at) => setBusy(i18n.playRecording, at + 1, entries.length));
+      });
+      if (!video) {
+        note(i18n.playExportVideoUnavailable);
+        return;
+      }
+      offerFile(`${cfg.exportName}.${video.type.includes('mp4') ? 'mp4' : 'webm'}`, video);
+    }
+
+    const runExport = (work) => {
+      abandon();
+      void exclusive(async () => {
+        try {
+          await work();
+        } catch (err) {
+          if (String(err?.message) === EXPORT_STOPPED) return; // the player is closing
+          note(i18n.playExportFailed(String(err?.message || err)));
+        } finally {
+          clearBusy();
+        }
+      });
+    };
+
+    elExport.addEventListener('click', () => {
+      if (elExport.disabled) return;
+      const seconds = Math.max(1, Math.round(
+        (stepDurations(entries).reduce((sum, ms) => sum + ms, 0) + cfg.exportTailMs) / 1000,
+      ));
+      askChoice(elOverlay, {
+        title: i18n.playExport,
+        body: i18n.playExportBody,
+        cancel: i18n.playExportCancel,
+        choices: [
+          {label: i18n.playExportSvg, hint: i18n.playExportSvgHint,
+            onPick: () => runExport(exportAnimatedSvg)},
+          {label: i18n.playExportVideo, hint: i18n.playExportVideoHint(seconds),
+            onPick: () => runExport(exportVideo)},
+        ],
+      });
+    });
+
+    elSave.addEventListener('click', () => {
+      if (elSave.disabled) return;
+      abandon();
+      void exclusive(() => guard(async () => {
+        // The SVG is regenerated from the end of the edited log, so the picture
+        // in the markdown is the picture the log now produces.
+        await seek(entries.length);
+        const svgElem = await editor.toSVGAsync();
+        const packed = await packHistory(JSON.stringify({
+          v: HISTORY_VERSION, h: svgFingerprint(new XMLSerializer().serializeToString(svgElem)), e: entries,
+        }));
+        const out = attachHistory(new XMLSerializer().serializeToString(svgElem), packed);
+        // the markdown may have been edited while the player was open
+        const fence = findFenceByIndex(source.getValue(), fenceIndex);
+        if (!fence) {
+          note(i18n.playSaveGone);
+          return;
+        }
+        source.replaceRange(fence.start, fence.end, makeFence(out));
+        dirty = false;
+        refresh();
+        note(i18n.playSaved);
+      }));
+    });
+
+    if (!await guard(() => rebuildTo(0))) return;
+    await play();
   }
 
   function makeButton(className, withLabel) {
@@ -1486,6 +3214,9 @@
     }
   }
 
+  const describeRect = (rect) =>
+    (rect ? {x: rect.x, y: rect.y, w: rect.w, h: rect.h} : null);
+
   // Paste giteaDrawDebug() in the browser console to find out what this script
   // sees on a page where the button does not show up.
   window.giteaDrawDebug = () => {
@@ -1503,6 +3234,23 @@
       alignmentProblem: alignDebug.why,
       // the ids to look for under "Shape" in the pen dropdown
       umlPens: cfg.umlPens ? UML_PENS.map((pen) => pen.id) : [],
+      // what the recorder is doing, or why it is not recording
+      history: boardHistory ? boardHistory.describe() : historyDebug.state,
+      // With a board open: where the drawing sits on the canvas against where
+      // the board is looking.  A drawing that is not inside the view is what a
+      // replay that forgot to restore the canvas frame looks like -- the board
+      // opens on empty canvas somewhere else, with the drawing off to one side.
+      // With a player open: how far through the log it is, and what is on the
+      // canvas there.
+      player: playerState,
+      boardCanvas: boardEditor ? {
+        drawing: describeRect(boardEditor.image.getImportExportRect()),
+        visible: describeRect(boardEditor.viewport.visibleRect),
+        autoresize: boardEditor.image.getAutoresizeEnabled(),
+      } : null,
+      // how many rendered drawings on this page carry a recorded history
+      drawingsWithHistory: [...document.querySelectorAll(CODE_SELECTOR)]
+        .filter((el) => historyRegExp().test(el.textContent ?? '')).length,
       codeEditors: (window.codeEditors ?? []).length,
       comboEditors: document.querySelectorAll('.combo-markdown-editor').length,
       markdownToolbars: document.querySelectorAll('.combo-markdown-editor markdown-toolbar').length,

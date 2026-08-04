@@ -1,0 +1,872 @@
+// Copyright 2026 The Gitea Authors. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// The edit history: recording what Ctrl+Z can take back, carrying it in the
+// fence, and replaying it into a later board so the undo stack outlives the tab.
+
+import {deflateRawSync, inflateRawSync} from 'node:zlib';
+import {readFile} from 'node:fs/promises';
+import {
+  BASE, createChecks, drawStroke, launchBrowser, openBoard, saveBoard, scribbleOnCanvas,
+  screenshot, stripFence, watchPage,
+} from '../lib.mjs';
+
+const {check, finish} = createChecks('history');
+
+const HISTORY_RE = /<!--gitea-draw-history:(\d+):([a-z]):([A-Za-z0-9+/=]*)-->/;
+const OP_SESSION = 0, OP_DO = 1, OP_UNDO = 2;
+
+const readJournal = (fence) => {
+  const match = HISTORY_RE.exec(fence);
+  if (!match) return null;
+  const bytes = Buffer.from(match[3], 'base64');
+  return JSON.parse((match[2] === 'z' ? inflateRawSync(bytes) : bytes).toString('utf8'));
+};
+
+const makeFence = (svg, journal) => {
+  const packed = deflateRawSync(Buffer.from(JSON.stringify(journal), 'utf8')).toString('base64');
+  const comment = `<!--gitea-draw-history:1:z:${packed}-->`;
+  const close = svg.lastIndexOf('</svg>');
+  return `\`\`\`js-draw\n${svg.slice(0, close)}${comment}${svg.slice(close)}\n\`\`\`\n`;
+};
+
+const countPaths = (fence) => (fence.match(/<path/g) ?? []).length;
+
+// The canvas frame: where the drawing sits and whether it grows with its
+// content. loadFromSVG takes both from the SVG -- the viewBox and a class on the
+// root -- so a replay that only reinstates components has to put them back too.
+const frameOf = (fence) => {
+  const svg = stripFence(fence).replace(HISTORY_RE, '');
+  return {
+    viewBox: /viewBox="([^"]*)"/.exec(svg)?.[1] ?? null,
+    autoresize: svg.includes('js-draw--autoresize'),
+  };
+};
+
+const source = (page) => page.locator('textarea.markdown-text-editor').inputValue();
+
+const setSource = (page, text, caret = 20) =>
+  page.locator('textarea.markdown-text-editor').evaluate((el, [value, pos]) => {
+    el.value = value;
+    el.focus();
+    el.setSelectionRange(pos, pos);
+  }, [text, caret]);
+
+// giteaDrawDebug().history is a string until the recorder is up; the board is
+// open before that happens, so every read has to wait for the object.
+const historyOf = (page, field = 'history') => page.waitForFunction((key) => {
+  const report = window.giteaDrawDebug();
+  // the recorder is up last, so waiting for it means the board is fully open
+  return report.history && typeof report.history === 'object' ? report[key] : null;
+}, field, {timeout: 20000}).then((handle) => handle.jsonValue());
+
+const clickUndo = (page) =>
+  page.locator('.markup-draw-overlay .toolwidget-tag--undo .toolbar-button').first().click();
+
+const browser = await launchBrowser();
+const context = await browser.newContext({viewport: {width: 1280, height: 900}, acceptDownloads: true});
+const page = watchPage(await context.newPage());
+await page.goto(BASE);
+
+// --- session one: a drawing made from scratch
+
+await openBoard(page);
+// what an empty board looks like, to tell "the drawing is off screen" apart
+// from "the drawing is there" further down
+const blankBoard = await page.locator('.markup-draw-overlay canvas').first().screenshot();
+const fresh = await historyOf(page);
+check('a new drawing starts recording', fresh.problem === null && fresh.rejected === null);
+check('the starting canvas is adopted as the log\'s first command', fresh.commands === 1);
+
+await scribbleOnCanvas(page);
+const box = await page.locator('.markup-draw-overlay canvas').first().boundingBox();
+await drawStroke(page, [
+  [box.x + box.width / 2 - 80, box.y + box.height / 2 + 80],
+  [box.x + box.width / 2 + 80, box.y + box.height / 2 + 100],
+]);
+const drawn = await historyOf(page);
+check('each stroke is recorded', drawn.commands === 3, `${drawn.commands} commands`);
+check('the strokes are on the undo stack', drawn.undoStack === 3);
+const drawnBoard = await page.locator('.markup-draw-overlay canvas').first().screenshot();
+await saveBoard(page);
+
+const fence1 = await source(page);
+const journal1 = readJournal(fence1);
+check('the saved fence carries a history comment', Boolean(journal1));
+check('the payload is compressed', HISTORY_RE.exec(fence1)[2] === 'z');
+check('the log is a script from an empty canvas',
+  journal1.e.filter((e) => e[0] === OP_DO).length === 3);
+check('the log fingerprints the SVG it describes', typeof journal1.h === 'string');
+check('an adopted starting canvas has no time of its own',
+  journal1.e[0][0] === OP_SESSION && journal1.e[0][1] === null);
+check('the editing session carries an absolute anchor',
+  journal1.e.some((e) => e[0] === OP_SESSION && typeof e[1] === 'number'));
+check('gaps within a session are recorded',
+  journal1.e.some((e) => e[0] === OP_DO && e[1] > 0));
+
+const svg1 = stripFence(fence1).replace(HISTORY_RE, '');
+check('the history rides inside the SVG, not beside it',
+  !stripFence(fence1).startsWith('<!--') && svg1.endsWith('</svg>'));
+check('one fence still holds one drawing', (fence1.match(/```js-draw/g) ?? []).length === 1);
+
+const overhead = (stripFence(fence1).length - svg1.length) / svg1.length;
+check('the history is a fraction of the drawing', overhead < 1.5,
+  `svg ${svg1.length} chars, history +${Math.round(overhead * 100)}%`);
+
+// --- it still renders, and the log is not mistaken for picture
+
+await page.evaluate((text) => window.renderFence('standalone', text), stripFence(fence1));
+const img = page.locator('#standalone img.markup-draw-image');
+await img.waitFor({timeout: 10000});
+check('a drawing with a history still renders', await img.evaluate((el) => el.complete && el.naturalWidth > 0));
+check('rendering it reports no error', await page.locator('#standalone .markup-block-error').count() === 0);
+
+// --- session two: the stack comes back
+
+await setSource(page, fence1);
+await openBoard(page);
+const reopened = await historyOf(page);
+check('reopening replays the log rather than loading the SVG',
+  reopened.rejected === null && reopened.commands === 3);
+check('the undo stack is restored across the session boundary', reopened.undoStack === 3);
+check('the log knows which session each command came from', reopened.sessions === 3);
+
+// A replay reinstates the strokes; the canvas they sit on comes from the SVG.
+// Without that the board opens on js-draw's default region somewhere else
+// entirely, so the drawing is off to one side of the view -- which is the whole
+// symptom: a board zoomed into one corner with a stray grey box beside it.
+const frame = await historyOf(page, 'boardCanvas');
+const inView = (rect, view) =>
+  rect.x + rect.w / 2 >= view.x && rect.x + rect.w / 2 <= view.x + view.w &&
+  rect.y + rect.h / 2 >= view.y && rect.y + rect.h / 2 <= view.y + view.h;
+check('a replayed drawing is inside the view, not off beside it',
+  inView(frame.drawing, frame.visible),
+  `drawing at ${JSON.stringify(frame.drawing)}, looking at ${JSON.stringify(frame.visible)}`);
+check('the board shows something rather than empty canvas',
+  Buffer.compare(await page.locator('.markup-draw-overlay canvas').first().screenshot(), blankBoard) !== 0);
+await screenshot(page, 'history-reopened-board');
+
+// Saving straight back out, with nothing touched in between, must reproduce the
+// same canvas. It gets its own open/save cycle because the undo tests below
+// empty the drawing, and an emptied autoresizing canvas legitimately shrinks.
+await saveBoard(page);
+const resaved = await source(page);
+check('a replayed drawing saves back onto the same canvas',
+  frameOf(resaved).viewBox === frameOf(fence1).viewBox,
+  `${frameOf(fence1).viewBox} -> ${frameOf(resaved).viewBox}`);
+check('and keeps whether that canvas grows with its content',
+  frameOf(resaved).autoresize === frameOf(fence1).autoresize,
+  `${frameOf(fence1).autoresize} -> ${frameOf(resaved).autoresize}`);
+check('a round trip does not multiply the drawing',
+  countPaths(resaved) === countPaths(fence1), `${countPaths(fence1)} -> ${countPaths(resaved)} paths`);
+
+await setSource(page, fence1);
+await openBoard(page);
+
+// --- undoing back past the start of this session asks first
+
+await clickUndo(page);
+const elConfirm = page.locator('.markup-draw-confirm');
+await elConfirm.waitFor({timeout: 5000});
+check('undoing into an earlier session asks first', await elConfirm.count() === 1);
+check('the question says when that work was done',
+  /\d{1,4}[/:.\-\s]/.test(await elConfirm.textContent()));
+await screenshot(page, 'history-undo-confirm');
+
+await page.locator('.markup-draw-confirm-actions button').first().click();
+await elConfirm.waitFor({state: 'detached', timeout: 5000});
+check('declining leaves the work alone', (await historyOf(page)).undoStack === 3);
+
+await clickUndo(page);
+await elConfirm.waitFor({timeout: 5000});
+await page.locator('.markup-draw-confirm-go').click();
+await elConfirm.waitFor({state: 'detached', timeout: 5000});
+check('accepting undoes it', (await historyOf(page)).undoStack === 2);
+
+await clickUndo(page);
+await page.waitForTimeout(400);
+check('it does not ask again for a session already agreed to',
+  await elConfirm.count() === 0 && (await historyOf(page)).undoStack === 1);
+
+// the one below belongs to the adopted starting canvas, a different session
+await clickUndo(page);
+await elConfirm.waitFor({timeout: 5000});
+check('it asks again when the next undo reaches a different session', await elConfirm.count() === 1);
+check('a session with no recorded time says so, rather than inventing one',
+  !/\d{4}/.test(await elConfirm.textContent()));
+await page.locator('.markup-draw-confirm-actions button').first().click();
+await elConfirm.waitFor({state: 'detached', timeout: 5000});
+
+await saveBoard(page);
+const fence2 = await source(page);
+const journal2 = readJournal(fence2);
+check('undoing is recorded too', journal2.e.filter((e) => e[0] === OP_UNDO).length === 2);
+check('the saved SVG is the undone drawing', countPaths(fence2) === countPaths(fence1) - 2,
+  `${countPaths(fence1)} -> ${countPaths(fence2)} paths`);
+
+// --- session three: what was undone can still be redone
+
+await setSource(page, fence2);
+await openBoard(page);
+const third = await historyOf(page);
+check('a reopened board restores the undone state, not the drawn one',
+  third.rejected === null && third.undoStack === 1);
+await page.locator('.markup-draw-overlay .toolwidget-tag--redo .toolbar-button').first().click();
+await page.waitForTimeout(300);
+check('and can redo across the session boundary', (await historyOf(page)).undoStack === 2);
+await saveBoard(page);
+check('redoing brings the stroke back',
+  countPaths(await source(page)) === countPaths(fence2) + 1);
+
+// --- an SVG changed outside the board wins over the log
+
+// a stroke taken out of the SVG by hand, the way someone resolving a merge or
+// trimming a drawing in a text editor would
+const tampered = fence1.replace(/<path(?![\s\S]*<path)[^>]*>/, '');
+check('the tamper case really does change the drawing',
+  countPaths(tampered) === countPaths(fence1) - 1);
+await setSource(page, tampered);
+await openBoard(page);
+const tamperedInfo = await historyOf(page);
+check('a hand-edited SVG is loaded, not replayed over',
+  /edited outside the board/.test(tamperedInfo.rejected ?? ''), tamperedInfo.rejected ?? 'not rejected');
+check('and recording starts again from what is actually there',
+  tamperedInfo.problem === null && tamperedInfo.commands === 1);
+await saveBoard(page);
+check('so the hand edit survives instead of being undone by the log',
+  countPaths(await source(page)) === countPaths(fence1) - 1,
+  `${countPaths(fence1)} -> ${countPaths(await source(page))} paths`);
+
+// --- a recorded command may not fetch a URL of its author's choosing
+//
+// The JSON way into js-draw is guarded less than the SVG way:
+// ImageComponent.deserializeFromJSON assigns `src` straight through. Without
+// the sanitiser, opening this drawing would call home for whoever wrote it.
+
+const probeUrl = `${BASE}/should-never-be-fetched.png`;
+const requested = [];
+page.on('request', (req) => {
+  if (req.url().includes('should-never-be-fetched')) requested.push(req.url());
+});
+await setSource(page, makeFence(
+  '<svg viewBox="0 0 100 100" width="100" height="100" xmlns="http://www.w3.org/2000/svg"></svg>',
+  {
+    v: 1,
+    e: [[OP_SESSION, null], [OP_DO, 0, {
+      commandType: 'add-element',
+      data: {
+        elemData: {
+          name: 'image-component',
+          zIndex: 1,
+          id: 'probe',
+          data: {src: probeUrl, label: 'probe', width: 8, height: 8, transform: [1, 0, 0, 0, 1, 0, 0, 0, 1]},
+        },
+      },
+    }]],
+  },
+));
+await openBoard(page);
+const hostile = await historyOf(page);
+await page.waitForTimeout(800);
+check('a recorded remote image is neutralised, not fetched', requested.length === 0,
+  requested.join(', '));
+check('and the drawing still replays around it',
+  hostile.rejected === null && hostile.blockedImages === 1,
+  `blocked ${hostile.blockedImages}`);
+await saveBoard(page);
+check('the cleaned command is what gets written back',
+  !readJournal(await source(page))?.e.some((e) => JSON.stringify(e).includes('should-never-be-fetched')));
+
+// --- a log that parses but cannot replay must not leave half a drawing
+
+await setSource(page, makeFence(
+  '<svg viewBox="0 0 100 100" width="100" height="100" xmlns="http://www.w3.org/2000/svg"></svg>',
+  {v: 1, e: [[OP_SESSION, null], [OP_DO, 0, {commandType: 'no-such-command', data: {}}]]},
+));
+await openBoard(page);
+const broken = await historyOf(page);
+check('an unreplayable log falls back to the SVG',
+  /could not be replayed/.test(broken.rejected ?? ''), broken.rejected ?? 'not rejected');
+check('and the board is usable rather than half-built', broken.problem === null);
+// leave nothing open behind us: the stepping tests further down drive this page
+await page.locator('.markup-draw-overlay .toolwidget-tag--exit .toolbar-button').first().click();
+await page.locator('.markup-draw-overlay').waitFor({state: 'detached', timeout: 10000});
+
+// --- the switch, and the size limit the history must not eat into
+//
+// The limit is set between the drawing on its own and the drawing plus its log,
+// so it can only pass if the log is excluded from the measurement.
+
+const limit = svg1.length + 50;
+const off = watchPage(await browser.newPage({viewport: {width: 1280, height: 900}}));
+await off.addInitScript((maxSourceChars) => {
+  window.__cfgOverride = {history: false, maxSourceChars};
+}, limit);
+await off.goto(BASE);
+await openBoard(off);
+await scribbleOnCanvas(off);
+await saveBoard(off);
+check('history: false writes no comment', !HISTORY_RE.test(await source(off)));
+
+await off.evaluate((text) => window.renderFence('standalone', text), stripFence(fence1));
+await off.waitForTimeout(500);
+check('a history does not count towards the drawing size limit',
+  stripFence(fence1).length > limit && await off.locator('#standalone .markup-block-error').count() === 0,
+  `drawing ${svg1.length}, with history ${stripFence(fence1).length}, limit ${limit}`);
+
+// --- what it costs on a drawing with some work in it
+//
+// The overhead is fixed-cost heavy, so a two-stroke sketch is the worst case and
+// says nothing useful. This is the number the README quotes.
+
+const big = watchPage(await browser.newPage({viewport: {width: 1280, height: 900}}));
+await big.goto(BASE);
+await openBoard(big);
+const canvas = await big.locator('.markup-draw-overlay canvas').first().boundingBox();
+for (let n = 0; n < 12; n++) {
+  const y = canvas.y + 80 + n * 20;
+  const points = [[canvas.x + 60, y]];
+  for (let i = 1; i <= 14; i++) points.push([canvas.x + 60 + i * 30, y + Math.sin(i / 2 + n) * 18]);
+  await drawStroke(big, points);
+}
+await saveBoard(big);
+const fenceBig = stripFence(await source(big));
+const svgBig = fenceBig.replace(HISTORY_RE, '');
+// A log is a compressed second copy of the drawing -- js-draw serializes a
+// stroke's path as the same "d" string the SVG carries -- so costing less than
+// the drawing itself is the real bar. Storing anything per-component that is not
+// needed (loadSaveData was the one) shows up here immediately.
+const cost = (fenceBig.length - svgBig.length) / svgBig.length;
+check('the history costs less than the drawing it describes', cost < 1,
+  `svg ${svgBig.length} chars, history +${Math.round(cost * 100)}%`);
+check('a busier drawing records every stroke',
+  readJournal(await source(big)).e.filter((e) => e[0] === OP_DO).length === 13);
+
+// --- playing a recorded history back
+//
+// A fresh page, because the first thing to check is that a rendered drawing does
+// not deserialize anybody's recorded commands until somebody asks it to.
+
+const viewer = watchPage(await browser.newPage({viewport: {width: 1280, height: 900}}));
+await viewer.addInitScript(() => {
+  window.__cfgOverride = {playbackMinStep: 500, playbackMaxGap: 500, playbackSessionGap: 500};
+});
+await viewer.goto(BASE);
+await viewer.evaluate((text) => window.renderFence('standalone', text), stripFence(fence1));
+await viewer.locator('#standalone img.markup-draw-image').waitFor({timeout: 10000});
+await viewer.waitForTimeout(400);
+
+check('a drawing with a history offers a play button',
+  await viewer.locator('#standalone .markup-draw-play').count() === 1);
+check('rendering one does not load js-draw, let alone replay it',
+  await viewer.evaluate(() => performance.getEntriesByType('resource')
+    .every((r) => !r.name.includes('js-draw/bundle.js'))));
+
+await viewer.evaluate(() => window.renderFence('standalone',
+  '<svg viewBox="0 0 40 40" width="40" height="40" xmlns="http://www.w3.org/2000/svg"></svg>'));
+await viewer.waitForTimeout(300);
+check('a drawing without one does not', await viewer.locator('#standalone .markup-draw-play').count() === 1);
+
+await viewer.locator('#standalone .markup-draw-play').first().click();
+const player = viewer.locator('.markup-draw-player');
+await player.waitFor({timeout: 30000});
+await viewer.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+check('the play button opens a player', await player.count() === 1);
+
+const fill = () => viewer.locator('.markup-draw-player-fill').evaluate((el) => el.style.width);
+await viewer.waitForTimeout(700);
+await viewer.locator('.markup-draw-player-play').click(); // pause
+const early = await fill();
+const midway = await viewer.locator('.markup-draw-player-host').screenshot();
+await viewer.waitForTimeout(1200);
+check('pausing stops it where it was', await fill() === early, `stuck at ${early}`);
+
+await viewer.locator('.markup-draw-player-play').click(); // resume
+await viewer.waitForFunction(
+  () => document.querySelector('.markup-draw-player-fill')?.style.width === '100%',
+  null, {timeout: 30000},
+);
+check('it plays to the end', await fill() === '100%');
+await viewer.locator('.markup-draw-player-caption')
+  .filter({hasText: 'End of the recorded history'}).waitFor({timeout: 5000});
+check('and says so', true);
+// asserted on the accessible name, not the glyph: the label is a symbol now,
+// and the name is what actually has to stay right
+check('a finished playback offers to play again rather than to pause',
+  await viewer.locator('.markup-draw-player-play').getAttribute('aria-label') === 'Play');
+await viewer.locator('.markup-draw-player-restart').click();
+await viewer.waitForTimeout(300);
+check('restarting begins again from an empty canvas', await fill() !== '100%', `fill ${await fill()}`);
+const ended = await viewer.locator('.markup-draw-player-host').screenshot();
+check('the drawing appears as it goes, rather than all at once at the end',
+  Buffer.compare(midway, ended) !== 0);
+await screenshot(viewer, 'history-playback');
+
+await viewer.locator('.markup-draw-player-close').click();
+await player.waitFor({state: 'detached', timeout: 5000});
+check('closing the player puts the page back', await viewer.locator('.markup-draw-player').count() === 0);
+
+// --- a history that cannot be played says so instead of showing nothing
+
+await viewer.evaluate(() => window.renderFence('standalone',
+  '<svg viewBox="0 0 40 40" width="40" height="40" xmlns="http://www.w3.org/2000/svg">' +
+  '<!--gitea-draw-history:1:z:bm90IGRlZmxhdGVkIGF0IGFsbA==--></svg>'));
+await viewer.waitForTimeout(300);
+await viewer.locator('#standalone .markup-draw-play').last().click();
+await viewer.locator('.markup-draw-player').waitFor({timeout: 15000});
+await viewer.waitForTimeout(800);
+check('an unreadable history reports itself rather than hanging',
+  /could not be played back/.test(await viewer.locator('.markup-draw-player-host').textContent()));
+check('and only the close button is left to press',
+  await viewer.locator('.markup-draw-player-play').isVisible() === false);
+
+// --- stepping through, deleting a step, and writing the result back
+//
+// This one runs on the main page, whose drawing sits in a markdown editor: the
+// player can only save where there is text behind the drawing to save into.
+
+await setSource(page, fence1);
+await page.evaluate((text) => {
+  document.getElementById('preview').replaceChildren();
+  window.renderFence('preview', text);
+}, stripFence(fence1));
+await page.locator('#preview img.markup-draw-image').waitFor({timeout: 10000});
+await page.locator('#preview .markup-draw-play').click();
+await page.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+const stepText = () => page.locator('.markup-draw-player-step').textContent();
+const playerOf = (page) => page.evaluate(() => window.giteaDrawDebug().player);
+const atEnd = () => page.locator('.markup-draw-player-step')
+  .filter({hasText: `${journal1.e.length} / ${journal1.e.length}`}).waitFor({timeout: 30000});
+await atEnd();
+check('the player counts the steps it has applied', await stepText() === '5 / 5');
+
+// --- back and forward
+await page.locator('.markup-draw-player-back').click();
+await page.waitForTimeout(300);
+check('back one step rewinds the drawing', await stepText() === '4 / 5');
+// The state, not the pixels: a stroke pushed a moment ago sits on js-draw's
+// wet-ink layer and composites a hair differently from one already flattened,
+// so two identical drawings do not have to be identical images.
+const atFour = await playerOf(page);
+await page.locator('.markup-draw-player-back').click();
+await page.waitForTimeout(300);
+check('and again', await stepText() === '3 / 5');
+check('rewinding actually removes a stroke',
+  (await playerOf(page)).components === atFour.components - 1,
+  `${atFour.components} -> ${(await playerOf(page)).components} components`);
+await page.locator('.markup-draw-player-forward').click();
+await page.waitForTimeout(400);
+check('forward one step puts it back', await stepText() === '4 / 5');
+const backAgain = await playerOf(page);
+check('stepping back then forward lands on exactly the state going forward gives',
+  backAgain.components === atFour.components &&
+  JSON.stringify(backAgain.drawing) === JSON.stringify(atFour.drawing),
+  `${JSON.stringify(atFour)} vs ${JSON.stringify(backAgain)}`);
+
+await page.locator('.markup-draw-player-back').click();
+await page.locator('.markup-draw-player-back').click();
+await page.locator('.markup-draw-player-back').click();
+await page.waitForTimeout(400);
+check('it stops at the start rather than running off the end', await stepText() === '1 / 5');
+await page.locator('.markup-draw-player-back').click();
+await page.waitForTimeout(300);
+check('and back is refused there',
+  await stepText() === '0 / 5' && await page.locator('.markup-draw-player-back').isDisabled());
+check('deleting is refused on a session marker, which draws nothing',
+  await page.locator('.markup-draw-player-delete').isDisabled());
+check('nothing is offered for saving until something is changed',
+  await page.locator('.markup-draw-player-save').isDisabled());
+
+// --- a step that a later one builds on cannot be removed
+await page.locator('.markup-draw-player-forward').click();
+await page.locator('.markup-draw-player-forward').click();
+await page.waitForTimeout(400);
+check('back at the first drawn step', await stepText() === '2 / 5');
+await screenshot(page, 'history-stepping');
+
+// --- delete the last stroke and save it back
+while (await stepText() !== '5 / 5') {
+  await page.locator('.markup-draw-player-forward').click();
+  await page.waitForTimeout(200);
+}
+check('the last step can be deleted', !await page.locator('.markup-draw-player-delete').isDisabled());
+// a step nothing builds on goes without a question: closing without saving is
+// the way back, and that is checked below
+await page.locator('.markup-draw-player-delete').click();
+await page.waitForTimeout(700);
+check('deleting a lone step asks nothing',
+  await page.locator('.markup-draw-confirm').count() === 0);
+check('and shortens the log', await stepText() === '4 / 4', await stepText());
+check('and offers to save the result', !await page.locator('.markup-draw-player-save').isDisabled());
+
+await page.locator('.markup-draw-player-save').click();
+await page.locator('.markup-draw-player-caption')
+  .filter({hasText: 'Saved to the markdown'}).waitFor({timeout: 15000});
+const edited = await source(page);
+check('saving writes the shortened drawing back into the fence',
+  countPaths(edited) === countPaths(fence1) - 1,
+  `${countPaths(fence1)} -> ${countPaths(edited)} paths`);
+const editedJournal = readJournal(edited);
+check('and writes the shortened log with it',
+  editedJournal.e.length === journal1.e.length - 1,
+  `${journal1.e.length} -> ${editedJournal.e.length} entries`);
+check('saving clears the unsaved-changes state',
+  await page.locator('.markup-draw-player-save').isDisabled());
+await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-player').waitFor({state: 'detached', timeout: 5000});
+check('closing after saving asks nothing', await page.locator('.markup-draw-confirm').count() === 0);
+
+// the edited drawing must still be a drawing: reopen it in the board
+await setSource(page, edited);
+await openBoard(page);
+const afterEdit = await historyOf(page);
+check('the edited log still opens in the board',
+  afterEdit.rejected === null && afterEdit.problem === null,
+  afterEdit.rejected ?? 'clean');
+check('with one fewer command than before', afterEdit.commands === 2, `${afterEdit.commands} commands`);
+await saveBoard(page);
+
+// --- closing with unsaved edits asks first
+await setSource(page, fence1);
+await page.evaluate((text) => {
+  document.getElementById('preview').replaceChildren();
+  window.renderFence('preview', text);
+}, stripFence(fence1));
+await page.waitForTimeout(300);
+await page.locator('#preview .markup-draw-play').click();
+await page.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+await page.locator('.markup-draw-player-step')
+  .filter({hasText: '5 / 5'}).waitFor({timeout: 30000});
+await page.locator('.markup-draw-player-delete').click();
+await page.waitForTimeout(700);
+const before = await source(page);
+await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-confirm').waitFor({timeout: 5000});
+check('closing with unsaved edits asks first',
+  await page.locator('.markup-draw-confirm').count() === 1);
+await page.locator('.markup-draw-confirm-actions button').first().click();
+await page.waitForTimeout(300);
+check('declining keeps the player open',
+  await page.locator('.markup-draw-player').count() === 1);
+await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-confirm-go').click();
+await page.locator('.markup-draw-player').waitFor({state: 'detached', timeout: 5000});
+check('discarding leaves the markdown untouched', await source(page) === before);
+
+// --- a step that a later one builds on cannot be taken out
+//
+// Deleting the stroke while a later command still moves it would leave a log
+// that replays into nothing -- js-draw throws on a transform whose component is
+// gone. The check has to cover the whole log, not just up to the deletion, or it
+// would pass here and fail later on save.
+
+const strokeStep = journal1.e.find((e) => e[0] === OP_DO &&
+  e[2]?.data?.elemData?.name !== 'background-component' && e[2]?.data?.elemData?.id);
+const strokeId = strokeStep[2].data.elemData.id;
+await setSource(page, makeFence(svg1, {
+  v: 1,
+  e: [
+    [OP_SESSION, null],
+    [OP_DO, 0, strokeStep[2]],
+    // moves the stroke the step before it drew
+    [OP_DO, 0, {
+      commandType: 'transform-element',
+      data: {id: strokeId, transfm: [1, 0, 20, 0, 1, 20, 0, 0, 1], targetZIndex: 3, origZIndex: 2},
+    }],
+  ],
+}));
+await page.evaluate((text) => {
+  document.getElementById('preview').replaceChildren();
+  window.renderFence('preview', text);
+}, stripFence(await source(page)));
+await page.locator('#preview .markup-draw-play').click();
+await page.locator('.markup-draw-player-step').filter({hasText: '3 / 3'}).waitFor({timeout: 30000});
+await page.locator('.markup-draw-player-back').click();
+await page.waitForTimeout(500);
+check('positioned on the step the next one depends on', await stepText() === '2 / 3');
+await page.locator('.markup-draw-player-delete').click();
+await page.locator('.markup-draw-confirm').waitFor({timeout: 5000});
+const warned = await page.locator('.markup-draw-confirm').textContent();
+check('deleting a step others build on warns that they go too',
+  /builds on it|build on it/.test(warned), warned);
+check('and names what it is about to remove', /Delete a stroke and/.test(warned), warned);
+check('and names which steps those are', /Step 3\b/.test(warned), warned);
+await screenshot(page, 'history-delete-dependents');
+
+await page.locator('.markup-draw-confirm-actions button').first().click();
+await page.waitForTimeout(400);
+const untouched = await playerOf(page);
+check('declining leaves every step in place',
+  untouched.total === 3 && untouched.position === 2, JSON.stringify(untouched));
+check('so there is still nothing to save', await page.locator('.markup-draw-player-save').isDisabled());
+
+await page.locator('.markup-draw-player-delete').click();
+await page.locator('.markup-draw-confirm-go').click();
+await page.waitForTimeout(800);
+const cascaded = await playerOf(page);
+check('confirming takes the dependent step with it',
+  cascaded.total === 1, JSON.stringify(cascaded));
+check('and the result is offered for saving',
+  !await page.locator('.markup-draw-player-save').isDisabled());
+// unsaved now, so closing asks -- discard and move on
+await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-confirm-go').click();
+await page.locator('.markup-draw-player').waitFor({state: 'detached', timeout: 5000});
+
+// --- deleting while a playback is still in flight
+//
+// This is what showed up in real use: a deletion agreed to and then refused,
+// with playback afterwards showing the step still there. Abandoning a playback
+// only asks it to stop at its next checkpoint, and applyEntry uses the editor
+// that is current when it runs -- so a step already in flight could land on the
+// editor the deletion had just put in its place, and the replay meant to verify
+// the deletion ran on a canvas somebody else was still drawing on.
+
+await setSource(page, fence1);
+await page.evaluate((text) => {
+  document.getElementById('preview').replaceChildren();
+  window.renderFence('preview', text);
+}, stripFence(fence1));
+await page.locator('#preview img.markup-draw-image').waitFor({timeout: 10000});
+await page.locator('#preview .markup-draw-play').click();
+await page.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+
+// mid-playback, not after it: catch it on a step that can be deleted and click
+// straight away, so the delete lands while a play step is still in flight
+await page.locator('.markup-draw-player-step').filter({hasText: '4 / 5'}).waitFor({timeout: 30000});
+await page.locator('.markup-draw-player-delete').click();
+await page.waitForTimeout(1500);
+const raced = await playerOf(page);
+const saidNo = await page.locator('.markup-draw-player-caption').textContent();
+check('deleting during playback is not refused by its own verification',
+  !/cannot be removed/.test(saidNo), saidNo);
+check('and the step really is gone', raced.total === journal1.e.length - 1 && raced.dirty,
+  JSON.stringify(raced));
+await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-confirm-go').click();
+await page.locator('.markup-draw-player').waitFor({state: 'detached', timeout: 5000});
+
+// --- with no editable text behind it, the player is a viewer
+check('a drawing with no editor behind it offers no delete or save',
+  await viewer.locator('.markup-draw-player-delete').count() === 0 &&
+  await viewer.locator('.markup-draw-player-save').count() === 0);
+check('but still offers the step controls',
+  await viewer.locator('.markup-draw-player-back').count() === 1 &&
+  await viewer.locator('.markup-draw-player-forward').count() === 1);
+
+// --- exporting the animation: one click, two files
+//
+// The point of choosing SMIL and MediaRecorder was that neither needs a
+// library, so both artifacts are checked for real: the SVG must actually carry
+// timed SMIL, and the video must be a non-empty file of a type the browser
+// named. js-draw is already loaded here, so this also confirms no other network
+// request appears.
+
+const downloads = [];
+page.on('download', async (d) => {
+  const path = await d.path();
+  downloads.push({name: d.suggestedFilename(), bytes: path ? (await readFile(path)).length : 0, path});
+});
+// An export downloads by itself while the click that asked for it still counts
+// as a user action, and asks once that has lapsed. Which of the two a given
+// export gets depends on how long it took, so a test that wants the file rather
+// than the route has to take either.
+const takeDelivery = async (target, ms = 180000) => {
+  await target.waitForFunction(() => Boolean(
+    document.querySelector('.markup-draw-choice') ||
+    /downloaded/.test(document.querySelector('.markup-draw-player-caption')?.textContent ?? ''),
+  ), null, {timeout: ms});
+  if (await target.locator('.markup-draw-choice').count()) {
+    await target.locator('.markup-draw-choice-option').first().click();
+    return 'asked';
+  }
+  return 'downloaded';
+};
+
+// the download handler resolves a moment after the page says it is done
+const waitForDownload = async (match, ms = 20000) => {
+  for (const deadline = Date.now() + ms; Date.now() < deadline;) {
+    const found = downloads.find((d) => match.test(d.name));
+    if (found) return found;
+    await new Promise((res) => setTimeout(res, 100));
+  }
+  return null;
+};
+
+await setSource(page, fence1);
+await page.evaluate((text) => {
+  document.getElementById('preview').replaceChildren();
+  window.renderFence('preview', text);
+}, stripFence(fence1));
+await page.locator('#preview img.markup-draw-image').waitFor({timeout: 10000});
+await page.locator('#preview .markup-draw-play').click();
+await page.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+const beforeExport = await page.evaluate(() => performance.getEntriesByType('resource').length);
+
+// --- the format menu
+await page.locator('.markup-draw-player-export').click();
+await page.locator('.markup-draw-choice').waitFor({timeout: 10000});
+check('exporting offers a choice of format rather than doing both',
+  await page.locator('.markup-draw-choice-option').count() === 2);
+const menuText = await page.locator('.markup-draw-choice').textContent();
+check('and says which one costs time', /takes about \d+s/.test(menuText), menuText);
+await screenshot(page, 'history-export-menu');
+
+// --- the SVG, which must not wait for a playback
+await page.locator('.markup-draw-choice-option').first().click();
+const svgStarted = Date.now();
+await page.waitForFunction(() => /downloaded/.test(
+  document.querySelector('.markup-draw-player-caption')?.textContent ?? ''), null, {timeout: 60000});
+const svgTook = Date.now() - svgStarted;
+const playbackMs = journal1.e.reduce((sum, e, i) =>
+  sum + (i >= journal1.e.length - 1 ? 0 : (e[0] === OP_SESSION ? 900 : Math.max(40, Math.min(e[1] ?? 0, 1200)))), 0);
+check('the SVG is ready without waiting out a playback',
+  svgTook < Math.max(2000, playbackMs), `${svgTook}ms, a playback is ${playbackMs}ms`);
+const svgFile = await waitForDownload(/\.svg$/);
+check('and it downloaded', Boolean(svgFile), downloads.map((d) => d.name).join(', '));
+// built inside the browser's user-action window, so it just downloads: no
+// dialog, and no second button parked in the bar for a case that did not arise
+check('a quick export downloads without asking',
+  await page.locator('.markup-draw-choice').count() === 0);
+check('and leaves no extra control behind in the bar',
+  await page.locator('.markup-draw-player-grab').count() === 0);
+
+const animated = svgFile ? await readFile(svgFile.path, 'utf8') : '';
+check('the SVG carries SMIL timing, so it plays by itself',
+  /<set[^>]*attributeName="display"[^>]*begin="[\d.]+s"/.test(animated));
+check('the exported SVG keeps the finished drawing\'s size',
+  /viewBox="[^"]*[1-9]/.test(animated) && !/width="0"/.test(animated),
+  (/(<svg[^>]*>)/.exec(animated) ?? [''])[0].slice(0, 120));
+check('every step of the drawing is in it',
+  (animated.match(/<g\b/g) ?? []).length >= 2, `${(animated.match(/<g\b/g) ?? []).length} groups`);
+check('it needs no script to play', !/<script/i.test(animated));
+
+// --- the video, and the state the bar shows while it records
+await page.locator('.markup-draw-player-export').click();
+await page.locator('.markup-draw-choice').waitFor({timeout: 10000});
+await page.locator('.markup-draw-choice-option').nth(1).click();
+await page.waitForFunction(() => /Recording/.test(
+  document.querySelector('.markup-draw-player-caption')?.textContent ?? ''), null, {timeout: 30000});
+check('recording says so in the bar', true);
+check('and locks the controls that would disturb it',
+  await page.locator('.markup-draw-player-back').isDisabled() &&
+  await page.locator('.markup-draw-player-play').isDisabled() &&
+  await page.locator('.markup-draw-player-export').isDisabled() &&
+  await page.locator('.markup-draw-player-delete').isDisabled());
+const progressed = await page.locator('.markup-draw-player-step').textContent();
+check('with a count of where it has got to', /\d+ \/ \d+/.test(progressed), progressed);
+await screenshot(page, 'history-export-busy');
+
+const videoRoute = await takeDelivery(page);
+const videoFile = await waitForDownload(/\.(mp4|webm)$/);
+check('the recording arrives by whichever route its length calls for',
+  ['asked', 'downloaded'].includes(videoRoute), videoRoute);
+check('the video downloaded too', Boolean(videoFile), downloads.map((d) => d.name).join(', '));
+check('and is a real file, not an empty one', (videoFile?.bytes ?? 0) > 1000,
+  `${videoFile?.bytes ?? 0} bytes`);
+// the ones that do not depend on where the playback happens to be
+check('the controls come back afterwards',
+  !await page.locator('.markup-draw-player-play').isDisabled() &&
+  !await page.locator('.markup-draw-player-restart').isDisabled() &&
+  !await page.locator('.markup-draw-player-export').isDisabled());
+check('exporting fetched nothing from the network',
+  await page.evaluate(() => performance.getEntriesByType('resource').length) === beforeExport);
+
+await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-player').waitFor({state: 'detached', timeout: 5000});
+
+// the exported SVG has to survive the same <img> path a stored drawing goes
+// through, so it is put in one -- with the player closed, or the overlay covers it
+await page.evaluate((text) => {
+  document.getElementById('standalone').replaceChildren();
+  const img = document.createElement('img');
+  img.id = 'exported';
+  img.src = URL.createObjectURL(new Blob([text], {type: 'image/svg+xml'}));
+  document.getElementById('standalone').append(img);
+}, animated);
+await page.locator('#exported').waitFor({timeout: 10000});
+check('the exported SVG decodes as an image',
+  await page.locator('#exported').evaluate((el) => el.complete && el.naturalWidth > 0));
+const exportedEarly = await page.locator('#exported').screenshot();
+await page.waitForTimeout(2500);
+check('and animates on its own, with no script and no player',
+  Buffer.compare(exportedEarly, await page.locator('#exported').screenshot()) !== 0);
+
+// --- an export the browser will not save by itself has to ask
+//
+// A download is only acted on while the click that asked for it still counts as
+// a user action, and a recording can easily outlive that -- which is how Safari
+// came to drop one silently. Whether a given export lands inside that window is
+// a matter of milliseconds, so the branch is driven by the setting rather than
+// by trying to time it: exportAskBeforeSaving is what an admin would reach for
+// on a browser where the automatic route cannot be relied on.
+
+const asks = watchPage(await context.newPage());
+await asks.addInitScript(() => {
+  window.__cfgOverride = {exportAskBeforeSaving: 'always'};
+});
+await asks.goto(BASE);
+const askDownloads = [];
+asks.on('download', (d) => askDownloads.push(d.suggestedFilename()));
+await asks.evaluate((text) => window.renderFence('standalone', text), stripFence(fence1));
+await asks.locator('#standalone img.markup-draw-image').waitFor({timeout: 10000});
+await asks.locator('#standalone .markup-draw-play').click();
+await asks.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+await asks.locator('.markup-draw-player-export').click();
+await asks.locator('.markup-draw-choice').waitFor({timeout: 10000});
+await asks.locator('.markup-draw-choice-option').first().click(); // the quick one
+
+await asks.locator('.markup-draw-choice').waitFor({timeout: 60000});
+check('an export that will not be saved on its own asks instead',
+  /is ready/.test(await asks.locator('.markup-draw-choice').textContent()));
+check('and does not quietly download it first', askDownloads.length === 0, askDownloads.join(', '));
+await screenshot(asks, 'history-export-ready');
+await asks.locator('.markup-draw-choice-option').first().click();
+await asks.waitForTimeout(2000);
+check('saving from that question downloads it',
+  askDownloads.some((name) => name.endsWith('.svg')), askDownloads.join(', '));
+await asks.close();
+
+// --- the control bar has to survive a phone
+//
+// Labels were shortened to glyphs for this; the point of the change is that
+// every control stays on screen and reachable, so that is what is checked
+// rather than how wide any of it came out.
+
+const phone = watchPage(await browser.newPage({viewport: {width: 390, height: 740}}));
+await phone.goto(BASE);
+// the preview pane, so the bar carries Delete and Save too -- the crowded case
+await setSource(phone, fence1);
+await phone.evaluate((text) => window.renderFence('preview', text), stripFence(fence1));
+await phone.locator('#preview img.markup-draw-image').waitFor({timeout: 10000});
+await phone.locator('#preview .markup-draw-play').click();
+await phone.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+await phone.waitForTimeout(600);
+
+const barFits = await phone.locator('.markup-draw-player-bar').evaluate(
+  (el) => el.scrollWidth <= el.clientWidth + 1);
+check('the control bar does not overflow a phone-width screen', barFits);
+
+const controls = ['back', 'play', 'forward', 'restart', 'delete', 'save', 'close'];
+const offscreen = [];
+for (const name of controls) {
+  const el = phone.locator(`.markup-draw-player-${name}`);
+  const rect = await el.boundingBox();
+  const named = await el.getAttribute('aria-label');
+  if (!rect || rect.x < 0 || rect.x + rect.width > 390 || rect.y + rect.height > 740) {
+    offscreen.push(name);
+  }
+  if (!named) offscreen.push(`${name} (unnamed)`);
+}
+check('every control is on screen and has an accessible name',
+  offscreen.length === 0, offscreen.join(', '));
+
+// a glyph the font does not have renders as a notdef box, which is as wide as
+// the button but tells the reader nothing -- so the name matters more than ever
+check('the glyph buttons carry their meaning in a tooltip',
+  await phone.locator('.markup-draw-player-close').getAttribute('title') === 'Close' &&
+  await phone.locator('.markup-draw-player-restart').getAttribute('title') === 'Restart');
+await screenshot(phone, 'history-player-phone');
+
+await browser.close();
+finish();

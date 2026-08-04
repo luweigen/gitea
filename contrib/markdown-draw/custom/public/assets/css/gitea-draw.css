@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 6;
+  --markup-draw-css: 14;
 }
 
 .markup-draw {
@@ -194,6 +194,232 @@ body.markup-draw-open {
   border: 2px dashed #e0561a;
   border-radius: 2px;
   box-shadow: 0 0 0 1px rgb(255 255 255 / 60%) inset;
+}
+
+/* --- edit history.
+
+   Asked before an undo reaches back into an earlier editing session. Like the
+   align panel it lives inside the board, so it takes js-draw's palette rather
+   than Gitea's; unlike the align panel it must be readable rather than
+   see-through, because it is a question about work that is about to disappear. */
+.markup-draw-confirm {
+  max-width: 24em;
+  padding: 14px 16px;
+  border: 1px solid var(--background-color-3, rgb(0 0 0 / 20%));
+  border-radius: 8px;
+  background: var(--background-color-1, #fff);
+  color: var(--foreground-color-1, currentcolor);
+  box-shadow: 0 4px 20px rgb(0 0 0 / 25%);
+}
+
+.markup-draw-confirm::backdrop {
+  background: rgb(0 0 0 / 35%);
+}
+
+.markup-draw-confirm p {
+  margin: 0 0 10px;
+}
+
+.markup-draw-confirm-title {
+  font-weight: bold;
+}
+
+.markup-draw-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.markup-draw-confirm-actions button {
+  padding: 6px 12px;
+  border: 1px solid var(--background-color-3, rgb(0 0 0 / 20%));
+  border-radius: 4px;
+  background: var(--background-color-2, transparent);
+  color: inherit;
+  cursor: pointer;
+  font-size: 1em;
+}
+
+.markup-draw-confirm-actions button:hover,
+.markup-draw-confirm-actions button:focus-visible {
+  background: var(--background-color-3, rgb(0 0 0 / 8%));
+}
+
+/* the format menu: one button per choice, each with a line about what it means */
+.markup-draw-choice {
+  min-width: 22em;
+}
+
+.markup-draw-choice-option {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--background-color-3, rgb(0 0 0 / 20%));
+  border-radius: 6px;
+  background: var(--background-color-2, transparent);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-size: 1em;
+}
+
+.markup-draw-choice-option:hover,
+.markup-draw-choice-option:focus-visible {
+  background: var(--background-color-3, rgb(0 0 0 / 8%));
+}
+
+.markup-draw-choice-label {
+  display: block;
+  font-weight: bold;
+}
+
+.markup-draw-choice-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.9em;
+  opacity: 0.75;
+}
+
+/* --- playing a recorded history back.
+
+   The board's overlay with a control bar instead of a toolbar. The canvas is
+   inert: playback drives it, and a click that started drawing on it would put
+   the picture out of step with the log being replayed into it. */
+.markup-draw-player {
+  flex-direction: column;
+}
+
+.markup-draw-player-host .imageEditorContainer {
+  pointer-events: none;
+}
+
+.markup-draw-player-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--color-secondary);
+  background: var(--color-body);
+  color: var(--color-text);
+}
+
+.markup-draw-player-bar button {
+  padding: 5px 12px;
+  border: 1px solid var(--color-secondary);
+  border-radius: var(--border-radius);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1em;
+  white-space: nowrap;
+}
+
+.markup-draw-player-bar button:hover:not(:disabled),
+.markup-draw-player-bar button:focus-visible {
+  background: var(--color-secondary);
+}
+
+.markup-draw-player-bar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.markup-draw-player-progress {
+  flex: 1;
+  min-width: 60px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-secondary);
+}
+
+.markup-draw-player-fill {
+  width: 0;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--color-primary, #4183c4);
+  transition: width 80ms linear;
+}
+
+.markup-draw-player-caption {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 0.9em;
+  opacity: 0.75;
+}
+
+/* On a phone the buttons are what has to survive; the caption is commentary and
+   gives up its room first, then wraps onto a second line rather than pushing
+   anything off the edge. */
+@media (max-width: 560px) {
+  .markup-draw-player-bar {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+  }
+
+  .markup-draw-player-caption {
+    order: 1;
+    flex-basis: 100%;
+    text-align: left;
+  }
+}
+
+/* a transient message -- saved, or why a step could not be removed -- shown
+   where the caption goes, so the bar does not gain a slot that is empty the
+   rest of the time */
+.markup-draw-player-caption.markup-draw-player-note {
+  opacity: 1;
+  font-weight: bold;
+}
+
+.markup-draw-player-step {
+  flex: none;
+  font-size: 0.9em;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+/* The glyph buttons are given a floor so the bar keeps its shape: without it,
+   swapping play for pause would shuffle everything to its right. */
+.markup-draw-player-back,
+.markup-draw-player-forward,
+.markup-draw-player-play,
+.markup-draw-player-restart,
+.markup-draw-player-close {
+  min-width: 2.6em;
+  padding: 5px 8px;
+  text-align: center;
+  /* the glyphs are punctuation, and inherit the surrounding font's idea of it */
+  line-height: 1.4;
+}
+
+.markup-draw-player-save:not(:disabled) {
+  border-color: var(--color-primary, #4183c4);
+  font-weight: bold;
+}
+
+/* nothing to drive once playback has failed; only "close" still means anything */
+.markup-draw-player-dead .markup-draw-player-play,
+.markup-draw-player-dead .markup-draw-player-restart,
+.markup-draw-player-dead .markup-draw-player-progress {
+  display: none;
+}
+
+/* The editor an export replays into. Off to the side rather than hidden: js-draw
+   measures its container, and a box with no size renders nothing to record. */
+.markup-draw-export-host {
+  position: fixed;
+  top: 0;
+  left: -10000px;
+  width: 960px;
+  height: 720px;
+  pointer-events: none;
 }
 
 /* Guides shown while dragging. Rotated about their left edge, so one rule

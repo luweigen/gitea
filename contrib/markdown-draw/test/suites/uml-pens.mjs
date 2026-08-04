@@ -168,5 +168,50 @@ const browser = await launchBrowser();
   await page.close();
 }
 
+// --- recorded and replayed like anything else
+//
+// The recorder stores what a command serializes to, not the pen that produced
+// it, so a UML arrow is a Stroke like any other and should need nothing of its
+// own. That is worth asserting rather than assuming: a pen that built its shape
+// out of something js-draw cannot serialize would break the log for the whole
+// drawing, not just for itself.
+
+{
+  const page = watchPage(await browser.newPage({viewport: {width: 1280, height: 900}}));
+  await page.goto(BASE);
+  await openBoard(page);
+  await choosePen(page, 'Aggregation');
+  await drawStroke(page, [[300, 300], [800, 300]]);
+
+  const history = await page.waitForFunction(() => {
+    const report = window.giteaDrawDebug();
+    return report.history && typeof report.history === 'object' ? report.history : null;
+  }, null, {timeout: 20000}).then((handle) => handle.jsonValue());
+  check('drawing an arrow is recorded', history.problem === null && history.rejected === null,
+    history.problem ?? '');
+  // the starting canvas is the log's first command, the arrow the second
+  check('the arrow is one recorded command', history.commands === 2,
+    `${history.commands} commands`);
+
+  await saveBoard(page);
+  const source = await page.locator('textarea.markdown-text-editor').inputValue();
+  check('the arrow reaches the markdown with a history', source.includes('gitea-draw-history'));
+
+  // reopening replays the log; if the arrow could not be replayed the recorder
+  // would refuse the stored log rather than come up clean
+  await openBoard(page);
+  const replayed = await page.waitForFunction(() => {
+    const report = window.giteaDrawDebug();
+    return report.history && typeof report.history === 'object' ? report.history : null;
+  }, null, {timeout: 20000}).then((handle) => handle.jsonValue());
+  check('the log survives being replayed', replayed.rejected === null, replayed.rejected ?? '');
+  await saveBoard(page);
+
+  const {paths} = await savedPaths(page);
+  check('and the arrow is still one path afterwards', paths.length === 1, `got ${paths.length}`);
+
+  await page.close();
+}
+
 await browser.close();
 finish();
