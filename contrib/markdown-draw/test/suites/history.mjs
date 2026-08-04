@@ -489,8 +489,19 @@ while (await stepText() !== '5 / 5') {
 }
 check('the last step can be deleted', !await page.locator('.markup-draw-player-delete').isDisabled());
 await page.locator('.markup-draw-player-delete').click();
-await page.waitForTimeout(600);
-check('deleting a step shortens the log', await stepText() === '4 / 4', await stepText());
+await page.locator('.markup-draw-confirm').waitFor({timeout: 5000});
+const askedAbout = await page.locator('.markup-draw-confirm').textContent();
+check('deleting asks first, and names what it would remove',
+  /Delete a stroke\?/.test(askedAbout), askedAbout);
+await page.locator('.markup-draw-confirm-actions button').first().click();
+await page.waitForTimeout(400);
+check('declining the question keeps the step',
+  await stepText() === '5 / 5' && await page.locator('.markup-draw-player-save').isDisabled());
+
+await page.locator('.markup-draw-player-delete').click();
+await page.locator('.markup-draw-confirm-go').click();
+await page.waitForTimeout(700);
+check('confirming it shortens the log', await stepText() === '4 / 4', await stepText());
 check('and offers to save the result', !await page.locator('.markup-draw-player-save').isDisabled());
 
 await page.locator('.markup-draw-player-save').click();
@@ -532,7 +543,8 @@ await page.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000
 await page.locator('.markup-draw-player-step')
   .filter({hasText: '5 / 5'}).waitFor({timeout: 30000});
 await page.locator('.markup-draw-player-delete').click();
-await page.waitForTimeout(600);
+await page.locator('.markup-draw-confirm-go').click();
+await page.waitForTimeout(700);
 const before = await source(page);
 await page.locator('.markup-draw-player-close').click();
 await page.locator('.markup-draw-confirm').waitFor({timeout: 5000});
@@ -579,14 +591,31 @@ await page.locator('.markup-draw-player-back').click();
 await page.waitForTimeout(500);
 check('positioned on the step the next one depends on', await stepText() === '2 / 3');
 await page.locator('.markup-draw-player-delete').click();
-await page.locator('.markup-draw-player-caption')
-  .filter({hasText: 'cannot be removed'}).waitFor({timeout: 15000});
-check('a step a later one builds on is refused, with a reason', true);
-const kept = await playerOf(page);
-check('and the log is left exactly as it was',
-  kept.total === 3 && kept.position === 2, JSON.stringify(kept));
+await page.locator('.markup-draw-confirm').waitFor({timeout: 5000});
+const warned = await page.locator('.markup-draw-confirm').textContent();
+check('deleting a step others build on warns that they go too',
+  /builds on it|build on it/.test(warned), warned);
+check('and names which steps those are', /Step 3\b/.test(warned), warned);
+await screenshot(page, 'history-delete-dependents');
+
+await page.locator('.markup-draw-confirm-actions button').first().click();
+await page.waitForTimeout(400);
+const untouched = await playerOf(page);
+check('declining leaves every step in place',
+  untouched.total === 3 && untouched.position === 2, JSON.stringify(untouched));
 check('so there is still nothing to save', await page.locator('.markup-draw-player-save').isDisabled());
+
+await page.locator('.markup-draw-player-delete').click();
+await page.locator('.markup-draw-confirm-go').click();
+await page.waitForTimeout(800);
+const cascaded = await playerOf(page);
+check('confirming takes the dependent step with it',
+  cascaded.total === 1, JSON.stringify(cascaded));
+check('and the result is offered for saving',
+  !await page.locator('.markup-draw-player-save').isDisabled());
+// unsaved now, so closing asks -- discard and move on
 await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-confirm-go').click();
 await page.locator('.markup-draw-player').waitFor({state: 'detached', timeout: 5000});
 
 // --- with no editable text behind it, the player is a viewer

@@ -292,12 +292,27 @@ Where the markdown behind the drawing can be reached -- a comment being written,
 a file being edited, the same condition the **Edit drawing** button goes by --
 two more buttons appear:
 
-* **✂︎Step** (*Delete this step*) takes the current step out of the history. The whole log
-  is then replayed to check it still works; if a later step builds on the one
-  being removed -- a move of a stroke that step drew -- the deletion is refused
-  and says so, rather than leaving a history that cannot be replayed. The check
-  covers the whole log, not just up to the deletion, because a break further on
-  would otherwise only surface as a failure to save.
+* **✂︎Step** (*Delete this step*) takes the current step out of the history, and
+  always asks first, naming what it is about to remove -- "Delete a stroke?" --
+  so a mis-aimed click costs nothing.
+
+  A step that later ones build on cannot go on its own: removing a stroke while
+  a later step still moves it would leave a history that cannot be replayed. So
+  the question is a different one -- *Delete this step and the 2 that build on
+  it?* -- it names which steps those are, and confirming removes them together.
+
+  Which steps those are is read out of the log rather than found by trial:
+  every recorded command names the components it works on by id, so
+  `add-element` says what a step brings into being and `transform-element`,
+  `erase`, `duplicate` and `selection-tool-transform` say what they need to
+  already be there. One forward pass finds the whole chain, including steps that
+  depend on a step that depends on the deleted one, because a step can only ever
+  depend on an earlier one.
+
+  The deletion is then *proved* by replaying the whole log, not just the part up
+  to it -- a break further on would otherwise surface only as a failure to save.
+  If that replay still fails, everything is put back and the bar says so. That
+  path should be unreachable; it is the net under the analysis, not the plan.
 * **Save** (*Save to markdown*) replays the edited log to its end, regenerates the SVG
   from that, and writes both back into the fence. The picture in the markdown is
   therefore always the picture the log produces.
@@ -515,9 +530,10 @@ with a finger. See [test/README.md](test/README.md).
 * **Stepping backwards costs a rebuild.** Each backward step replays the log
   from the start, so on a history of hundreds of steps it is noticeably slower
   than stepping forwards. Correctness is why: see the stepping section.
-* **A step can only be deleted if nothing later depends on it.** Removing a
-  stroke that a later step moves would leave a log that cannot replay, so it is
-  refused. Deleting that stroke means deleting the steps that act on it first.
+* **Deleting a step can take later ones with it.** A stroke that a later step
+  moves cannot be removed on its own, so the two go together. The confirmation
+  says how many and which, but there is no way to keep the later step and drop
+  only the one it builds on -- that is not a history that could be replayed.
 * **Editing the history needs the markdown to be reachable.** On a posted
   comment or a plain file view there is no text to write back into, so the
   player only steps and plays there.

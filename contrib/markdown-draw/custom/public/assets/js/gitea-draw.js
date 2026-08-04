@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '14';
+  const SCRIPT_REVISION = '15';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -125,6 +125,26 @@
     playDeleteIcon: '\u2702\uFE0EStep',
     playDelete: 'Delete this step',
     playDeleteBlocked: 'This step cannot be removed: a later one builds on it',
+    playDeletedWith: (n) => `${n} steps removed`,
+    stepStroke: 'a stroke',
+    stepText: 'a piece of text',
+    stepImage: 'an image',
+    stepBackground: 'the background',
+    stepShape: 'an imported shape',
+    stepErase: 'an erase',
+    stepMove: 'a move or resize',
+    stepDuplicate: 'a duplicate',
+    stepGroup: (n) => `a group of ${n} changes`,
+    stepSomething: 'this step',
+    stepUndo: 'an undo',
+    stepRedo: 'a redo',
+    deleteStep: (what) => `Delete ${what}?`,
+    deleteStepBody: 'It comes out of the recorded history. Nothing reaches the markdown until you save.',
+    deleteStepWithDeps: (n) => `Delete this step and the ${n === 1 ? 'one' : n} that ${n === 1 ? 'builds' : 'build'} on it?`,
+    deleteStepWithDepsBody: (n, list) =>
+      `${n === 1 ? 'Step' : 'Steps'} ${list} ${n === 1 ? 'uses' : 'use'} what this one draws, and cannot be replayed without it, so ${n === 1 ? 'it goes' : 'they go'} too. Nothing reaches the markdown until you save.`,
+    deleteConfirm: 'Delete',
+    deleteCancel: 'Keep it',
     playSaveIcon: 'Save',
     playSave: 'Save to markdown',
     playSaved: 'Saved to the markdown',
@@ -1814,6 +1834,119 @@
     return gaps;
   }
 
+  // --- what a step does, and what later steps need it to have happened
+  //
+  // Every recorded command names the components it works on by id, so what one
+  // step needs from another can be read straight out of the log without applying
+  // any of it.  The six command types js-draw registers each carry those ids
+  // somewhere different; `union` and `inverse` wrap another command and are
+  // walked into.
+
+  const COMPONENT_WORDS = {
+    'stroke': 'stepStroke',
+    'text': 'stepText',
+    'image-component': 'stepImage',
+    'image-background': 'stepBackground',
+    'unknown-svg-object': 'stepShape',
+    'svg-global-attributes': 'stepShape',
+  };
+
+  function commandRefs(json, into = {makes: new Set(), needs: new Set()}, depth = 0) {
+    if (depth > 32 || !json || typeof json !== 'object') return into;
+    const data = json.data;
+    switch (json.commandType) {
+      case 'union':
+        for (const child of Array.isArray(data?.data) ? data.data : []) {
+          commandRefs(child, into, depth + 1);
+        }
+        break;
+      case 'inverse': {
+        // An inverse undoes what it wraps, so what that one makes, this one
+        // needs.  Counting both as "needs" keeps the analysis on the safe side:
+        // it can flag a step as dependent that would have survived, never the
+        // other way round.
+        const inner = commandRefs(data, {makes: new Set(), needs: new Set()}, depth + 1);
+        for (const id of [...inner.makes, ...inner.needs]) into.needs.add(id);
+        break;
+      }
+      case 'add-element':
+        if (data?.elemData?.id) into.makes.add(String(data.elemData.id));
+        break;
+      case 'transform-element':
+        if (data?.id) into.needs.add(String(data.id));
+        break;
+      case 'selection-tool-transform':
+        for (const id of Array.isArray(data?.elems) ? data.elems : []) into.needs.add(String(id));
+        break;
+      case 'erase':
+        for (const elem of Array.isArray(data) ? data : []) {
+          const id = typeof elem === 'string' ? elem : elem?.id;
+          if (id) into.needs.add(String(id));
+        }
+        break;
+      case 'duplicate':
+        for (const id of Array.isArray(data?.originalIds) ? data.originalIds : []) into.needs.add(String(id));
+        for (const id of Array.isArray(data?.cloneIds) ? data.cloneIds : []) into.makes.add(String(id));
+        break;
+      default:
+        break;
+    }
+    return into;
+  }
+
+  // The steps after `at` that could not stand without it.  One forward pass is
+  // enough for the whole chain: a step can only depend on an earlier one, so
+  // anything a doomed step made is already known to be going by the time the
+  // steps that use it are reached.
+  function dependentsOf(entries, at) {
+    if (entries[at]?.[0] !== OP_DO) return [];
+    const gone = commandRefs(entries[at][2]).makes;
+    if (!gone.size) return [];
+    const found = [];
+    for (let i = at + 1; i < entries.length; i++) {
+      if (entries[i][0] !== OP_DO) continue;
+      const refs = commandRefs(entries[i][2]);
+      if (![...refs.needs].some((id) => gone.has(id))) continue;
+      found.push(i);
+      for (const id of refs.makes) gone.add(id);
+    }
+    return found;
+  }
+
+  function describeCommand(json, depth = 0) {
+    if (depth > 8 || !json || typeof json !== 'object') return i18n.stepSomething;
+    const data = json.data;
+    switch (json.commandType) {
+      case 'add-element':
+        return i18n[COMPONENT_WORDS[data?.elemData?.name]] ?? i18n.stepSomething;
+      case 'erase': return i18n.stepErase;
+      case 'transform-element':
+      case 'selection-tool-transform': return i18n.stepMove;
+      case 'duplicate': return i18n.stepDuplicate;
+      case 'inverse': return describeCommand(data, depth + 1);
+      case 'union': {
+        const children = Array.isArray(data?.data) ? data.data : [];
+        return children.length === 1
+          ? describeCommand(children[0], depth + 1)
+          : i18n.stepGroup(children.length);
+      }
+      default: return i18n.stepSomething;
+    }
+  }
+
+  const describeEntry = (entry) => {
+    if (entry[0] === OP_UNDO) return i18n.stepUndo;
+    if (entry[0] === OP_REDO) return i18n.stepRedo;
+    return describeCommand(entry[2]);
+  };
+
+  // "4", "4 and 6", "4, 6 and 9" -- step numbers as the bar counts them
+  const listSteps = (indexes) => {
+    const numbers = indexes.map((i) => i + 1);
+    if (numbers.length === 1) return String(numbers[0]);
+    return `${numbers.slice(0, -1).join(', ')} and ${numbers[numbers.length - 1]}`;
+  };
+
   // `title` is given for the symbol-only buttons, which need a name for a screen
   // reader and a tooltip for everyone else.
   function makePlayerButton(className, label, title = '') {
@@ -2151,34 +2284,51 @@
       });
     });
 
+    // Removing a step that later ones build on takes those with it -- leaving
+    // them behind would mean a history that cannot be replayed.  Which is why
+    // every deletion asks first, and one that carries others away says so and
+    // names them.
+    async function applyDelete(at, dependents) {
+      abandon();
+      const doomed = [at, ...dependents].sort((a, b) => b - a); // last first, so the indexes hold
+      const removed = doomed.map((i) => [i, entries[i]]);
+      for (const i of doomed) entries.splice(i, 1);
+      captions = buildCaptions(entries);
+      try {
+        // The *whole* log has to still replay, not just the part up to here.  The
+        // analysis above reads ids out of the log; this is the proof, and it is
+        // what catches anything that analysis did not think of.
+        await rebuildTo(entries.length);
+      } catch {
+        for (const [i, entry] of [...removed].reverse()) entries.splice(i, 0, entry);
+        captions = buildCaptions(entries);
+        if (!await guard(() => rebuildTo(at + 1))) return;
+        note(i18n.playDeleteBlocked);
+        return;
+      }
+      dirty = true;
+      // back to the step the reader was looking at, which is now the one before
+      // the deleted step
+      if (!await guard(() => rebuildTo(at))) return;
+      refresh();
+      if (dependents.length) note(i18n.playDeletedWith(dependents.length + 1));
+    }
+
     elDelete.addEventListener('click', () => {
       if (elDelete.disabled) return;
-      abandon();
       const at = position - 1;
-      const removed = entries[at];
-      void (async () => {
-        entries.splice(at, 1);
-        captions = buildCaptions(entries);
-        try {
-          // The *whole* log has to still replay, not just the part up to here: a
-          // command further on can depend on the one being taken out -- a move of
-          // a stroke this step drew -- and js-draw throws rather than quietly
-          // transforming nothing.  Checking only as far as the deletion would let
-          // that through, to surface later as a failure to save.
-          await rebuildTo(entries.length);
-        } catch {
-          entries.splice(at, 0, removed);
-          captions = buildCaptions(entries);
-          if (!await guard(() => rebuildTo(at + 1))) return;
-          note(i18n.playDeleteBlocked);
-          return;
-        }
-        dirty = true;
-        // back to the step the reader was looking at, which is now the one before
-        // the deleted step
-        if (!await guard(() => rebuildTo(at))) return;
-        refresh();
-      })();
+      const dependents = dependentsOf(entries, at);
+      askConfirmation(elOverlay, {
+        title: dependents.length
+          ? i18n.deleteStepWithDeps(dependents.length)
+          : i18n.deleteStep(describeEntry(entries[at])),
+        body: dependents.length
+          ? i18n.deleteStepWithDepsBody(dependents.length, listSteps(dependents))
+          : i18n.deleteStepBody,
+        confirm: i18n.deleteConfirm,
+        cancel: i18n.deleteCancel,
+        onConfirm: () => void applyDelete(at, dependents),
+      });
     });
 
     elSave.addEventListener('click', () => {
