@@ -667,6 +667,15 @@ page.on('download', async (d) => {
   const path = await d.path();
   downloads.push({name: d.suggestedFilename(), bytes: path ? (await readFile(path)).length : 0, path});
 });
+// the download handler resolves a moment after the page says it is done
+const waitForDownload = async (match, ms = 20000) => {
+  for (const deadline = Date.now() + ms; Date.now() < deadline;) {
+    const found = downloads.find((d) => match.test(d.name));
+    if (found) return found;
+    await new Promise((res) => setTimeout(res, 100));
+  }
+  return null;
+};
 
 await setSource(page, fence1);
 await page.evaluate((text) => {
@@ -677,19 +686,30 @@ await page.locator('#preview img.markup-draw-image').waitFor({timeout: 10000});
 await page.locator('#preview .markup-draw-play').click();
 await page.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
 const beforeExport = await page.evaluate(() => performance.getEntriesByType('resource').length);
-await page.locator('.markup-draw-player-export').click();
-await page.waitForFunction(() => /Downloaded/.test(
-  document.querySelector('.markup-draw-player-caption')?.textContent ?? ''), null, {timeout: 120000});
-await page.waitForTimeout(1500);
 
-check('one click produced two files', downloads.length === 2,
-  downloads.map((d) => `${d.name} ${d.bytes}b`).join(', '));
-const svgFile = downloads.find((d) => d.name.endsWith('.svg'));
-const videoFile = downloads.find((d) => /\.(mp4|webm)$/.test(d.name));
-check('one of them is an SVG', Boolean(svgFile), downloads.map((d) => d.name).join(', '));
-check('the other is a video', Boolean(videoFile), downloads.map((d) => d.name).join(', '));
-check('the video is a real file, not an empty one', (videoFile?.bytes ?? 0) > 1000,
-  `${videoFile?.bytes ?? 0} bytes`);
+// --- the format menu
+await page.locator('.markup-draw-player-export').click();
+await page.locator('.markup-draw-choice').waitFor({timeout: 10000});
+check('exporting offers a choice of format rather than doing both',
+  await page.locator('.markup-draw-choice-option').count() === 2);
+const menuText = await page.locator('.markup-draw-choice').textContent();
+check('and says which one costs time', /takes about \d+s/.test(menuText), menuText);
+await screenshot(page, 'history-export-menu');
+
+// --- the SVG, which must not wait for a playback
+await page.locator('.markup-draw-choice-option').first().click();
+const svgStarted = Date.now();
+await page.waitForFunction(() => /is ready/.test(
+  document.querySelector('.markup-draw-player-caption')?.textContent ?? ''), null, {timeout: 60000});
+const svgTook = Date.now() - svgStarted;
+const playbackMs = journal1.e.reduce((sum, e, i) =>
+  sum + (i >= journal1.e.length - 1 ? 0 : (e[0] === OP_SESSION ? 900 : Math.max(40, Math.min(e[1] ?? 0, 1200)))), 0);
+check('the SVG is ready without waiting out a playback',
+  svgTook < Math.max(2000, playbackMs), `${svgTook}ms, a playback is ${playbackMs}ms`);
+const svgFile = await waitForDownload(/\.svg$/);
+check('and it downloaded', Boolean(svgFile), downloads.map((d) => d.name).join(', '));
+check('with a second way to take it, for browsers that refuse a detached download',
+  await page.locator('.markup-draw-player-grab').isVisible());
 
 const animated = svgFile ? await readFile(svgFile.path, 'utf8') : '';
 check('the SVG carries SMIL timing, so it plays by itself',
@@ -700,6 +720,34 @@ check('the exported SVG keeps the finished drawing\'s size',
 check('every step of the drawing is in it',
   (animated.match(/<g\b/g) ?? []).length >= 2, `${(animated.match(/<g\b/g) ?? []).length} groups`);
 check('it needs no script to play', !/<script/i.test(animated));
+
+// --- the video, and the state the bar shows while it records
+await page.locator('.markup-draw-player-export').click();
+await page.locator('.markup-draw-choice').waitFor({timeout: 10000});
+await page.locator('.markup-draw-choice-option').nth(1).click();
+await page.waitForFunction(() => /Recording/.test(
+  document.querySelector('.markup-draw-player-caption')?.textContent ?? ''), null, {timeout: 30000});
+check('recording says so in the bar', true);
+check('and locks the controls that would disturb it',
+  await page.locator('.markup-draw-player-back').isDisabled() &&
+  await page.locator('.markup-draw-player-play').isDisabled() &&
+  await page.locator('.markup-draw-player-export').isDisabled() &&
+  await page.locator('.markup-draw-player-delete').isDisabled());
+const progressed = await page.locator('.markup-draw-player-step').textContent();
+check('with a count of where it has got to', /\d+ \/ \d+/.test(progressed), progressed);
+await screenshot(page, 'history-export-busy');
+
+await page.waitForFunction(() => /is ready/.test(
+  document.querySelector('.markup-draw-player-caption')?.textContent ?? ''), null, {timeout: 120000});
+const videoFile = await waitForDownload(/\.(mp4|webm)$/);
+check('the video downloaded too', Boolean(videoFile), downloads.map((d) => d.name).join(', '));
+check('and is a real file, not an empty one', (videoFile?.bytes ?? 0) > 1000,
+  `${videoFile?.bytes ?? 0} bytes`);
+// the ones that do not depend on where the playback happens to be
+check('the controls come back afterwards',
+  !await page.locator('.markup-draw-player-play').isDisabled() &&
+  !await page.locator('.markup-draw-player-restart').isDisabled() &&
+  !await page.locator('.markup-draw-player-export').isDisabled());
 check('exporting fetched nothing from the network',
   await page.evaluate(() => performance.getEntriesByType('resource').length) === beforeExport);
 

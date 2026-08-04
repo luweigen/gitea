@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '18';
+  const SCRIPT_REVISION = '19';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -151,11 +151,21 @@
     deleteCancel: 'Keep it',
     playSaveIcon: 'Save',
     playExportIcon: '\u2913',
-    playExport: 'Download the animation (SVG and video)',
-    playExporting: (done, total) => `Exporting… ${done} / ${total}`,
-    playExportRecording: 'Recording the video…',
-    playExportDone: 'Downloaded',
-    playExportNoVideo: 'Downloaded the SVG; this browser cannot record video',
+    playExport: 'Download the animation',
+    playExportBody: 'Both are built here in the browser, with no server and no library.',
+    playExportSvg: 'Animated SVG',
+    playExportSvgHint: 'Plays by itself wherever an image can go. Ready at once.',
+    playExportVideo: 'Video (MP4 or WebM)',
+    playExportVideoHint: (seconds) =>
+      `Plays anywhere. Recorded as it plays, so it takes about ${seconds}s.`,
+    playExportVideoUnavailable: 'This browser cannot record video',
+    playExportCancel: 'Not now',
+    playBuildingSvg: 'Building the SVG',
+    playRecording: 'Recording',
+    playExportSaved: (name) => `${name} is ready`,
+    playExportGrab: (name) => `\u2913 ${name}`,
+    playExportGrabHint: 'Save the file, if the download did not start on its own',
+    playExportStopped: 'Export stopped',
     playExportFailed: (why) => `The animation could not be exported: ${why}`,
     playSave: 'Save to markdown',
     playSaved: 'Saved to the markdown',
@@ -475,6 +485,51 @@
   // undo stack came from, and writes the log back out on save.
 
   const historyDebug = {state: 'no drawing board opened yet'};
+
+  // A short menu inside an overlay: a title, and one button per choice with a
+  // line saying what picking it means.
+  function askChoice(elParent, {title, body, choices, cancel}) {
+    const elDialog = document.createElement('dialog');
+    elDialog.className = 'markup-draw-confirm markup-draw-choice';
+    const elTitle = document.createElement('p');
+    elTitle.className = 'markup-draw-confirm-title';
+    elTitle.textContent = title;
+    elDialog.append(elTitle);
+    if (body) {
+      const elBody = document.createElement('p');
+      elBody.textContent = body;
+      elDialog.append(elBody);
+    }
+    for (const choice of choices) {
+      const elChoice = document.createElement('button');
+      elChoice.type = 'button';
+      elChoice.className = 'markup-draw-choice-option';
+      const elLabel = document.createElement('span');
+      elLabel.className = 'markup-draw-choice-label';
+      elLabel.textContent = choice.label;
+      const elHint = document.createElement('span');
+      elHint.className = 'markup-draw-choice-hint';
+      elHint.textContent = choice.hint;
+      elChoice.append(elLabel, elHint);
+      elChoice.addEventListener('click', () => {
+        elDialog.close();
+        choice.onPick();
+      });
+      elDialog.append(elChoice);
+    }
+    const elActions = document.createElement('div');
+    elActions.className = 'markup-draw-confirm-actions';
+    const elCancel = document.createElement('button');
+    elCancel.type = 'button';
+    elCancel.textContent = cancel;
+    elCancel.addEventListener('click', () => elDialog.close());
+    elActions.append(elCancel);
+    elDialog.append(elActions);
+    elDialog.addEventListener('close', () => elDialog.remove(), {once: true});
+    elParent.append(elDialog);
+    elDialog.showModal();
+    elDialog.querySelector('.markup-draw-choice-option')?.focus();
+  }
 
   // A yes/no question inside an overlay.  It goes in a <dialog> so that Escape
   // dismisses the question rather than the board behind it -- both overlays
@@ -1906,6 +1961,8 @@
   // Replays the log a step at a time, telling the caller which components each
   // step touched.  The ids come from the commands themselves rather than from
   // comparing the whole image every step, which keeps it linear.
+  const EXPORT_STOPPED = 'markdown-draw:export-stopped';
+
   async function replayForExport(jsdraw, editor, entries, onStep) {
     const report = {blockedImages: 0};
     let taken = [];
@@ -2015,7 +2072,7 @@
   // The video is the editor's own canvas, recorded as it is replayed.  There is
   // no faster-than-real-time path: MediaRecorder encodes a live stream, so this
   // takes about as long as watching it does.
-  async function recordAnimation(elCanvas, durations, onFrame) {
+  async function recordAnimation(elCanvas, durations, onFrame, onProgress) {
     if (typeof MediaRecorder === 'undefined' || typeof elCanvas.captureStream !== 'function') return null;
     const mime = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']
       .find((type) => MediaRecorder.isTypeSupported(type));
@@ -2040,6 +2097,7 @@
       await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       track.requestFrame();
       const hold = durations[index] ?? 0;
+      onProgress?.(index);
       if (hold > 0) await new Promise((resolve) => setTimeout(resolve, hold));
     });
 
@@ -2217,6 +2275,11 @@
     const elRestart = makePlayerButton('markup-draw-player-restart', i18n.playRestartIcon, i18n.playRestart);
     const elDelete = makePlayerButton('markup-draw-player-delete', i18n.playDeleteIcon, i18n.playDelete);
     const elExport = makePlayerButton('markup-draw-player-export', i18n.playExportIcon, i18n.playExport);
+    // Safari will not act on a download that is no longer tied to a click, and a
+    // recording takes far too long to still count as one.  The file is offered
+    // here as well, where taking it is a click in its own right.
+    const elGrab = makePlayerButton('markup-draw-player-grab', '', i18n.playExportGrabHint);
+    elGrab.hidden = true;
     const elSave = makePlayerButton('markup-draw-player-save', i18n.playSaveIcon, i18n.playSave);
     const elClose = makePlayerButton('markup-draw-player-close', i18n.playCloseIcon, i18n.playClose);
     const elProgress = document.createElement('div');
@@ -2229,7 +2292,7 @@
     const elCaption = document.createElement('div');
     elCaption.className = 'markup-draw-player-caption';
     elBar.append(elBack, elPlay, elForward, elRestart, elProgress, elStep, elCaption);
-    if (cfg.exportAnimation) elBar.append(elExport);
+    if (cfg.exportAnimation) elBar.append(elExport, elGrab);
     if (editable) elBar.append(elDelete, elSave);
     elBar.append(elClose);
     elOverlay.append(elHost, elBar);
@@ -2246,6 +2309,9 @@
     let paused = false;
     let waiting = null; // resolves when playback is let go again
     let noteTimer = null;
+    let busy = null; // {label, done, total} while an export is running
+    let stopping = false; // an export was abandoned and should unwind
+    let ready = null; // {name, blob} the last export produced, for a second try
     // waits in flight, so that pausing can cut one short instead of letting it
     // run out first -- a wait here can be a second and a bit long, and a button
     // that takes that long to answer reads as broken
@@ -2278,8 +2344,21 @@
       playing = false;
       setPaused(false);
     };
+    const setBusy = (label, done, total) => {
+      busy = {label, done, total};
+      refresh();
+    };
+    const clearBusy = () => {
+      busy = null;
+      refresh();
+    };
+    // an export unwinds by throwing this out of its replay
+    const stopIfAsked = () => {
+      if (stopping) throw new Error(EXPORT_STOPPED);
+    };
     const shutDown = () => {
       abandon();
+      stopping = true; // let an export in flight unwind instead of finishing
       playerState = null;
       clearTimeout(noteTimer);
       editor?.remove();
@@ -2360,8 +2439,20 @@
       }, 4000);
     }
 
+    const controls = () => [elBack, elPlay, elForward, elRestart, elDelete, elSave, elExport];
+
     function refresh() {
       const total = entries.length;
+      if (busy) {
+        // Nothing else may touch the log or the canvas while an export is
+        // replaying it: the buttons go dead rather than queueing up behind it.
+        elFill.style.width = `${Math.round((busy.done / Math.max(1, busy.total)) * 100)}%`;
+        elStep.textContent = `${busy.done} / ${busy.total}`;
+        elCaption.classList.remove('markup-draw-player-note');
+        elCaption.textContent = busy.label;
+        for (const el of controls()) el.disabled = true;
+        return;
+      }
       playerState = {
         position,
         total,
@@ -2372,18 +2463,27 @@
         components: editor ? editor.image.getAllComponents().length : 0,
         drawing: describeRect(editor?.image.getImportExportRect()),
       };
-      if (elCaption.classList.contains('markup-draw-player-note')) return; // a note is up
       elFill.style.width = `${total ? Math.round((position / total) * 100) : 0}%`;
       elStep.textContent = i18n.playStep(position, total);
-      elCaption.textContent = position >= total
-        ? i18n.playDone
-        : (position > 0 ? captions[position - 1] : '');
+      // A note -- "saved", "is ready" -- borrows the caption for a few seconds.
+      // Only the caption: letting it skip the rest of this left every button the
+      // busy state had switched off dead until the note timed out.
+      if (!elCaption.classList.contains('markup-draw-player-note')) {
+        elCaption.textContent = position >= total
+          ? i18n.playDone
+          : (position > 0 ? captions[position - 1] : '');
+      }
       // the same button pauses and resumes, so its name has to follow it -- a
       // glyph alone would leave a screen reader saying "button"
       const willPause = playing && !paused;
       elPlay.textContent = willPause ? i18n.playPauseIcon : i18n.playIcon;
       elPlay.title = willPause ? i18n.playPause : i18n.playResume;
       elPlay.setAttribute('aria-label', willPause ? i18n.playPause : i18n.playResume);
+      // every control the busy state switched off has to be switched back on
+      // here, or an export leaves them dead for good
+      elPlay.disabled = false;
+      elRestart.disabled = false;
+      elExport.disabled = false;
       elBack.disabled = position === 0;
       elForward.disabled = position >= total;
       // a session marker is a place in the log, not an action; there is nothing
@@ -2633,46 +2733,85 @@
       });
     });
 
-    elExport.addEventListener('click', () => {
-      if (elExport.disabled) return;
-      abandon();
-      elExport.disabled = true;
+    const offerFile = (name, blob) => {
+      ready = {name, blob};
+      elGrab.textContent = i18n.playExportGrab(name);
+      elGrab.hidden = false;
+      downloadBlob(name, blob);
+      note(i18n.playExportSaved(name));
+    };
+    elGrab.addEventListener('click', () => {
+      if (ready) downloadBlob(ready.name, ready.blob);
+    });
+
+    // The SVG is only as slow as replaying the log; the video is recorded live
+    // and so takes as long as watching it. Bundling them made the quick one wait
+    // for the slow one -- and two downloads from one click is exactly what
+    // Safari refuses, since by then neither is tied to the click any more.
+    async function exportAnimatedSvg() {
       const durations = stepDurations(entries);
-      const total = entries.length;
+      setBusy(i18n.playBuildingSvg, 0, entries.length);
+      const animated = await withScratchEditor(jsdraw, svgText, async (scratch) => {
+        const builder = buildAnimatedSvg(jsdraw, scratch, entries, durations, svgText);
+        await replayForExport(jsdraw, scratch, entries, async (at, touched) => {
+          stopIfAsked();
+          builder.step(at, touched, componentsById(scratch));
+          setBusy(i18n.playBuildingSvg, at + 1, entries.length);
+        });
+        return builder.finish();
+      });
+      offerFile(`${cfg.exportName}.svg`, new Blob([animated], {type: 'image/svg+xml'}));
+    }
+
+    async function exportVideo() {
+      const durations = stepDurations(entries);
+      setBusy(i18n.playRecording, 0, entries.length);
+      const video = await withScratchEditor(jsdraw, svgText, async (scratch) => {
+        const elCanvas = scratch.getRootElement().querySelector('canvas:not(.wetInkCanvas)');
+        if (!elCanvas) return null;
+        return await recordAnimation(elCanvas, durations, async (frame) => {
+          await replayForExport(jsdraw, scratch, entries, async (at) => {
+            stopIfAsked();
+            await frame(at);
+          });
+        }, (at) => setBusy(i18n.playRecording, at + 1, entries.length));
+      });
+      if (!video) {
+        note(i18n.playExportVideoUnavailable);
+        return;
+      }
+      offerFile(`${cfg.exportName}.${video.type.includes('mp4') ? 'mp4' : 'webm'}`, video);
+    }
+
+    const runExport = (work) => {
+      abandon();
       void exclusive(async () => {
         try {
-          // Two passes, each in its own editor: the SVG pass leaves the drawing
-          // finished, and the recording has to start from an empty canvas.
-          const animated = await withScratchEditor(jsdraw, svgText, async (scratch) => {
-            // the stored SVG, not one exported from the empty scratch editor:
-            // its root already carries the finished drawing's size and viewBox
-            const builder = buildAnimatedSvg(jsdraw, scratch, entries, durations, svgText);
-            await replayForExport(jsdraw, scratch, entries, async (at, touched) => {
-              builder.step(at, touched, componentsById(scratch));
-              if (at % 10 === 0) note(i18n.playExporting(at + 1, total));
-            });
-            return builder.finish();
-          });
-
-          note(i18n.playExportRecording);
-          const video = await withScratchEditor(jsdraw, svgText, async (scratch) => {
-            const elCanvas = scratch.getRootElement().querySelector('canvas:not(.wetInkCanvas)');
-            if (!elCanvas) return null;
-            return await recordAnimation(elCanvas, durations, async (frame) => {
-              await replayForExport(jsdraw, scratch, entries, (at) => frame(at));
-            });
-          });
-
-          downloadBlob(`${cfg.exportName}.svg`, new Blob([animated], {type: 'image/svg+xml'}));
-          if (video) {
-            downloadBlob(`${cfg.exportName}.${video.type.includes('mp4') ? 'mp4' : 'webm'}`, video);
-          }
-          note(video ? i18n.playExportDone : i18n.playExportNoVideo);
+          await work();
         } catch (err) {
+          if (String(err?.message) === EXPORT_STOPPED) return; // the player is closing
           note(i18n.playExportFailed(String(err?.message || err)));
         } finally {
-          elExport.disabled = false;
+          clearBusy();
         }
+      });
+    };
+
+    elExport.addEventListener('click', () => {
+      if (elExport.disabled) return;
+      const seconds = Math.max(1, Math.round(
+        (stepDurations(entries).reduce((sum, ms) => sum + ms, 0) + cfg.exportTailMs) / 1000,
+      ));
+      askChoice(elOverlay, {
+        title: i18n.playExport,
+        body: i18n.playExportBody,
+        cancel: i18n.playExportCancel,
+        choices: [
+          {label: i18n.playExportSvg, hint: i18n.playExportSvgHint,
+            onPick: () => runExport(exportAnimatedSvg)},
+          {label: i18n.playExportVideo, hint: i18n.playExportVideoHint(seconds),
+            onPick: () => runExport(exportVideo)},
+        ],
       });
     });
 

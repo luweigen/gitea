@@ -322,9 +322,28 @@ two more buttons appear:
   from that, and writes both back into the fence. The picture in the markdown is
   therefore always the picture the log produces.
 
-**⤓** exports the animation as two files at once: a **self-playing SVG** and a
-**video** (MP4 where the browser can, WebM otherwise). It needs no editable text
-behind the drawing, so it works on a posted comment as well as in an editor.
+**⤓** exports the animation, asking which format first. It needs no editable
+text behind the drawing, so it works on a posted comment as well as in an editor.
+
+* **Animated SVG** -- ready at once. Building it is only a replay of the log, so
+  it takes milliseconds however long the drawing took to make.
+* **Video** (MP4 where the browser can, WebM otherwise) -- recorded as it plays,
+  so it takes about as long as watching it. `MediaRecorder` encodes a live
+  stream; there is no faster path.
+
+They are offered one at a time rather than both together, for two reasons: the
+quick one should not have to wait for the slow one, and two downloads from a
+single click is exactly what a browser refuses -- Safari took only one of them,
+because by the time either file exists the click that asked for it is long over.
+For the same reason the finished file is also left on the bar as **⤓ name**,
+which downloads it again as a click in its own right if the automatic one did
+not arrive.
+
+While an export runs the bar shows what it is doing and how far it has got, and
+every control that would disturb it is switched off -- it is replaying the log
+through an editor of its own, and a step or a deletion landing in the middle of
+that is the sort of thing that produces a file quietly missing a stroke. Closing
+the player stops an export in flight rather than letting it finish into nothing.
 
 Those two formats are the ones that need no library, which is why they are the
 ones on offer. SMIL animation is declarative and -- unlike script -- runs inside
@@ -566,9 +585,12 @@ with a finger. See [test/README.md](test/README.md).
   customization carries no dependency but js-draw. The self-playing SVG covers
   the "shows up inline" case and the video covers "plays anywhere".
 * **Recording the video takes as long as watching it.** `MediaRecorder` encodes
-  a live stream; there is no faster-than-real-time path.
-* **Two downloads from one click** may make the browser ask once whether the
-  site may download multiple files.
+  a live stream; there is no faster-than-real-time path. The SVG has no such
+  cost -- it is built from a replay, not from a recording.
+* **A download that is not tied to a click** is refused or ignored by some
+  browsers, Safari among them, and nothing built after an await can be tied to
+  one. Hence one file per action, and the **⤓ name** button that offers the
+  finished file again.
 * **Stepping backwards costs a rebuild.** Each backward step replays the log
   from the start, so on a history of hundreds of steps it is noticeably slower
   than stepping forwards. Correctness is why: see the stepping section.

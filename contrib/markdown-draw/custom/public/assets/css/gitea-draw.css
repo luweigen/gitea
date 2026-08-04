@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 12;
+  --markup-draw-css: 13;
 }
 
 .markup-draw {
@@ -243,6 +243,48 @@ body.markup-draw-open {
 .markup-draw-confirm-actions button:hover,
 .markup-draw-confirm-actions button:focus-visible {
   background: var(--background-color-3, rgb(0 0 0 / 8%));
+}
+
+/* the format menu: one button per choice, each with a line about what it means */
+.markup-draw-choice {
+  min-width: 22em;
+}
+
+.markup-draw-choice-option {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--background-color-3, rgb(0 0 0 / 20%));
+  border-radius: 6px;
+  background: var(--background-color-2, transparent);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-size: 1em;
+}
+
+.markup-draw-choice-option:hover,
+.markup-draw-choice-option:focus-visible {
+  background: var(--background-color-3, rgb(0 0 0 / 8%));
+}
+
+.markup-draw-choice-label {
+  display: block;
+  font-weight: bold;
+}
+
+.markup-draw-choice-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.9em;
+  opacity: 0.75;
+}
+
+/* offered after an export, because a download that is no longer tied to a click
+   is refused by some browsers -- taking it from here is a click of its own */
+.markup-draw-player-grab {
+  font-weight: bold;
 }
 
 /* --- playing a recorded history back.
