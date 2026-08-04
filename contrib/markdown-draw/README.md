@@ -79,7 +79,9 @@ From there the behaviour is the same:
 * **Read**: drawings render as images wherever markdown renders.
 * **Watch**: a drawing that carries a recorded history gets a **▶ Play the edit
   history** button under it, which replays how it was made -- in an issue, in a
-  file preview, anywhere it renders, with no editor involved.
+  file preview, anywhere it renders, with no editor involved. The player also
+  steps through the history one action at a time, and where the markdown behind
+  the drawing can be reached it can delete a step and write the result back.
 
 In the file editor the insertion goes through Monaco's `executeEdits`, so a
 single Ctrl+Z undoes it.
@@ -270,6 +272,35 @@ would put the picture out of step with the log being replayed into it.
 The player builds the drawing from the log, not from the SVG, so it shows the
 undo and redo as they happened -- the picture goes backwards where the author
 changed their mind.
+
+### Stepping through it, and editing it
+
+**⏮** and **⏭** move one step at a time, and the bar says which step you are on.
+Stepping forward applies the next entry, exactly as opening the drawing does.
+Stepping backward rebuilds from the start: js-draw's `push` clears the redo
+stack, so after "draw A, undo, draw B" the command A is no longer anywhere the
+editor can reach, and stepping back over the undo cannot be done with redo alone.
+Rebuilding is slower on a long history, but it cannot drift away from what
+playing to the same point would have shown.
+
+Where the markdown behind the drawing can be reached -- a comment being written,
+a file being edited, the same condition the **Edit drawing** button goes by --
+two more buttons appear:
+
+* **Delete this step** takes the current step out of the history. The whole log
+  is then replayed to check it still works; if a later step builds on the one
+  being removed -- a move of a stroke that step drew -- the deletion is refused
+  and says so, rather than leaving a history that cannot be replayed. The check
+  covers the whole log, not just up to the deletion, because a break further on
+  would otherwise only surface as a failure to save.
+* **Save to markdown** replays the edited log to its end, regenerates the SVG
+  from that, and writes both back into the fence. The picture in the markdown is
+  therefore always the picture the log produces.
+
+Edits live in the player until they are saved -- closing with unsaved ones asks
+first, and discarding leaves the markdown exactly as it was. On a drawing with no
+editable text behind it, neither button appears and the player is a viewer with
+step controls.
 
 ### When a stored log is not used
 
@@ -476,6 +507,15 @@ with a finger. See [test/README.md](test/README.md).
 * **Playback is a view, not an export.** There is no way yet to turn a recorded
   history into a GIF or a self-playing SVG; it plays in the browser that opened
   it, and nowhere else.
+* **Stepping backwards costs a rebuild.** Each backward step replays the log
+  from the start, so on a history of hundreds of steps it is noticeably slower
+  than stepping forwards. Correctness is why: see the stepping section.
+* **A step can only be deleted if nothing later depends on it.** Removing a
+  stroke that a later step moves would leave a log that cannot replay, so it is
+  refused. Deleting that stroke means deleting the steps that act on it first.
+* **Editing the history needs the markdown to be reachable.** On a posted
+  comment or a plain file view there is no text to write back into, so the
+  player only steps and plays there.
 * **The legacy EasyMDE editor is not covered.** Switching to it hides the
   markdown toolbar, so the button disappears with it; switch back to draw.
 * In the file editor the button only appears for the extensions listed in
@@ -540,6 +580,11 @@ regardless), and `problem` why this drawing will be saved without a log at all.
 After a board is closed it holds the last board's report. If a drawing that
 should have one does not, `drawingsWithHistory` on the page it is rendered on
 says whether the fence carries a log to begin with.
+
+`player` is filled in while a player is open: `position` and `total` are how far
+through the log it is, `components` is what is on the canvas at that step,
+`dirty` says whether there are unsaved edits to the history, and `editable` says
+whether the markdown behind the drawing could be found at all.
 
 `boardCanvas` is filled in while a board is open: `drawing` is where the drawing
 sits on the canvas, `visible` is where the board is looking. If a reopened

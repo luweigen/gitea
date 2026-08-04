@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '12';
+  const SCRIPT_REVISION = '13';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -109,6 +109,18 @@
     playNextSession: 'A later editing session',
     playMoments: 'Moments later',
     playDone: 'End of the recorded history',
+    playBack: 'Back one step',
+    playForward: 'Forward one step',
+    playStep: (at, total) => `${at} / ${total}`,
+    playDelete: 'Delete this step',
+    playDeleteBlocked: 'This step cannot be removed: a later one builds on it',
+    playSave: 'Save to markdown',
+    playSaved: 'Saved to the markdown',
+    playSaveGone: 'This drawing is no longer in the text, so it was not saved',
+    playDiscard: 'Discard the changes?',
+    playDiscardBody: 'This drawing\'s history has been edited but not saved. Closing now leaves the markdown as it was.',
+    playDiscardConfirm: 'Discard them',
+    playDiscardCancel: 'Keep editing',
   };
 
   // octicon-pencil, inlined so that no extra request is needed
@@ -421,6 +433,39 @@
 
   const historyDebug = {state: 'no drawing board opened yet'};
 
+  // A yes/no question inside an overlay.  It goes in a <dialog> so that Escape
+  // dismisses the question rather than the board behind it -- both overlays
+  // already let a key through when one is open.
+  function askConfirmation(elParent, {title, body, confirm, cancel, onConfirm}) {
+    const elDialog = document.createElement('dialog');
+    elDialog.className = 'markup-draw-confirm';
+    const elTitle = document.createElement('p');
+    elTitle.className = 'markup-draw-confirm-title';
+    elTitle.textContent = title;
+    const elBody = document.createElement('p');
+    elBody.textContent = body;
+    const elActions = document.createElement('div');
+    elActions.className = 'markup-draw-confirm-actions';
+    const elCancel = document.createElement('button');
+    elCancel.type = 'button';
+    elCancel.textContent = cancel;
+    const elConfirm = document.createElement('button');
+    elConfirm.type = 'button';
+    elConfirm.className = 'markup-draw-confirm-go';
+    elConfirm.textContent = confirm;
+    elCancel.addEventListener('click', () => elDialog.close());
+    elConfirm.addEventListener('click', () => {
+      elDialog.close();
+      onConfirm();
+    });
+    elDialog.addEventListener('close', () => elDialog.remove(), {once: true});
+    elActions.append(elCancel, elConfirm);
+    elDialog.append(elTitle, elBody, elActions);
+    elParent.append(elDialog);
+    elDialog.showModal();
+    elConfirm.focus();
+  }
+
   function createHistory(jsdraw, editor, elOverlay) {
     const entries = []; // the whole log, oldest first
     const sessions = []; // when each session started; null means "not known"
@@ -608,37 +653,19 @@
     // crossed keeps that deliberate without nagging.
 
     function askBeforeUndo(session, proceed) {
-      const elDialog = document.createElement('dialog');
-      elDialog.className = 'markup-draw-confirm';
       const at = sessions[session];
-      const elTitle = document.createElement('p');
-      elTitle.className = 'markup-draw-confirm-title';
-      elTitle.textContent = i18n.undoAcross;
-      const elBody = document.createElement('p');
-      elBody.textContent = typeof at === 'number'
-        ? i18n.undoAcrossFrom(new Date(at).toLocaleString())
-        : i18n.undoAcrossUnknown;
-      const elActions = document.createElement('div');
-      elActions.className = 'markup-draw-confirm-actions';
-      const elCancel = document.createElement('button');
-      elCancel.type = 'button';
-      elCancel.textContent = i18n.undoAcrossCancel;
-      const elConfirm = document.createElement('button');
-      elConfirm.type = 'button';
-      elConfirm.className = 'markup-draw-confirm-go';
-      elConfirm.textContent = i18n.undoAcrossConfirm;
-      elCancel.addEventListener('click', () => elDialog.close());
-      elConfirm.addEventListener('click', () => {
-        elDialog.close();
-        confirmed.add(session);
-        proceed();
+      askConfirmation(elOverlay, {
+        title: i18n.undoAcross,
+        body: typeof at === 'number'
+          ? i18n.undoAcrossFrom(new Date(at).toLocaleString())
+          : i18n.undoAcrossUnknown,
+        confirm: i18n.undoAcrossConfirm,
+        cancel: i18n.undoAcrossCancel,
+        onConfirm: () => {
+          confirmed.add(session);
+          proceed();
+        },
       });
-      elDialog.addEventListener('close', () => elDialog.remove(), {once: true});
-      elActions.append(elCancel, elConfirm);
-      elDialog.append(elTitle, elBody, elActions);
-      elOverlay.append(elDialog);
-      elDialog.showModal();
-      elConfirm.focus();
     }
 
     // Both the toolbar button and Ctrl+Z call editor.history.undo(), so shadowing
@@ -862,7 +889,9 @@
       elPlay.type = 'button';
       elPlay.className = 'ui tiny basic button markup-draw-play';
       elPlay.textContent = `▶ ${i18n.play}`;
-      elPlay.addEventListener('click', () => void playDrawing(source));
+      // elMarkup is passed so the player can find the text behind the drawing:
+      // where there is one, its steps can be edited and written back.
+      elPlay.addEventListener('click', () => void playDrawing(source, elMarkup ? {elMarkup, elContainer} : null));
       elActions.append(elPlay);
     }
 
@@ -1579,6 +1608,8 @@
   // the open board, so that giteaDrawDebug() can report on it
   let boardHistory = null;
   let boardEditor = null;
+  // ... and the open player
+  let playerState = null;
 
   async function openDrawingBoard({initialSvg, onSave, ignoreHistory = null}) {
     const elOverlay = document.createElement('div');
@@ -1771,17 +1802,33 @@
     return gaps;
   }
 
-  function makePlayerButton(className, label) {
+  // `title` is given for the symbol-only buttons, which need a name for a screen
+  // reader and a tooltip for everyone else.
+  function makePlayerButton(className, label, title = '') {
     const elButton = document.createElement('button');
     elButton.type = 'button';
     elButton.className = className;
     elButton.textContent = label;
+    if (title) {
+      elButton.title = title;
+      elButton.setAttribute('aria-label', title);
+    }
     return elButton;
   }
 
-  async function playDrawing(fenceSource) {
+  async function playDrawing(fenceSource, target = null) {
     const {svg: svgText, stored} = splitHistory(fenceSource.trim());
     if (!stored) return;
+
+    // Changing the history means writing a new fence back, which is only
+    // possible where the markdown behind the drawing can be reached -- the same
+    // condition the "Edit drawing" button already goes by.  Elsewhere (a posted
+    // comment, a file view) the player is a viewer with step controls.
+    const source = target ? sourceForMarkup(target.elMarkup) : null;
+    const fenceIndex = source
+      ? [...target.elMarkup.querySelectorAll('.markup-draw')].indexOf(target.elContainer)
+      : -1;
+    const editable = Boolean(source) && fenceIndex >= 0;
 
     const elOverlay = document.createElement('div');
     elOverlay.className = 'markup-draw-overlay markup-draw-player';
@@ -1790,35 +1837,49 @@
     elHost.textContent = i18n.loading;
     const elBar = document.createElement('div');
     elBar.className = 'markup-draw-player-bar';
+    const elBack = makePlayerButton('markup-draw-player-back', '⏮', i18n.playBack);
     const elPlay = makePlayerButton('markup-draw-player-play', i18n.playPause);
+    const elForward = makePlayerButton('markup-draw-player-forward', '⏭', i18n.playForward);
     const elRestart = makePlayerButton('markup-draw-player-restart', i18n.playRestart);
+    const elDelete = makePlayerButton('markup-draw-player-delete', i18n.playDelete);
+    const elSave = makePlayerButton('markup-draw-player-save', i18n.playSave);
     const elClose = makePlayerButton('markup-draw-player-close', i18n.playClose);
     const elProgress = document.createElement('div');
     elProgress.className = 'markup-draw-player-progress';
     const elFill = document.createElement('div');
     elFill.className = 'markup-draw-player-fill';
     elProgress.append(elFill);
+    const elStep = document.createElement('div');
+    elStep.className = 'markup-draw-player-step';
     const elCaption = document.createElement('div');
     elCaption.className = 'markup-draw-player-caption';
-    elBar.append(elPlay, elRestart, elProgress, elCaption, elClose);
+    elBar.append(elBack, elPlay, elForward, elRestart, elProgress, elStep, elCaption);
+    if (editable) elBar.append(elDelete, elSave);
+    elBar.append(elClose);
     elOverlay.append(elHost, elBar);
     document.body.append(elOverlay);
     document.body.classList.add('markup-draw-open');
 
     let editor = null;
+    let entries = null; // the log, which the step controls may edit
+    let captions = [];
+    let position = 0; // how many entries have been applied
+    let dirty = false; // entries differ from what is in the markdown
+    let playing = false;
     let run = 0; // bumped to abandon a playback in flight
     let paused = false;
     let waiting = null; // resolves when playback is let go again
+    let noteTimer = null;
     // waits in flight, so that pausing can cut one short instead of letting it
     // run out first -- a wait here can be a second and a bit long, and a button
     // that takes that long to answer reads as broken
     const sleepers = new Set();
+    const report = {blockedImages: 0};
 
     // a declaration, not a const: Escape can close the player while js-draw is
     // still loading, which reaches this from above
     function setPaused(value) {
       paused = value;
-      elPlay.textContent = paused ? i18n.playResume : i18n.playPause;
       if (paused) {
         for (const stop of [...sleepers]) stop();
       } else if (waiting) {
@@ -1826,6 +1887,7 @@
         waiting = null;
         resume();
       }
+      refresh();
     }
 
     const fail = (message) => {
@@ -1837,17 +1899,37 @@
     // resolve, so it has to be let go as well or it keeps the editor alive.
     const abandon = () => {
       run++;
+      playing = false;
       setPaused(false);
     };
-    const close = () => {
+    const shutDown = () => {
       abandon();
+      playerState = null;
+      clearTimeout(noteTimer);
       editor?.remove();
       elOverlay.remove();
       document.body.classList.remove('markup-draw-open');
     };
+    // Edits live in the player until they are saved, so leaving with unsaved
+    // ones is the moment to ask -- there is nowhere else they are kept.
+    const close = () => {
+      if (!dirty) {
+        shutDown();
+        return;
+      }
+      askConfirmation(elOverlay, {
+        title: i18n.playDiscard,
+        body: i18n.playDiscardBody,
+        confirm: i18n.playDiscardConfirm,
+        cancel: i18n.playDiscardCancel,
+        onConfirm: shutDown,
+      });
+    };
     elClose.addEventListener('click', close);
     elOverlay.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') close();
+      if (e.key !== 'Escape') return;
+      if (elOverlay.querySelector('dialog[open]')) return;
+      close();
     });
     elOverlay.tabIndex = -1;
     elOverlay.focus();
@@ -1860,6 +1942,7 @@
       fail(`${i18n.playFailed} (${err.message || err})`);
       return;
     }
+    entries = journal.e;
 
     let jsdraw;
     try {
@@ -1869,15 +1952,119 @@
       return;
     }
 
-    elHost.textContent = '';
-    // The canvas is pinned to where the finished drawing sits, so the picture
-    // fills in rather than sliding around under it.
-    editor = new jsdraw.Editor(elHost, {wheelEventsEnabled: 'only-if-focused'});
-    restoreCanvasFrame(jsdraw, editor, svgText);
+    // What to say once entry n has been applied.  Worked out up front so that
+    // stepping to any position says the same thing playing to it would.
+    function buildCaptions(list) {
+      const gaps = sessionGaps(list);
+      const out = new Array(list.length).fill('');
+      let sessionIndex = -1;
+      let current = '';
+      for (const [at, entry] of list.entries()) {
+        if (entry[0] === OP_SESSION) {
+          sessionIndex++;
+          if (sessionIndex === 0) {
+            current = typeof entry[1] === 'number' ? '' : i18n.playFound;
+          } else {
+            current = gaps.has(sessionIndex) ? describeGap(gaps.get(sessionIndex)) : i18n.playNextSession;
+          }
+        }
+        out[at] = current;
+      }
+      return out;
+    }
+    captions = buildCaptions(entries);
 
-    const gaps = sessionGaps(journal.e);
-    const report = {blockedImages: 0};
-    elPlay.addEventListener('click', () => setPaused(!paused));
+    function note(text) {
+      elCaption.textContent = text;
+      elCaption.classList.add('markup-draw-player-note');
+      clearTimeout(noteTimer);
+      noteTimer = setTimeout(() => {
+        elCaption.classList.remove('markup-draw-player-note');
+        refresh();
+      }, 4000);
+    }
+
+    function refresh() {
+      const total = entries.length;
+      playerState = {
+        position,
+        total,
+        dirty,
+        editable,
+        // what is actually on the canvas at this step, so that where the player
+        // has got to can be checked exactly rather than guessed from pixels
+        components: editor ? editor.image.getAllComponents().length : 0,
+        drawing: describeRect(editor?.image.getImportExportRect()),
+      };
+      if (elCaption.classList.contains('markup-draw-player-note')) return; // a note is up
+      elFill.style.width = `${total ? Math.round((position / total) * 100) : 0}%`;
+      elStep.textContent = i18n.playStep(position, total);
+      elCaption.textContent = position >= total
+        ? i18n.playDone
+        : (position > 0 ? captions[position - 1] : '');
+      elPlay.textContent = playing && !paused ? i18n.playPause : i18n.playResume;
+      elBack.disabled = position === 0;
+      elForward.disabled = position >= total;
+      // a session marker is a place in the log, not an action; there is nothing
+      // in the drawing to take away
+      elDelete.disabled = position === 0 || entries[position - 1][0] === OP_SESSION;
+      elSave.disabled = !dirty;
+    }
+
+    // Applying entry n is exactly what opening a drawing does.  There is no
+    // matching "unapply": js-draw's push clears the redo stack, so after
+    // "do A, undo, do B" the command A is no longer anywhere the editor can
+    // reach, and stepping back over the undo cannot be done with redo alone.
+    // Going backwards therefore rebuilds from the start -- slower, but it cannot
+    // drift away from what playing to the same point would have shown.
+    async function applyEntry(entry) {
+      if (entry[0] === OP_DO) {
+        editor.history.push(
+          jsdraw.SerializableCommand.deserialize(sanitizeCommandJson(entry[2], report), editor),
+          true,
+        );
+      } else if (entry[0] === OP_UNDO) {
+        await editor.history.undo();
+      } else if (entry[0] === OP_REDO) {
+        await editor.history.redo();
+      }
+    }
+
+    async function rebuildTo(count) {
+      // js-draw cannot empty an editor, so starting over means a new one
+      editor?.remove();
+      elHost.textContent = '';
+      editor = new jsdraw.Editor(elHost, {wheelEventsEnabled: 'only-if-focused'});
+      restoreCanvasFrame(jsdraw, editor, svgText);
+      position = 0;
+      while (position < count) {
+        await applyEntry(entries[position]);
+        position++;
+      }
+    }
+
+    async function seek(to) {
+      const wanted = Math.max(0, Math.min(to, entries.length));
+      if (wanted < position) {
+        await rebuildTo(wanted);
+      } else {
+        while (position < wanted) {
+          await applyEntry(entries[position]);
+          position++;
+        }
+      }
+      refresh();
+    }
+
+    const guard = async (work) => {
+      try {
+        await work();
+        return true;
+      } catch (err) {
+        fail(`${i18n.playFailed} (${err.message || err})`);
+        return false;
+      }
+    };
 
     const gate = () => (paused ? new Promise((resolve) => { waiting = resolve; }) : null);
 
@@ -1892,72 +2079,117 @@
       const timer = setTimeout(stop, ms);
       sleepers.add(stop);
     });
-    const step = async (ms) => {
+    const pace = async (ms) => {
       await wait(ms);
       await gate();
     };
 
     async function play() {
       const mine = ++run;
+      playing = true;
       setPaused(false);
-      elPlay.disabled = false;
-      elCaption.textContent = '';
-      elFill.style.width = '0%';
-      let sessionIndex = -1;
-      for (const [at, entry] of journal.e.entries()) {
+      // at the end, Play means "again"
+      if (position >= entries.length && !await guard(() => seek(0))) return;
+      while (position < entries.length) {
         await gate();
         if (mine !== run) return;
-        try {
-          if (entry[0] === OP_SESSION) {
-            sessionIndex++;
-            if (sessionIndex > 0) {
-              elCaption.textContent = gaps.has(sessionIndex)
-                ? describeGap(gaps.get(sessionIndex))
-                : i18n.playNextSession;
-              await step(cfg.playbackSessionGap / cfg.playbackSpeed);
-            } else if (typeof entry[1] !== 'number') {
-              elCaption.textContent = i18n.playFound;
-            }
-          } else if (entry[0] === OP_DO) {
-            editor.history.push(
-              jsdraw.SerializableCommand.deserialize(sanitizeCommandJson(entry[2], report), editor),
-              true,
-            );
-          } else if (entry[0] === OP_UNDO) {
-            await editor.history.undo();
-          } else if (entry[0] === OP_REDO) {
-            await editor.history.redo();
-          }
-        } catch (err) {
-          fail(`${i18n.playFailed} (${err.message || err})`);
-          return;
-        }
+        const entry = entries[position];
+        if (!await guard(() => seek(position + 1))) return;
         if (mine !== run) return;
-        elFill.style.width = `${Math.round(((at + 1) / journal.e.length) * 100)}%`;
         // no wait after the last one: there is nothing left to pace, and it would
         // only delay saying that the recording has run out
-        if (entry[0] !== OP_SESSION && at < journal.e.length - 1) {
+        if (position < entries.length) {
           // a real pause is capped: nobody wants to watch somebody's lunch break
-          const gap = Math.min(entry[1] ?? 0, cfg.playbackMaxGap);
-          await step(Math.max(cfg.playbackMinStep, gap) / cfg.playbackSpeed);
+          const gap = entry[0] === OP_SESSION
+            ? cfg.playbackSessionGap
+            : Math.max(cfg.playbackMinStep, Math.min(entry[1] ?? 0, cfg.playbackMaxGap));
+          await pace(gap / cfg.playbackSpeed);
         }
       }
-      elCaption.textContent = i18n.playDone;
-      // there is nothing left to pause; Restart is the only thing that still means
-      // anything, and offering "Pause" for a finished playback reads as broken
-      elPlay.disabled = true;
+      if (mine !== run) return;
+      playing = false;
+      refresh();
     }
 
-    elRestart.addEventListener('click', () => {
-      // js-draw cannot empty an editor, so starting over means a new one
+    elPlay.addEventListener('click', () => {
+      if (playing) {
+        setPaused(!paused);
+      } else {
+        void play();
+      }
+    });
+    elBack.addEventListener('click', () => {
       abandon();
-      editor.remove();
-      elHost.textContent = '';
-      editor = new jsdraw.Editor(elHost, {wheelEventsEnabled: 'only-if-focused'});
-      restoreCanvasFrame(jsdraw, editor, svgText);
-      void play();
+      void guard(() => seek(position - 1));
+    });
+    elForward.addEventListener('click', () => {
+      abandon();
+      void guard(() => seek(position + 1));
+    });
+    elRestart.addEventListener('click', () => {
+      abandon();
+      void guard(async () => {
+        await seek(0);
+        await play();
+      });
     });
 
+    elDelete.addEventListener('click', () => {
+      if (elDelete.disabled) return;
+      abandon();
+      const at = position - 1;
+      const removed = entries[at];
+      void (async () => {
+        entries.splice(at, 1);
+        captions = buildCaptions(entries);
+        try {
+          // The *whole* log has to still replay, not just the part up to here: a
+          // command further on can depend on the one being taken out -- a move of
+          // a stroke this step drew -- and js-draw throws rather than quietly
+          // transforming nothing.  Checking only as far as the deletion would let
+          // that through, to surface later as a failure to save.
+          await rebuildTo(entries.length);
+        } catch {
+          entries.splice(at, 0, removed);
+          captions = buildCaptions(entries);
+          if (!await guard(() => rebuildTo(at + 1))) return;
+          note(i18n.playDeleteBlocked);
+          return;
+        }
+        dirty = true;
+        // back to the step the reader was looking at, which is now the one before
+        // the deleted step
+        if (!await guard(() => rebuildTo(at))) return;
+        refresh();
+      })();
+    });
+
+    elSave.addEventListener('click', () => {
+      if (elSave.disabled) return;
+      abandon();
+      void guard(async () => {
+        // The SVG is regenerated from the end of the edited log, so the picture
+        // in the markdown is the picture the log now produces.
+        await seek(entries.length);
+        const svgElem = await editor.toSVGAsync();
+        const packed = await packHistory(JSON.stringify({
+          v: HISTORY_VERSION, h: svgFingerprint(new XMLSerializer().serializeToString(svgElem)), e: entries,
+        }));
+        const out = attachHistory(new XMLSerializer().serializeToString(svgElem), packed);
+        // the markdown may have been edited while the player was open
+        const fence = findFenceByIndex(source.getValue(), fenceIndex);
+        if (!fence) {
+          note(i18n.playSaveGone);
+          return;
+        }
+        source.replaceRange(fence.start, fence.end, makeFence(out));
+        dirty = false;
+        refresh();
+        note(i18n.playSaved);
+      });
+    });
+
+    if (!await guard(() => rebuildTo(0))) return;
     await play();
   }
 
@@ -2090,6 +2322,9 @@
       // the board is looking.  A drawing that is not inside the view is what a
       // replay that forgot to restore the canvas frame looks like -- the board
       // opens on empty canvas somewhere else, with the drawing off to one side.
+      // With a player open: how far through the log it is, and what is on the
+      // canvas there.
+      player: playerState,
       boardCanvas: boardEditor ? {
         drawing: describeRect(boardEditor.image.getImportExportRect()),
         visible: describeRect(boardEditor.viewport.visibleRect),

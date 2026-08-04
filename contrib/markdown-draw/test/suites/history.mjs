@@ -286,6 +286,9 @@ const broken = await historyOf(page);
 check('an unreplayable log falls back to the SVG',
   /could not be replayed/.test(broken.rejected ?? ''), broken.rejected ?? 'not rejected');
 check('and the board is usable rather than half-built', broken.problem === null);
+// leave nothing open behind us: the stepping tests further down drive this page
+await page.locator('.markup-draw-overlay .toolwidget-tag--exit .toolbar-button').first().click();
+await page.locator('.markup-draw-overlay').waitFor({state: 'detached', timeout: 10000});
 
 // --- the switch, and the size limit the history must not eat into
 //
@@ -385,13 +388,11 @@ check('it plays to the end', await fill() === '100%');
 await viewer.locator('.markup-draw-player-caption')
   .filter({hasText: 'End of the recorded history'}).waitFor({timeout: 5000});
 check('and says so', true);
-check('a finished playback stops offering to pause itself',
-  await viewer.locator('.markup-draw-player-play').isDisabled());
+check('a finished playback offers to play again rather than to pause',
+  await viewer.locator('.markup-draw-player-play').textContent() === 'Play');
 await viewer.locator('.markup-draw-player-restart').click();
 await viewer.waitForTimeout(300);
-check('restarting begins again from an empty canvas',
-  await fill() !== '100%' && !await viewer.locator('.markup-draw-player-play').isDisabled(),
-  `fill ${await fill()}`);
+check('restarting begins again from an empty canvas', await fill() !== '100%', `fill ${await fill()}`);
 const ended = await viewer.locator('.markup-draw-player-host').screenshot();
 check('the drawing appears as it goes, rather than all at once at the end',
   Buffer.compare(midway, ended) !== 0);
@@ -414,6 +415,185 @@ check('an unreadable history reports itself rather than hanging',
   /could not be played back/.test(await viewer.locator('.markup-draw-player-host').textContent()));
 check('and only the close button is left to press',
   await viewer.locator('.markup-draw-player-play').isVisible() === false);
+
+// --- stepping through, deleting a step, and writing the result back
+//
+// This one runs on the main page, whose drawing sits in a markdown editor: the
+// player can only save where there is text behind the drawing to save into.
+
+await setSource(page, fence1);
+await page.evaluate((text) => {
+  document.getElementById('preview').replaceChildren();
+  window.renderFence('preview', text);
+}, stripFence(fence1));
+await page.locator('#preview img.markup-draw-image').waitFor({timeout: 10000});
+await page.locator('#preview .markup-draw-play').click();
+await page.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+const stepText = () => page.locator('.markup-draw-player-step').textContent();
+const playerOf = (page) => page.evaluate(() => window.giteaDrawDebug().player);
+const atEnd = () => page.locator('.markup-draw-player-step')
+  .filter({hasText: `${journal1.e.length} / ${journal1.e.length}`}).waitFor({timeout: 30000});
+await atEnd();
+check('the player counts the steps it has applied', await stepText() === '5 / 5');
+
+// --- back and forward
+await page.locator('.markup-draw-player-back').click();
+await page.waitForTimeout(300);
+check('back one step rewinds the drawing', await stepText() === '4 / 5');
+// The state, not the pixels: a stroke pushed a moment ago sits on js-draw's
+// wet-ink layer and composites a hair differently from one already flattened,
+// so two identical drawings do not have to be identical images.
+const atFour = await playerOf(page);
+await page.locator('.markup-draw-player-back').click();
+await page.waitForTimeout(300);
+check('and again', await stepText() === '3 / 5');
+check('rewinding actually removes a stroke',
+  (await playerOf(page)).components === atFour.components - 1,
+  `${atFour.components} -> ${(await playerOf(page)).components} components`);
+await page.locator('.markup-draw-player-forward').click();
+await page.waitForTimeout(400);
+check('forward one step puts it back', await stepText() === '4 / 5');
+const backAgain = await playerOf(page);
+check('stepping back then forward lands on exactly the state going forward gives',
+  backAgain.components === atFour.components &&
+  JSON.stringify(backAgain.drawing) === JSON.stringify(atFour.drawing),
+  `${JSON.stringify(atFour)} vs ${JSON.stringify(backAgain)}`);
+
+await page.locator('.markup-draw-player-back').click();
+await page.locator('.markup-draw-player-back').click();
+await page.locator('.markup-draw-player-back').click();
+await page.waitForTimeout(400);
+check('it stops at the start rather than running off the end', await stepText() === '1 / 5');
+await page.locator('.markup-draw-player-back').click();
+await page.waitForTimeout(300);
+check('and back is refused there',
+  await stepText() === '0 / 5' && await page.locator('.markup-draw-player-back').isDisabled());
+check('deleting is refused on a session marker, which draws nothing',
+  await page.locator('.markup-draw-player-delete').isDisabled());
+check('nothing is offered for saving until something is changed',
+  await page.locator('.markup-draw-player-save').isDisabled());
+
+// --- a step that a later one builds on cannot be removed
+await page.locator('.markup-draw-player-forward').click();
+await page.locator('.markup-draw-player-forward').click();
+await page.waitForTimeout(400);
+check('back at the first drawn step', await stepText() === '2 / 5');
+await screenshot(page, 'history-stepping');
+
+// --- delete the last stroke and save it back
+while (await stepText() !== '5 / 5') {
+  await page.locator('.markup-draw-player-forward').click();
+  await page.waitForTimeout(200);
+}
+check('the last step can be deleted', !await page.locator('.markup-draw-player-delete').isDisabled());
+await page.locator('.markup-draw-player-delete').click();
+await page.waitForTimeout(600);
+check('deleting a step shortens the log', await stepText() === '4 / 4', await stepText());
+check('and offers to save the result', !await page.locator('.markup-draw-player-save').isDisabled());
+
+await page.locator('.markup-draw-player-save').click();
+await page.locator('.markup-draw-player-caption')
+  .filter({hasText: 'Saved to the markdown'}).waitFor({timeout: 15000});
+const edited = await source(page);
+check('saving writes the shortened drawing back into the fence',
+  countPaths(edited) === countPaths(fence1) - 1,
+  `${countPaths(fence1)} -> ${countPaths(edited)} paths`);
+const editedJournal = readJournal(edited);
+check('and writes the shortened log with it',
+  editedJournal.e.length === journal1.e.length - 1,
+  `${journal1.e.length} -> ${editedJournal.e.length} entries`);
+check('saving clears the unsaved-changes state',
+  await page.locator('.markup-draw-player-save').isDisabled());
+await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-player').waitFor({state: 'detached', timeout: 5000});
+check('closing after saving asks nothing', await page.locator('.markup-draw-confirm').count() === 0);
+
+// the edited drawing must still be a drawing: reopen it in the board
+await setSource(page, edited);
+await openBoard(page);
+const afterEdit = await historyOf(page);
+check('the edited log still opens in the board',
+  afterEdit.rejected === null && afterEdit.problem === null,
+  afterEdit.rejected ?? 'clean');
+check('with one fewer command than before', afterEdit.commands === 2, `${afterEdit.commands} commands`);
+await saveBoard(page);
+
+// --- closing with unsaved edits asks first
+await setSource(page, fence1);
+await page.evaluate((text) => {
+  document.getElementById('preview').replaceChildren();
+  window.renderFence('preview', text);
+}, stripFence(fence1));
+await page.waitForTimeout(300);
+await page.locator('#preview .markup-draw-play').click();
+await page.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+await page.locator('.markup-draw-player-step')
+  .filter({hasText: '5 / 5'}).waitFor({timeout: 30000});
+await page.locator('.markup-draw-player-delete').click();
+await page.waitForTimeout(600);
+const before = await source(page);
+await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-confirm').waitFor({timeout: 5000});
+check('closing with unsaved edits asks first',
+  await page.locator('.markup-draw-confirm').count() === 1);
+await page.locator('.markup-draw-confirm-actions button').first().click();
+await page.waitForTimeout(300);
+check('declining keeps the player open',
+  await page.locator('.markup-draw-player').count() === 1);
+await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-confirm-go').click();
+await page.locator('.markup-draw-player').waitFor({state: 'detached', timeout: 5000});
+check('discarding leaves the markdown untouched', await source(page) === before);
+
+// --- a step that a later one builds on cannot be taken out
+//
+// Deleting the stroke while a later command still moves it would leave a log
+// that replays into nothing -- js-draw throws on a transform whose component is
+// gone. The check has to cover the whole log, not just up to the deletion, or it
+// would pass here and fail later on save.
+
+const strokeStep = journal1.e.find((e) => e[0] === OP_DO &&
+  e[2]?.data?.elemData?.name !== 'background-component' && e[2]?.data?.elemData?.id);
+const strokeId = strokeStep[2].data.elemData.id;
+await setSource(page, makeFence(svg1, {
+  v: 1,
+  e: [
+    [OP_SESSION, null],
+    [OP_DO, 0, strokeStep[2]],
+    // moves the stroke the step before it drew
+    [OP_DO, 0, {
+      commandType: 'transform-element',
+      data: {id: strokeId, transfm: [1, 0, 20, 0, 1, 20, 0, 0, 1], targetZIndex: 3, origZIndex: 2},
+    }],
+  ],
+}));
+await page.evaluate((text) => {
+  document.getElementById('preview').replaceChildren();
+  window.renderFence('preview', text);
+}, stripFence(await source(page)));
+await page.locator('#preview .markup-draw-play').click();
+await page.locator('.markup-draw-player-step').filter({hasText: '3 / 3'}).waitFor({timeout: 30000});
+await page.locator('.markup-draw-player-back').click();
+await page.waitForTimeout(500);
+check('positioned on the step the next one depends on', await stepText() === '2 / 3');
+await page.locator('.markup-draw-player-delete').click();
+await page.locator('.markup-draw-player-caption')
+  .filter({hasText: 'cannot be removed'}).waitFor({timeout: 15000});
+check('a step a later one builds on is refused, with a reason', true);
+const kept = await playerOf(page);
+check('and the log is left exactly as it was',
+  kept.total === 3 && kept.position === 2, JSON.stringify(kept));
+check('so there is still nothing to save', await page.locator('.markup-draw-player-save').isDisabled());
+await page.locator('.markup-draw-player-close').click();
+await page.locator('.markup-draw-player').waitFor({state: 'detached', timeout: 5000});
+
+// --- with no editable text behind it, the player is a viewer
+check('a drawing with no editor behind it offers no delete or save',
+  await viewer.locator('.markup-draw-player-delete').count() === 0 &&
+  await viewer.locator('.markup-draw-player-save').count() === 0);
+check('but still offers the step controls',
+  await viewer.locator('.markup-draw-player-back').count() === 1 &&
+  await viewer.locator('.markup-draw-player-forward').count() === 1);
 
 await browser.close();
 finish();

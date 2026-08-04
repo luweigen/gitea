@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 9;
+  --markup-draw-css: 10;
 }
 
 .markup-draw {
@@ -312,6 +312,31 @@ body.markup-draw-open {
   text-align: right;
   font-size: 0.9em;
   opacity: 0.75;
+}
+
+/* a transient message -- saved, or why a step could not be removed -- shown
+   where the caption goes, so the bar does not gain a slot that is empty the
+   rest of the time */
+.markup-draw-player-caption.markup-draw-player-note {
+  opacity: 1;
+  font-weight: bold;
+}
+
+.markup-draw-player-step {
+  flex: none;
+  font-size: 0.9em;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.markup-draw-player-back,
+.markup-draw-player-forward {
+  padding: 5px 9px;
+}
+
+.markup-draw-player-save:not(:disabled) {
+  border-color: var(--color-primary, #4183c4);
+  font-weight: bold;
 }
 
 /* nothing to drive once playback has failed; only "close" still means anything */
