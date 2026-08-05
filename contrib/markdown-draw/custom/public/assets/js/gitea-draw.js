@@ -14,34 +14,35 @@
 //
 // so it is versioned, diffable and travels with the markdown text itself.
 //
-// The customization is three files, loaded in this order (see header.tmpl):
+// The customization is four files, loaded in this order (see header.tmpl):
 //
 //   gitea-draw.js            this one: the buttons, the drawing board, and
-//                            everything the other two are built on
+//                            everything the other three are built on
 //   gitea-draw-history.js    recording what Ctrl+Z can take back into the
 //                            drawing, and reading it back
 //   gitea-draw-playback.js   watching a recorded drawing being made, and
 //                            exporting that as an animation
+//   gitea-draw-fill.js       filling an area that other elements close off
 //
-// The other two hang themselves off `window.giteaDraw`, which this file
+// The other three hang themselves off `window.giteaDraw`, which this file
 // publishes, and read it as they load -- which is why they load after it.  It
-// only goes one way: both are optional, and without them a drawing is still
-// drawn, edited and rendered exactly as it was before either existed, so this
-// file reaches for them only when a reader clicks something, never while it is
-// being loaded.
+// only goes one way: all three are optional, and without them a drawing is
+// still drawn, edited and rendered exactly as it was before any of them
+// existed, so this file reaches for them only when a reader clicks something,
+// never while it is being loaded.
 
 (() => {
   'use strict';
 
-  // bump when changing this file; the three files are fetched and cached
+  // bump when changing this file; the four files are fetched and cached
   // separately, so giteaDrawDebug() reports a revision per file and a stale
   // browser cache can be told apart from a real problem
-  const REVISION = '25';
+  const REVISION = '26';
 
   // Every option lives here, but only the ones this file acts on are defaulted
-  // here: the other two files add their own on load, so an option sits next to
-  // the code it drives.  The admin's giteaDrawConfig is applied last by each of
-  // them, so it always wins.
+  // here: the other three files add their own on load, so an option sits next
+  // to the code it drives.  The admin's giteaDrawConfig is applied last by each
+  // of them, so it always wins.
   const cfg = {
     // fence info string used to mark a drawing
     lang: 'js-draw',
@@ -79,8 +80,8 @@
   const ATTR_ALIGN_MENU = 'data-markup-draw-align';
   const TOOLBAR_STATE_KEY = 'gitea-draw-toolbar-state';
 
-  // Strings.  The other two files add theirs to this same object as they load,
-  // so a translation still has one place to happen.
+  // Strings.  The other three files add theirs to this same object as they
+  // load, so a translation still has one place to happen.
   const i18n = {
     insert: 'Insert drawing',
     edit: 'Edit drawing',
@@ -128,9 +129,9 @@
 
   // ---------------------------------------------------------------- the namespace
   //
-  // What the recorder and the player are looked up through, and what they add
-  // themselves to.  They load after this file, so nothing here may read them
-  // while it is being defined -- see the note at the top.
+  // What the recorder, the player and the fill tool are looked up through, and
+  // what they add themselves to.  They load after this file, so nothing here
+  // may read them while it is being defined -- see the note at the top.
 
   const draw = {
     cfg,
@@ -2005,8 +2006,13 @@
       wheelEventsEnabled: 'only-if-focused',
       appInfo: {name: 'Gitea', description: 'markdown drawing'},
       pens: cfg.umlPens ? {additionalPenTypes: umlPenTypes(jsdraw)} : null,
+      // the filled areas gitea-draw-fill.js adds are components of its own, and
+      // this is what reads them back out of a stored drawing
+      svg: {loaderPlugins: draw.filling?.loaderPlugins(jsdraw) ?? []},
     });
     setupAlignment(jsdraw, editor, elOverlay);
+    // adds its tool, which has to happen before the toolbar is built below
+    const filling = draw.filling?.create(jsdraw, editor, elOverlay) ?? null;
 
     // js-draw's edge toolbar is the one built for thumbs, so use it on narrow
     // screens and on any touch-first device regardless of its width
@@ -2015,6 +2021,9 @@
     ).matches;
     toolbar = useEdgeToolbar ? jsdraw.makeEdgeToolbar(editor) : jsdraw.makeDropdownToolbar(editor);
     toolbar.addDefaults();
+    // beside the pens and the eraser, and before the stored state is read back
+    // so that the colour and pattern last used come back with everything else
+    filling?.addToToolbar(toolbar);
     restoreToolbarState(toolbar);
     toolbar.addExitButton(() => close());
 
@@ -2237,6 +2246,9 @@
       alignmentProblem: alignDebug.why,
       // the ids to look for under "Shape" in the pen dropdown
       umlPens: cfg.umlPens ? UML_PENS.map((pen) => pen.id) : [],
+      // the fill tool: whether its button is there, what it is set to, and why
+      // the last click on the canvas filled nothing
+      filling: draw.filling?.status() ?? 'gitea-draw-fill.js did not load',
       // what the recorder is doing, or why it is not recording
       history: boardHistory
         ? boardHistory.describe()
@@ -2275,12 +2287,12 @@
     return report;
   };
 
-  // ---------------------------------------------------------------- what the other two use
+  // ---------------------------------------------------------------- what the other three use
   //
   // Assigned here rather than where each is defined, so that the whole of what
-  // gitea-draw-history.js and gitea-draw-playback.js are allowed to reach is
-  // one list.  They destructure it as they load, which is why this file has to
-  // be the one loaded first.
+  // gitea-draw-history.js, gitea-draw-playback.js and gitea-draw-fill.js are
+  // allowed to reach is one list.  They destructure it as they load, which is
+  // why this file has to be the one loaded first.
 
   Object.assign(draw, {
     // reaching the markdown behind a rendered drawing, and writing a fence back

@@ -59,6 +59,7 @@ mv "$tmp_header" "$header"
 cp "${script_dir}/custom/public/assets/js/gitea-draw.js" \
    "${script_dir}/custom/public/assets/js/gitea-draw-history.js" \
    "${script_dir}/custom/public/assets/js/gitea-draw-playback.js" \
+   "${script_dir}/custom/public/assets/js/gitea-draw-fill.js" \
    "${custom_path}/public/assets/js/"
 cp "${script_dir}/custom/public/assets/css/gitea-draw.css" "${custom_path}/public/assets/css/"
 
@@ -93,6 +94,7 @@ done. now restart Gitea, then hard-reload a page in your browser.
     ${custom_path}/public/assets/js/gitea-draw.js
     ${custom_path}/public/assets/js/gitea-draw-history.js
     ${custom_path}/public/assets/js/gitea-draw-playback.js
+    ${custom_path}/public/assets/js/gitea-draw-fill.js
     ${custom_path}/public/assets/css/gitea-draw.css
     ${target}/{bundle.js,bundledStyles.js,LICENSE}
 

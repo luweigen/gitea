@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 16;
+  --markup-draw-css: 17;
 }
 
 .markup-draw {
@@ -454,4 +454,61 @@ body.markup-draw-open {
   border-top: 1px solid #e5178e;
   /* legible over both dark ink and a white background */
   box-shadow: 0 1px 0 rgb(255 255 255 / 55%), 0 -1px 0 rgb(255 255 255 / 55%);
+}
+
+/* --- the fill tool, see gitea-draw-fill.js */
+
+/* The dropdown rows follow js-draw's own layout: a label, then the control.
+   The opacity row carries a readout as well, so it is laid out by hand. */
+.markup-draw-fill-controls > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.markup-draw-fill-controls > div > label {
+  flex: none;
+}
+
+.markup-draw-fill-controls input[type="range"],
+.markup-draw-fill-controls select {
+  flex: 1;
+  min-width: 0;
+}
+
+.markup-draw-fill-readout {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.markup-draw-fill-hint {
+  font-size: 0.85em;
+  opacity: 0.8;
+  /* the hint is a sentence, not a row of controls */
+  display: block;
+}
+
+/* Why a click filled nothing, said over the drawing it is about rather than in
+   a browser dialog -- the board's other questions do the same. It is never in
+   the way of a second try: pointer events go straight through it. */
+.markup-draw-fill-note {
+  position: absolute;
+  left: 50%;
+  bottom: 12%;
+  transform: translateX(-50%);
+  max-width: 80%;
+  padding: 6px 12px;
+  border-radius: var(--border-radius, 4px);
+  background: rgb(0 0 0 / 78%);
+  color: #fff;
+  font-size: 0.9em;
+  text-align: center;
+  pointer-events: none;
+  transition: opacity 0.4s ease-in;
+  z-index: 3;
+}
+
+.markup-draw-fill-note-fading {
+  opacity: 0;
 }

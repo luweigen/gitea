@@ -22,6 +22,7 @@ const ALL_SUITES = [
   'alignment',
   'path-fit',
   'uml-pens',
+  'fill',
   'mobile',
   'file-editor',
   'file-editor-layouts',

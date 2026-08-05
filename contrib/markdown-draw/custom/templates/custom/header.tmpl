@@ -13,16 +13,19 @@
      the browser cache for STATIC_CACHE_TIME (6h by default). If you edit the
      files by hand, change this string by hand too.
 
-     The three scripts are one program split into three files, and the order
-     matters: gitea-draw.js publishes the namespace the other two hang
+     The four scripts are one program split into four files, and the order
+     matters: gitea-draw.js publishes the namespace the other three hang
      themselves off, and gitea-draw-playback.js reads a log that
      gitea-draw-history.js knows how to unpack. "defer" runs them in document
-     order, which is what keeps that promise. Dropping either of the last two
-     leaves drawing and editing working, without recording or playback. */}}
+     order, which is what keeps that promise. Dropping any of the last three
+     leaves drawing and editing working, without recording, playback or the
+     fill tool -- but a drawing that already contains a filled area needs
+     gitea-draw-fill.js to be edited without losing it. */}}
 {{$v := "__MARKDOWN_DRAW_VERSION__"}}
 <link rel="stylesheet" href="{{AssetUrlPrefix}}/css/gitea-draw.css?v={{$v}}">
 <script>window.giteaDrawConfig = {assetsPrefix: "{{AssetUrlPrefix}}/js-draw"};</script>
 <script src="{{AssetUrlPrefix}}/js/gitea-draw.js?v={{$v}}" defer></script>
 <script src="{{AssetUrlPrefix}}/js/gitea-draw-history.js?v={{$v}}" defer></script>
 <script src="{{AssetUrlPrefix}}/js/gitea-draw-playback.js?v={{$v}}" defer></script>
+<script src="{{AssetUrlPrefix}}/js/gitea-draw-fill.js?v={{$v}}" defer></script>
 {{/* markdown-draw:end */}}

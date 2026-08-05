@@ -30,20 +30,23 @@ hard-reload the page.
 Resulting layout:
 
 ```
-<custom>/templates/custom/header.tmpl        loads the four files below
+<custom>/templates/custom/header.tmpl        loads the five files below
 <custom>/public/assets/js/gitea-draw.js               the integration
 <custom>/public/assets/js/gitea-draw-history.js       recording a drawing as it is made
 <custom>/public/assets/js/gitea-draw-playback.js      watching that back, and exporting it
+<custom>/public/assets/js/gitea-draw-fill.js          filling an area other elements close off
 <custom>/public/assets/css/gitea-draw.css    styles
 <custom>/public/assets/js-draw/bundle.js     js-draw itself (~500 KB, lazy-loaded)
 <custom>/public/assets/js-draw/bundledStyles.js
 ```
 
-The three scripts are one program in three files and load in that order:
-`gitea-draw.js` publishes what the other two are built on, and the player reads
-a log the recorder knows how to unpack. Either of the last two can be left out
--- drawing, editing and rendering carry on without it, which is what they did
-before the edit history existed.
+The four scripts are one program in four files and load in that order:
+`gitea-draw.js` publishes what the other three are built on, and the player
+reads a log the recorder knows how to unpack. Any of the last three can be left
+out -- drawing, editing and rendering carry on without it, which is what they
+did before each of them existed. The one caveat is that a drawing which already
+contains a filled area needs `gitea-draw-fill.js` present to be *edited* without
+losing the fill; it renders fine either way.
 
 To uninstall, delete those files (and the `<script>`/`<link>` lines from
 `header.tmpl` if you had one already) and restart.
@@ -281,6 +284,61 @@ that is *maintained* as the code changes, Gitea's built-in mermaid
 computed. [doc/uml-arrows.md](doc/uml-arrows.md) is the maintainer's note: why
 the pens are built the way they are, what is load-bearing, and what it would
 take to go further.
+
+## Filling a closed area
+
+js-draw has no fill of any kind. Its pens can draw a *filled shape* -- a
+rectangle, an ellipse, a freehand blob -- but only as one stroke's own geometry;
+nothing looks at what is already on the canvas and paints the space between it.
+Drawing a box out of four separate lines and then wanting the inside coloured
+was not something the board could do.
+
+The **Fill** button beside the pens adds it. Click once inside an area that what
+you have drawn closes off, and the space is filled up to the lines that bound
+it. Nothing about those lines changes: the fill is a separate element, it has no
+edge of its own, and it goes *underneath* everything, so the drawing stays as
+crisp as it was.
+
+The dropdown holds three settings, all remembered for the next drawing:
+
+| Setting | |
+|---|---|
+| **Colour** | js-draw's own colour picker, with the pipette |
+| **Opacity** | 5% to 100%, **50% by default** -- paint you can read a line through |
+| **Fill** | *Evenly*, *Fading across* (with a side to fade towards), or *Fading out from where you click* |
+
+Both fading patterns run from the chosen colour to fully transparent in the same
+colour, so they thin out rather than turning grey. A radial fade is centred on
+the point you clicked, which is how you aim it: click near a corner and the
+light falls from that corner.
+
+"Closed" means closed *as drawn*, not as geometry. Four separate strokes whose
+ends merely overlap enclose an area to the eye, and that is what is filled --
+the tool renders what is on the canvas and floods the pixels, so the paint stops
+exactly where you see a boundary, line thickness and all. Anything drawn inside
+the area is left as a hole rather than painted over.
+
+If the click is not closed in, nothing is added and the board says so over the
+drawing -- the paint would otherwise run off the page. The usual cause is a gap
+where two strokes were meant to meet; zoom in before clicking, which makes the
+gap that has to be closed smaller, or close it with a short stroke.
+
+A fill is an ordinary element from then on: one click selects it, one Ctrl+Z
+takes it back, the eraser removes it, and it moves and resizes with
+[Align…](#aligning-what-you-drew) like anything else. It does not follow the
+lines that closed it in, though -- move the box and the fill stays where it was,
+the same limitation the arrows have.
+
+Set `fill` to `false` in `giteaDrawConfig` to leave the button out.
+`fillColour`, `fillOpacity`, `fillPattern` and `fillFadeTowards` set what a
+fresh browser starts with; `fillInkAlpha`, `fillUnderlap`, `fillSimplify`,
+`fillMaxRaster` and `fillMinArea` tune the tracing and are documented in
+`gitea-draw-fill.js` next to the code that reads them.
+
+[doc/region-fill.md](doc/region-fill.md) is the maintainer's note: why the area
+is found with a raster rather than with path arithmetic, why a fill is a
+component of its own rather than a stroke, and what to re-check after a js-draw
+upgrade.
 
 ## The edit history
 
@@ -640,6 +698,21 @@ use: the shaft is a quad, a dash is a shorter quad, and a hollow head is a band
 whose inner outline is wound backwards, which the default nonzero fill rule
 turns into a hole.
 
+The fill tool is the one feature that could not be a `Stroke` at all: a js-draw
+rendering style is a flat colour, with no gradient anywhere in it. A fill is
+therefore a component of its own that draws itself, through the two hatches
+js-draw provides for exactly that -- `CanvasRenderer.drawWithRawRenderingContext`
+for what the editor shows and `SVGRenderer.drawWithSVGParent` for what is saved.
+Being a component of its own means it has to be able to come back twice over:
+`AbstractComponent.registerComponent` covers undo and the recorded history, and
+an `EditorSettings.svg.loaderPlugins` plugin claims the saved `<g>` and rebuilds
+the component from it. Which area to fill is decided from *pixels* rather than
+from the paths -- everything drawn is rendered into an offscreen canvas without
+the background and flood-filled from the point clicked -- because "closed" here
+means closed as drawn: four strokes whose ends merely overlap enclose an area to
+the eye and to a flood fill, while as four open paths they intersect in no way a
+point-in-polygon test could use.
+
 ### Security
 
 The SVG in a fence is attacker-controlled content: any user who can comment can
@@ -709,6 +782,17 @@ on top, so an override always wins whichever file the option belongs to:
     exportTailMs: 1200,         // how long the finished drawing is held at the end
     exportName: 'drawing-history',  // base name for the two files
     exportAskBeforeSaving: 'auto',  // 'always' / 'never' override the check
+    // gitea-draw-fill.js
+    fill: true,                 // the "Fill" button beside the pens
+    fillColour: '#1e6bb8',      // what a fresh browser starts with
+    fillOpacity: 0.5,           // half transparent, so a line reads through it
+    fillPattern: 'even',        // 'even' / 'linear' / 'radial'
+    fillFadeTowards: 'bottom',  // which side a linear fade runs out on
+    fillMaxRaster: 1600,        // longest side of the offscreen raster, in px
+    fillInkAlpha: 0.25,         // how opaque a pixel must be to stop the paint
+    fillUnderlap: 2,            // raster px the paint creeps under the ink
+    fillSimplify: 0.8,          // raster px the traced outline may be moved
+    fillMinArea: 12,            // smallest area worth filling, in raster px
   };
 </script>
 ```
@@ -804,13 +888,28 @@ with a finger. See [test/README.md](test/README.md).
   -- it is ink, so it cannot be retyped from composition to aggregation without
   being redrawn. [doc/uml-arrows.md](doc/uml-arrows.md) covers why, and what
   each of those would take.
+* A fill is a shape, not a relationship. It does not follow the lines that
+  closed it in: redraw or move them and the paint stays where it was, so a
+  changed boundary means deleting the fill and clicking again. The eraser
+  removes a fill whole rather than splitting it, unlike a stroke.
+* Filling reads pixels, so a gap narrower than the raster resolution leaks and
+  the fill is refused. The raster is taken at the zoom the board is at, which
+  makes zooming in before clicking the fix -- the same one every paint program
+  has. A drawing much larger than the window is rasterized down to
+  `fillMaxRaster`, which rounds the traced outline a little but does not change
+  what counts as closed.
+* A drawing that contains a fill needs `gitea-draw-fill.js` installed to be
+  *edited*. It renders anywhere -- the SVG is self-contained -- but a board
+  without that file cannot read the fill back and drops it on the next save.
+  [doc/region-fill.md](doc/region-fill.md) covers why that cannot degrade any
+  more gracefully.
 
 ## When the button does not show up
 
 Run `giteaDrawDebug()` in the browser console on the page in question.
 
 **If it is not defined**, `gitea-draw.js` did not run. Find out which of the two
-reasons it is, in the console -- this lists all three script tags, and the first
+reasons it is, in the console -- this lists all four script tags, and the first
 one is the one `giteaDrawDebug()` comes from:
 
 ```js
@@ -832,8 +931,9 @@ one is the one `giteaDrawDebug()` comes from:
 installed -- every file is cached on its own, so one can be stale while the
 others are current. `scripts` has one entry per script that loaded, with its URL
 and its revision; a missing entry means that file 404'd or was never installed,
-which shows up as a drawing that records nothing (`gitea-draw-history.js`) or
-one with no **▶ Play the edit history** button (`gitea-draw-playback.js`). On a
+which shows up as a drawing that records nothing (`gitea-draw-history.js`), one
+with no **▶ Play the edit history** button (`gitea-draw-playback.js`), or a
+board with no **Fill** button (`gitea-draw-fill.js`). On a
 file editor page `codeEditors` must be at least 1 -- if it is 0, either Monaco
 has not finished loading, or your Gitea is too old to publish
 `window.codeEditors`.
@@ -841,6 +941,11 @@ has not finished loading, or your Gitea is too old to publish
 If the pencil button works but **Align…** is not in the selection menu, open a
 board first and run `giteaDrawDebug()` again: `alignmentHooked` is only set once
 a board has been opened, and `alignmentProblem` says what stopped it.
+
+`filling` reports the fill tool, and like `alignmentHooked` it only says anything
+once a board has been opened: `available` and `why` are whether the button was
+added and what stopped it, `chosen` is the colour, opacity and pattern it is set
+to, and `lastProblem` is why the last click on the canvas filled nothing.
 
 `history` reports the recorder. With a board open it is an object:
 `commands` and `entries` are how much has been recorded, `undoStack` how far
