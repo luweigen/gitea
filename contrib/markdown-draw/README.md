@@ -170,6 +170,51 @@ were.
 Every action is one undoable step: a single Ctrl+Z takes back a whole alignment,
 however many elements moved.
 
+### Fitting a path to its bounding box
+
+Select **one** path and the align panel offers **Fit…**, which opens a panel of
+its own. It replaces a rough stroke with a clean one that runs along the edges of
+the box the stroke already fills:
+
+|  | |
+|---|---|
+| **right angles** | square corners, every point exactly on an edge of the box |
+| **rounded corners** | the same route, with each turn rounded off |
+| **curve** | a Bézier whose end points are the route's ends and whose control points are the corners it turns at |
+
+The route is taken from where the stroke starts, where it ends, and which way
+round the box it went -- the two ends move onto the corners they are nearest,
+and the walk between them follows the side the stroke took. So an L drawn over
+the top comes back as an elbow over the top, and the same L drawn under the
+bottom comes back as an elbow under the bottom.
+
+Nothing looks for corners *in* the stroke, which is why the same stroke always
+fits the same way and why a fitted path fits to itself: the panel stays open, so
+one shape can be tried all three ways, and a fit is one undoable step.
+
+A stroke that ends where it began -- a freehand circle, a loop -- has both ends
+on the same corner, so its route is the whole perimeter. *Curve* then makes every
+corner a control point and draws the ring inscribed in the box.
+
+Greyed out means one of:
+
+* more or less than one element is selected -- a fit is defined by one path's own
+  bounding box;
+* the selected element is a **filled shape rather than a line**. That is every
+  shape pen, the UML arrows, and js-draw's pressure-sensitive *Flat* pen: what
+  looks like a line in those is the gap inside one closed outline, and running
+  that outline around the box would leave a hairline where the shape was. The
+  freehand *Round* and *Polyline* pens draw stroked paths and can be fitted.
+
+Set `fit` to `false` in `giteaDrawConfig` to leave the entry out, or
+`fitCornerRadius` to change how hard the rounded corners turn -- it is a fraction
+of the shorter side of the box, `0.25` by default.
+
+This is the manual half of an idea that started out automatic;
+[doc/box-fitting.md](doc/box-fitting.md) is the maintainer's note on why it ended
+up a button, and [doc/stroke-fitting.md](doc/stroke-fitting.md) is the
+measurement that decided it.
+
 ## UML relationship arrows
 
 A class diagram tells its relationships apart by two things: the shape of the
@@ -601,6 +646,8 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
     edgeToolbarMaxWidth: 800,   // below this width, use the touch toolbar
     alignment: true,            // the "Align…" entry in the selection menu
     snapDistance: 8,            // screen px a drag snaps over, 0 to switch off
+    fit: true,                  // the "Fit…" entry inside the align panel
+    fitCornerRadius: 0.25,      // rounded fit radius, of the box's shorter side
     umlPens: true,              // the six UML relationship pens
     history: true,              // record every undoable action into the drawing
     historyMaxChars: 262144,    // past this the log collapses to a snapshot

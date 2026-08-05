@@ -35,6 +35,7 @@ To poke at the harness by hand: `node server.mjs`, then open
 | `combo-editor` | the shared markdown editor (issues, PRs, comments, wiki, releases): insert, render, hostile payloads, round trip |
 | `history` | recording every undoable action into the fence, replaying it into a later board, undoing across sessions, the three ways a stored log is refused, playing one back, stepping through / deleting a step / saving the result, and exporting the animation as a self-playing SVG and a video |
 | `alignment` | the "Align…" entry in the selection menu, the guides that snap a drag, and the geometry both produce |
+| `path-fit` | the "Fit…" panel the align panel opens for a single path: when it is offered, the geometry of its three fits, and that one undo takes the original stroke back |
 | `uml-pens` | the six UML relationship pens: that each draws its notation, that an arrow stays one element across a save and reload, and that it records and replays like any other stroke |
 | `mobile` | drawing with a finger, via raw CDP touch events on an iPhone-sized viewport, including a finger-driven alignment |
 | `file-editor` | the repository file editor against the real Monaco build Gitea pins |

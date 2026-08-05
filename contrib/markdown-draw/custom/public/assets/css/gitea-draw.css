@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 14;
+  --markup-draw-css: 15;
 }
 
 .markup-draw {
@@ -119,6 +119,15 @@ body.markup-draw-open {
   opacity: 1;
 }
 
+/* the fit glyphs draw a route rather than a block, so they are stroked; the
+   faint rects behind them are the bounding box the route follows */
+.markup-draw-glyph path.markup-draw-glyph-line {
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .markup-draw-align-panel {
   display: flex;
   flex-direction: column;
@@ -170,6 +179,35 @@ body.markup-draw-open {
 }
 
 .markup-draw-align-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* "Fit…": the one entry in the align panel that opens a panel of its own, so
+   it is a labelled row rather than another cell in the grid */
+.markup-draw-align-more {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 7px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--foreground-color-1, currentcolor);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9em;
+  text-align: left;
+}
+
+.markup-draw-align-more:hover:not(:disabled),
+.markup-draw-align-more:focus-visible {
+  background: var(--background-color-2, rgb(0 0 0 / 8%));
+  color: var(--foreground-color-2, currentcolor);
+}
+
+.markup-draw-align-more:disabled {
   opacity: 0.35;
   cursor: default;
 }
