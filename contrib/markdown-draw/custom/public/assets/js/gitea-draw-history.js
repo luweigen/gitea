@@ -14,9 +14,13 @@
 // undo stack outlives the browser tab: reopening a drawing restores the stack
 // it was closed with, and the same log is a script of how the drawing was made.
 //
-// What is recorded is exactly what enters js-draw's UndoRedoHistory -- panning
-// and zooming dispatch with `addToHistory` false, so "undoable" and "recorded"
-// are the same set by construction rather than by a rule kept in step by hand.
+// What is recorded is what enters js-draw's UndoRedoHistory and stays there --
+// panning and zooming dispatch with `addToHistory` false, so "undoable" and
+// "recorded" are the same set by construction rather than by a rule kept in
+// step by hand, and an action that is undone comes back out of the log rather
+// than being cancelled by an entry in it.  So the log is what the drawing is
+// made of, not a transcript of the session that made it: undo it and redo it
+// and nothing is left behind either way.
 // `UndoRedoStackUpdated` carries the command *and* which of done/undone/redone
 // happened, so one listener sees all three; `CommandDone` on its own cannot
 // tell a fresh command from a redone one.
@@ -35,7 +39,7 @@
 
   // bump when changing this file; the three files are cached separately, so
   // giteaDrawDebug() reports one revision per file
-  const REVISION = '1';
+  const REVISION = '2';
 
   const draw = window.giteaDraw;
   if (!draw) {
@@ -82,12 +86,17 @@
   const HISTORY_VERSION = 1;
   const HISTORY_MARK = 'gitea-draw-history';
 
-  // entry shapes, kept numeric because an unsupported browser stores them as
-  // plain base64 JSON with no compression to hide the verbosity
+  // Entry shapes, kept numeric because an unsupported browser stores them as
+  // plain base64 JSON with no compression to hide the verbosity.
+  //
+  // Only the first two are written any more: an action undone and left undone
+  // is taken out of the log rather than cancelled by an entry in it (see the
+  // recorder).  The other two are still read, because logs written before that
+  // rule carry them, and replaying one is what turns it into the new shape.
   const OP_SESSION = 0; // [0, startedAt | null]  -- a board was opened
   const OP_DO = 1; //      [1, dt, commandJson]
-  const OP_UNDO = 2; //    [2, dt]
-  const OP_REDO = 3; //    [3, dt]
+  const OP_UNDO = 2; //    [2, dt]  -- historical, still replayed
+  const OP_REDO = 3; //    [3, dt]  -- historical, still replayed
 
   const historyRegExp = () =>
     new RegExp(`<!--${HISTORY_MARK}:(\\d+):([a-z]):([A-Za-z0-9+/=]*)-->`);
@@ -240,7 +249,49 @@
       problem ??= why;
     }
 
-    function record(op, command) {
+    // --- what an undo does to the log
+    //
+    // An action that was undone and left undone was never part of how the
+    // drawing was made, so it is taken back out of the log rather than written
+    // into it along with the undo that cancelled it.  One that was undone and
+    // then redone is put back exactly as it was recorded, so a change of mind
+    // and a change of mind about that leave no trace at all.
+    //
+    // The log's OP_DO entries therefore mirror the live undo stack, and the
+    // last of them is its top.  Only the top matters here -- undo and redo act
+    // nowhere else -- which is what keeps this right once js-draw has started
+    // dropping the oldest entries off its own stack while the log keeps them
+    // (see trim).
+    //
+    // The cost is that a redo cannot cross a save: what this session took back
+    // is not in the file, so reopening the drawing has nothing to put back.
+    // Undo still reaches through, because that work *is* in the file.
+
+    // A stack, like the redo stack it shadows: a redo puts back whatever the
+    // last undo took, so entries come out in the reverse order they went in and
+    // land back in the order they were recorded.
+    const undone = [];
+
+    function retract() {
+      // the last OP_DO, stepping over the session markers between it and the end
+      for (let i = entries.length - 1; i >= 0; i--) {
+        if (entries[i][0] !== OP_DO) continue;
+        undone.push(entries.splice(i, 1)[0]);
+        return;
+      }
+    }
+
+    // Put back unchanged, gap and all: the entry says when the action was taken,
+    // and taking it back and thinking better of it did not move that.  It lands
+    // at the end because that is where it is on the undo stack now, which can
+    // put an action from an earlier session after this session's marker -- that
+    // only shifts which caption playback shows it under.
+    function reinstate() {
+      const entry = undone.pop();
+      if (entry) entries.push(entry);
+    }
+
+    function record(command) {
       if (problem) return;
       if (!liveEmitted) {
         entries.push([OP_SESSION, sessions[live]]);
@@ -251,10 +302,6 @@
       // compress much better
       const dt = Math.max(0, Math.round((at - lastAt) / 10) * 10);
       lastAt = at;
-      if (op !== OP_DO) {
-        entries.push([op, dt]);
-        return;
-      }
       let json;
       try {
         json = command.serialize();
@@ -276,14 +323,17 @@
       const kind = event.stackUpdateType;
       if (kind === jsdraw.UndoEventType.CommandDone) {
         stackSessions.push(current);
+        // a new command clears js-draw's redo stack, so nothing taken back
+        // before it can ever come back
         redoSessions = [];
-        if (recording) record(OP_DO, event.command);
+        undone.length = 0;
+        if (recording) record(event.command);
       } else if (kind === jsdraw.UndoEventType.CommandUndone) {
         redoSessions.push(stackSessions.pop() ?? current);
-        if (recording) record(OP_UNDO);
+        if (recording) retract();
       } else if (kind === jsdraw.UndoEventType.CommandRedone) {
         stackSessions.push(redoSessions.pop() ?? current);
-        if (recording) record(OP_REDO);
+        if (recording) reinstate();
       }
       trim(event.undoStackSize, event.redoStackSize);
     });
@@ -325,6 +375,11 @@
       editor.history.push(command, false);
     }
 
+    // A log written before undone work was taken out still carries its undos and
+    // redos, and they are replayed into the editor as they always were -- but
+    // the same cancellation is applied to `entries` on the way through, so what
+    // comes back out on the next save is the surviving script.  Reading an old
+    // log therefore normalizes it, and a new one has nothing to normalize.
     async function replay(journal) {
       replaying = true;
       try {
@@ -344,10 +399,10 @@
             entries.push([OP_DO, entry[1] ?? 0, json]);
           } else if (op === OP_UNDO) {
             await editor.history.undo();
-            entries.push([OP_UNDO, entry[1] ?? 0]);
+            retract();
           } else if (op === OP_REDO) {
             await editor.history.redo();
-            entries.push([OP_REDO, entry[1] ?? 0]);
+            reinstate();
           }
         }
       } finally {
@@ -480,7 +535,11 @@
       describe: () => ({
         entries: entries.length,
         sessions: sessions.length,
+        // what the log holds, which is what survived: an action undone and left
+        // undone is not in it
         commands: entries.filter((e) => e[0] === OP_DO).length,
+        // ... and how many are waiting on the redo stack to come back
+        undone: undone.length,
         undoStack: stackSessions.length,
         blockedImages: report.blockedImages,
         compacted: compact,

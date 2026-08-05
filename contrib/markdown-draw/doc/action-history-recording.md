@@ -91,6 +91,46 @@ Two smaller facts that shaped the code:
   the front. The log is not capped by that, so the two lengths must be reconciled
   rather than assumed equal -- hence the trimming in the stack-session tracking.
 
+## 2b. An undo takes the action *out* of the log
+
+The log holds what the drawing is made of, not a transcript of the session that
+made it. An action undone and left undone is spliced back out; an action undone
+and then redone is put back exactly as it was recorded, `dt` and all. So an
+undo/redo round trip is a no-op on the log, which is the property the rule is
+worth having for: a false start neither bloats the drawing nor gets acted out in
+the playback.
+
+The bookkeeping is the whole implementation and it is three lines, because of
+one invariant: **the log's `OP_DO` entries mirror the live undo stack, and the
+last of them is its top.** Undo and redo act nowhere but the top, so `retract`
+scans back to the last `OP_DO` (stepping over session markers) and `reinstate`
+appends. That is also why the 700-entry cap above is harmless here -- the two
+lists disagree at the *bottom*, which nothing touches.
+
+Three things follow, and all three are load-bearing:
+
+* **A new command clears `undone`,** because `push` clears js-draw's redo stack.
+  Miss this and an action the author retracted before drawing something else
+  comes back on the next redo, into a log where it does not belong.
+* **Replay applies the same cancellation.** A log written before this rule
+  carries `OP_UNDO` / `OP_REDO`, and those are still replayed into the editor
+  exactly as they always were -- but `entries` is built with `retract` /
+  `reinstate` on the way through, so opening and saving an old drawing
+  normalizes its log. That is why the ops are still read, and why the format
+  version did not need to move: nothing that reads a log had to change, only
+  what is written into a new one.
+* **A redo cannot cross a save.** What a session took back is not in the file,
+  so reopening has nothing to put back. Undo still reaches through, because that
+  work *is* in the file. This is the one thing the rule costs, and it is the
+  README's job to say so.
+
+One inaccuracy is accepted: a command from an earlier session, retracted and
+then reinstated, lands at the end of `entries` and so after this session's
+marker. The undo stack says that is where it now is; the log's session markers
+say when it was made. They disagree, and what comes out of it is a caption in
+the player -- not a wrong picture. Chasing it would mean remembering positions
+across splices for no gain.
+
 ## 3. Storage: an XML comment inside the SVG
 
 `<!--gitea-draw-history:1:z:BASE64-->` immediately before `</svg>`.
@@ -208,6 +248,11 @@ is slower and is the only correct option:
 
 An O(1) scheme using the editor's own undo/redo was written first and is wrong for
 that reason. If someone optimises this later, that is the case to break it on.
+
+Note that §2b did not make this safe again. A log written today has no `OP_UNDO`
+in it, so the case above cannot arise from one -- but the player is also the
+thing that opens logs written before that rule, and those still contain undos.
+Rebuilding stays the only algorithm that is right for both.
 
 ### Deleting a step
 
@@ -388,6 +433,8 @@ which one has moved.
   three people is one log. Gitea's own commit and comment history is where that
   lives.
 * **No scrubbing timeline in the board.** The player steps; the board does not.
+* **Redo across a save** -- §2b. Keeping it would mean carrying the retracted
+  work in the file, which is the thing that rule exists to stop.
 * **Keeping a later step while deleting the one it builds on** -- that is not a
   history that can be replayed, so the confirmation offers all-or-nothing.
 * **Faster-than-real-time video.** `WebCodecs` could encode faster, but muxing to

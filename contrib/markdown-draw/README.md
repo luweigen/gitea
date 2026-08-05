@@ -243,10 +243,19 @@ size changes. Panning and zooming are not, because js-draw dispatches them
 outside the undo stack -- so "undoable" and "recorded" are the same set by
 construction, not by a rule that has to be kept in step.
 
-Undo and redo are recorded too, as events in their own right. A drawing
-therefore remembers not just what was drawn but what was drawn and taken back,
-which is what makes reopening it able to redo, and what will make an animation
-show the corrections rather than only the final path.
+**What was undone is not.** An action taken back with Ctrl+Z comes back out of
+the log rather than being cancelled by an entry in it, so a false start leaves
+no trace: the drawing does not carry it, and the playback does not act it out.
+Undo it and change your mind and the action goes back in exactly as it was
+recorded, gap and all -- an undo followed by a redo is the same log as never
+having pressed either.
+
+So the log is what the drawing is made of, not a transcript of the session that
+made it. The one thing that costs is a redo across a save: work this session
+took back is not in the file, so reopening the drawing has nothing to put back.
+Undo still reaches through, because that work *is* in the file. Within a
+session, undo and redo are js-draw's own and behave exactly as they always did
+-- this is about what gets written, not about what the board can do.
 
 Timing is recorded as the gap between one action and the next, plus one absolute
 timestamp per editing session. The gaps come from `performance.now()`, which is
@@ -334,8 +343,12 @@ fetch js-draw. The canvas is inert while it plays: a stroke drawn onto it by han
 would put the picture out of step with the log being replayed into it.
 
 The player builds the drawing from the log, not from the SVG, so it shows the
-undo and redo as they happened -- the picture goes backwards where the author
-changed their mind.
+drawing being made rather than a fade-in of the finished one. It never goes
+backwards: an action the author took back is not in the log to be played, so
+what you watch is the work that survived, in the order and at the pace it was
+done. A drawing whose log was written before that rule still has its undos in
+it, and the player replays those as it always did -- until the drawing is opened
+and saved once, which is when the log is normalized.
 
 ### Stepping through it, and editing it
 
@@ -668,6 +681,11 @@ with a finger. See [test/README.md](test/README.md).
   taken apart with repeated Ctrl+Z by someone who did not draw it. The markdown
   itself is still the record; the surrounding commit or comment history is what
   undoes an unwanted change.
+* **Redo does not cross a save.** Undo does: reopening a drawing restores the
+  stack it was closed with. But what an editing session took back with Ctrl+Z is
+  not written into the drawing, so there is nothing to put back next time. This
+  is the price of a log that holds only the work that survived; within a session
+  redo is untouched.
 * **The history does not survive a hand edit of the SVG.** Editing the drawing's
   text directly is respected -- the log is dropped rather than replayed over it
   -- but the log is then gone, and a new one starts from the edited picture.

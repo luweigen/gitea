@@ -14,7 +14,7 @@ import {
 const {check, finish} = createChecks('history');
 
 const HISTORY_RE = /<!--gitea-draw-history:(\d+):([a-z]):([A-Za-z0-9+/=]*)-->/;
-const OP_SESSION = 0, OP_DO = 1, OP_UNDO = 2;
+const OP_SESSION = 0, OP_DO = 1, OP_UNDO = 2, OP_REDO = 3;
 
 const readJournal = (fence) => {
   const match = HISTORY_RE.exec(fence);
@@ -62,6 +62,11 @@ const historyOf = (page, field = 'history') => page.waitForFunction((key) => {
 
 const clickUndo = (page) =>
   page.locator('.markup-draw-overlay .toolwidget-tag--undo .toolbar-button').first().click();
+
+// js-draw greys its redo button out when there is nothing to redo, which is how
+// "that work is gone" is told apart from "that work is one click away"
+const redoDisabled = (page) =>
+  page.locator('.markup-draw-overlay .toolwidget-tag--redo .toolbar-button').first().isDisabled();
 
 const browser = await launchBrowser();
 const context = await browser.newContext({viewport: {width: 1280, height: 900}, acceptDownloads: true});
@@ -197,26 +202,46 @@ check('a session with no recorded time says so, rather than inventing one',
 await page.locator('.markup-draw-confirm-actions button').first().click();
 await elConfirm.waitFor({state: 'detached', timeout: 5000});
 
+check('undone work leaves the log rather than being cancelled in it',
+  (await historyOf(page)).commands === 1, `${(await historyOf(page)).commands} commands`);
+
 await saveBoard(page);
 const fence2 = await source(page);
 const journal2 = readJournal(fence2);
-check('undoing is recorded too', journal2.e.filter((e) => e[0] === OP_UNDO).length === 2);
+check('the two undone strokes are not in the saved log',
+  journal2.e.filter((e) => e[0] === OP_DO).length === 1);
+check('so there is no undo left in it to replay',
+  journal2.e.every((e) => e[0] !== OP_UNDO && e[0] !== OP_REDO));
 check('the saved SVG is the undone drawing', countPaths(fence2) === countPaths(fence1) - 2,
   `${countPaths(fence1)} -> ${countPaths(fence2)} paths`);
 
-// --- session three: what was undone can still be redone
+// --- session three: undone is gone for good, undone-and-redone is kept
 
 await setSource(page, fence2);
 await openBoard(page);
 const third = await historyOf(page);
 check('a reopened board restores the undone state, not the drawn one',
-  third.rejected === null && third.undoStack === 1);
+  third.rejected === null && third.undoStack === 1 && third.commands === 1);
+check('and has nothing to redo, because what was taken back was not saved',
+  await redoDisabled(page));
+
+await scribbleOnCanvas(page);
+check('a fresh stroke is recorded', (await historyOf(page)).commands === 2);
+await clickUndo(page);
+await page.waitForTimeout(300);
+check('undoing it takes it back out of the log', (await historyOf(page)).commands === 1);
+check('but it is still there to be redone', !await redoDisabled(page));
 await page.locator('.markup-draw-overlay .toolwidget-tag--redo .toolbar-button').first().click();
 await page.waitForTimeout(300);
-check('and can redo across the session boundary', (await historyOf(page)).undoStack === 2);
+const redone = await historyOf(page);
+check('redoing puts it back in', redone.commands === 2 && redone.undoStack === 2);
 await saveBoard(page);
-check('redoing brings the stroke back',
-  countPaths(await source(page)) === countPaths(fence2) + 1);
+const fence3 = await source(page);
+check('so a stroke undone and redone reaches the markdown',
+  countPaths(fence3) === countPaths(fence2) + 1);
+check('and its log carries it like any other, with no undo beside it',
+  readJournal(fence3).e.filter((e) => e[0] === OP_DO).length === 2 &&
+  readJournal(fence3).e.every((e) => e[0] !== OP_UNDO));
 
 // --- an SVG changed outside the board wins over the log
 
