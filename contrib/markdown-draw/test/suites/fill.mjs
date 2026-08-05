@@ -525,6 +525,94 @@ for (const pattern of ['even', 'radial']) {
   await page.close();
 }
 
+// --- watching a drawing with a fill being drawn
+//
+// The player is a second editor, built by gitea-draw-playback.js, that replays
+// the recorded commands and never opens a board.  So it is a second place a
+// fill has to be able to come back -- and the one that was missed: registering
+// the component type when a *board* opened left the player unable to
+// deserialize the fill, and a drawing played back to its last step and died
+// there.  Registering when js-draw itself loads is what covers both.
+
+{
+  const page = watchPage(await browser.newPage({viewport: {width: 1280, height: 900}}));
+  await page.goto(BASE);
+  await openBoard(page);
+  await drawBox(page, [300, 250, 800, 600]);
+  await chooseFill(page, {pattern: 'radial'});
+  await page.mouse.click(550, 420);
+  await page.waitForTimeout(500);
+  await saveBoard(page);
+
+  await page.evaluate((text) => window.renderFence('standalone', text), await savedSvg(page));
+  await page.locator('#standalone img.markup-draw-image').waitFor({timeout: 10000});
+  await page.locator('#standalone .markup-draw-play').first().click();
+  await page.locator('.markup-draw-player canvas').first().waitFor({timeout: 30000});
+
+  await page.waitForFunction(
+    () => document.querySelector('.markup-draw-player-fill')?.style.width === '100%' ||
+      document.querySelector('.markup-draw-player-dead'),
+    null, {timeout: 30000},
+  );
+  const caption = await page.locator('.markup-draw-player-caption').textContent() ?? '';
+  check('a drawing with a fill plays back to its last step',
+    await page.locator('.markup-draw-player-dead').count() === 0, caption);
+  check('and the player says it reached the end',
+    caption.includes('End of the recorded history'), caption);
+  const player = (await page.evaluate(() => window.giteaDrawDebug())).player;
+  check('the fill is on the replayed canvas, not skipped',
+    player?.position === player?.total && player?.components >= 3, JSON.stringify(player));
+  await screenshot(page, 'fill-playback');
+
+  await page.close();
+}
+
+// --- with the tool switched off
+//
+// `fill: false` has to mean "do not offer the button", not "stop being able to
+// read drawings that already have a fill in them".  Reading one back is two
+// separate mechanisms -- the loader plugin and the component registration --
+// and neither is gated on the option.
+
+{
+  const page = watchPage(await browser.newPage({viewport: {width: 1280, height: 900}}));
+  await page.goto(BASE);
+  await openBoard(page);
+  await drawBox(page, [300, 250, 800, 600]);
+  await chooseFill(page, {pattern: 'linear'});
+  await page.mouse.click(550, 420);
+  await page.waitForTimeout(500);
+  await saveBoard(page);
+  const withFill = await source(page);
+  await page.close();
+
+  const off = watchPage(await browser.newPage({viewport: {width: 1280, height: 900}}));
+  await off.addInitScript(() => { window.__cfgOverride = {fill: false}; });
+  await off.goto(BASE);
+  await off.evaluate((text) => {
+    const el = document.querySelector('textarea.markdown-text-editor');
+    el.value = text;
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.setSelectionRange(20, 20);
+  }, withFill);
+  await off.waitForTimeout(300);
+
+  await openBoard(off);
+  await off.waitForTimeout(800);
+  check('the button is gone when the tool is off',
+    await off.locator(FILL_BUTTON).count() === 0);
+  const status = (await off.evaluate(() => window.giteaDrawDebug())).filling;
+  check('and it says why', status.available === false && status.why.includes('turned off'),
+    JSON.stringify(status));
+
+  await saveBoard(off);
+  check('but the fill in an existing drawing still survives being opened',
+    fillGroups(await savedSvg(off)).length === 1,
+    (await savedSvg(off)).slice(0, 300));
+
+  await off.close();
+}
+
 // --- the touch toolbar
 //
 // A narrow screen gets js-draw's edge toolbar instead of the dropdown one, and

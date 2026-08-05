@@ -62,7 +62,7 @@
 
   // bump when changing this file; the files are cached separately, so
   // giteaDrawDebug() reports one revision per file
-  const REVISION = '3';
+  const REVISION = '4';
 
   const draw = window.giteaDraw;
   if (!draw) {
@@ -1120,8 +1120,18 @@
   }
 
   draw.filling = {
+    // Called the moment js-draw itself is loaded, whoever loaded it.  Reading a
+    // fill back has to work everywhere a drawing is rebuilt, and that is more
+    // places than the board: the player replays the same commands into an
+    // editor of its own.
+    //
+    // Neither this nor the loader plugin is gated on cfg.fill, and that is the
+    // point of them being separate from `create`: turning the tool off has to
+    // mean "do not offer the button", not "stop being able to read drawings
+    // that already have a fill in them".
+    register: defineComponent,
     // called before the editor is built, so a stored drawing loads its fills
-    loaderPlugins: (jsdraw) => (cfg.fill ? [loaderPlugin(jsdraw)] : []),
+    loaderPlugins: (jsdraw) => [loaderPlugin(jsdraw)],
     // called once the editor exists and before its toolbar is built
     create,
     // what giteaDrawDebug() reports

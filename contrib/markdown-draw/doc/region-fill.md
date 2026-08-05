@@ -10,8 +10,9 @@ Line references are to **js-draw 1.33.0**, `dist/mjs/…`, which is what
 end.
 
 All of it lives in `custom/public/assets/js/gitea-draw-fill.js`. `gitea-draw.js`
-gains four lines: one editor setting, one call before the toolbar is built, one
-after, and one line in `giteaDrawDebug()`.
+gains five lines: one editor setting, one call before the toolbar is built, one
+after, one where js-draw finishes loading (see §5), and one line in
+`giteaDrawDebug()`.
 
 ## 0. js-draw has no fill
 
@@ -138,8 +139,22 @@ separate ways it must:
 `gitea-draw-history.js` -- which stores what a command *serializes to*. This is
 `AbstractComponent.registerComponent(kind, deserialize)`, and it must happen
 before any such component is constructed: `AbstractComponent`'s constructor
-throws for an unregistered kind. That is why both entry points into this file
-call the same idempotent `defineComponent`.
+throws for an unregistered kind, and `AbstractComponent.deserialize` throws
+`Element with data [object Object] cannot be deserialized` for one it was never
+told about.
+
+**Registering it when a board opens is not enough, and this was a real bug.**
+The player in `gitea-draw-playback.js` replays the same commands into an editor
+of its own and never opens a board, so a drawing whose log contained a fill
+played to its last step and died there -- with that message, in a feature that
+had nothing to do with filling. The registration therefore hangs off
+`loadJsDraw` in `gitea-draw.js`, which is the one moment every path that can
+rebuild a drawing goes through. Anything else that ever replays commands gets it
+for free; anything that registers per-editor will have the same bug again.
+
+Note that it cannot be done from this file by wrapping `draw.loadJsDraw`:
+`gitea-draw-playback.js` destructures that off the namespace as it loads, and it
+loads *before* this file does.
 
 **Through SVG**, because that is what lives in the markdown, and every reopen is
 a round trip. On the way out the `<g>` carries a `data-gitea-draw-fill`
@@ -181,6 +196,12 @@ The colour reported and accepted there carries the opacity in its **alpha**, the
 way a translucent stroke's does -- and the same way the fill tool's own dropdown
 does, so the two controls mean the same thing by a colour. See §6 for why that is
 the only control either of them has.
+
+**`fill: false` turns the button off, not the format.** Registering the
+component type and installing the loader plugin are both unconditional; only
+`create` -- the tool and its toolbar widget -- looks at the option. An admin
+switching the tool off must not make every drawing that already has a fill in it
+lose that fill on the next save.
 
 **A fill goes underneath everything**, via the `initialZIndex` argument to
 `AbstractComponent`'s constructor rather than a second command. Translucent paint
@@ -250,6 +271,10 @@ Re-check, in order of how quietly each would break:
    plus the `isRestylableComponent` flag, and `createRestyleComponentCommand` is
    still exported. If not, recolouring a fill from the selection menu goes back
    to doing nothing.
+
+Test the *player* as well as the board after any of these. The board and the
+player rebuild a drawing by two different routes, and the one bug this feature
+has actually shipped was visible only in the player.
 
 `test/suites/fill.mjs` covers all six from the outside: it fills, saves, reopens
 and compares the SVG. A js-draw upgrade that breaks any of them fails it.

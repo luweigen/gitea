@@ -902,8 +902,11 @@ with a finger. See [test/README.md](test/README.md).
   `fillMaxRaster`, which rounds the traced outline a little but does not change
   what counts as closed.
 * A drawing that contains a fill needs `gitea-draw-fill.js` installed to be
-  *edited*. It renders anywhere -- the SVG is self-contained -- but a board
-  without that file cannot read the fill back and drops it on the next save.
+  *edited* or *played back*. It renders anywhere -- the SVG is self-contained --
+  but without that file a board cannot read the fill back and drops it on the
+  next save, and the player stops at the step that made it. Switching the tool
+  off with `fill: false` is not the same thing: that only removes the button,
+  and drawings with fills go on being read, saved and played as before.
   [doc/region-fill.md](doc/region-fill.md) covers why that cannot degrade any
   more gracefully.
 

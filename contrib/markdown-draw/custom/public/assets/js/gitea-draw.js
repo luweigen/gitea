@@ -37,7 +37,7 @@
   // bump when changing this file; the four files are fetched and cached
   // separately, so giteaDrawDebug() reports a revision per file and a stale
   // browser cache can be told apart from a real problem
-  const REVISION = '26';
+  const REVISION = '27';
 
   // Every option lives here, but only the ones this file acts on are defaulted
   // here: the other three files add their own on load, so an option sits next
@@ -198,6 +198,13 @@
       await loadScript(`${cfg.assetsPrefix}/bundledStyles.js`); // self-injects a <style>
       await loadScript(`${cfg.assetsPrefix}/bundle.js`); // defines window.jsdraw
       if (!window.jsdraw?.Editor) throw new Error('js-draw did not register itself, check assetsPrefix');
+      // A filled area is a component type of gitea-draw-fill.js's own, and
+      // js-draw refuses to deserialize one it has not been told about.  That
+      // has to happen before anything rebuilds a drawing from JSON, which is
+      // not only the board: the player replays the same commands into an
+      // editor of its own and never opens one.  This is the single moment
+      // every one of them goes through.
+      draw.filling?.register(window.jsdraw);
       return window.jsdraw;
     })();
     return jsDrawPromise;
