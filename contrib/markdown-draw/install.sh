@@ -56,7 +56,10 @@ fi
 sed "s/__MARKDOWN_DRAW_VERSION__/${version}/g" \
   "${script_dir}/custom/templates/custom/header.tmpl" >>"$tmp_header"
 mv "$tmp_header" "$header"
-cp "${script_dir}/custom/public/assets/js/gitea-draw.js" "${custom_path}/public/assets/js/"
+cp "${script_dir}/custom/public/assets/js/gitea-draw.js" \
+   "${script_dir}/custom/public/assets/js/gitea-draw-history.js" \
+   "${script_dir}/custom/public/assets/js/gitea-draw-playback.js" \
+   "${custom_path}/public/assets/js/"
 cp "${script_dir}/custom/public/assets/css/gitea-draw.css" "${custom_path}/public/assets/css/"
 
 # 2. js-draw's prebuilt bundle
@@ -88,6 +91,8 @@ done. now restart Gitea, then hard-reload a page in your browser.
   installed:
     ${custom_path}/templates/custom/header.tmpl
     ${custom_path}/public/assets/js/gitea-draw.js
+    ${custom_path}/public/assets/js/gitea-draw-history.js
+    ${custom_path}/public/assets/js/gitea-draw-playback.js
     ${custom_path}/public/assets/css/gitea-draw.css
     ${target}/{bundle.js,bundledStyles.js,LICENSE}
 

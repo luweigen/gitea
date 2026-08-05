@@ -30,12 +30,20 @@ hard-reload the page.
 Resulting layout:
 
 ```
-<custom>/templates/custom/header.tmpl        loads the two files below
-<custom>/public/assets/js/gitea-draw.js      the integration
+<custom>/templates/custom/header.tmpl        loads the four files below
+<custom>/public/assets/js/gitea-draw.js               the integration
+<custom>/public/assets/js/gitea-draw-history.js       recording a drawing as it is made
+<custom>/public/assets/js/gitea-draw-playback.js      watching that back, and exporting it
 <custom>/public/assets/css/gitea-draw.css    styles
 <custom>/public/assets/js-draw/bundle.js     js-draw itself (~500 KB, lazy-loaded)
 <custom>/public/assets/js-draw/bundledStyles.js
 ```
+
+The three scripts are one program in three files and load in that order:
+`gitea-draw.js` publishes what the other two are built on, and the player reads
+a log the recorder knows how to unpack. Either of the last two can be left out
+-- drawing, editing and rendering carry on without it, which is what they did
+before the edit history existed.
 
 To uninstall, delete those files (and the `<script>`/`<link>` lines from
 `header.tmpl` if you had one already) and restart.
@@ -216,6 +224,11 @@ take to go further.
 Every action that Ctrl+Z can take back is written into the drawing itself, so
 the undo stack outlives the tab and the same record can later be played back as
 an animation of how the drawing was made.
+
+This is the half of the customization that lives in its own two files:
+`gitea-draw-history.js` knows the log's format -- how it is recorded, stored and
+read back -- and `gitea-draw-playback.js` knows how to show one, step through it
+and export it. Neither is reached until a reader clicks something.
 
 If you are about to change any of this, read
 [doc/action-history-recording.md](doc/action-history-recording.md) first: it
@@ -589,8 +602,9 @@ guard `MERMAID_MAX_SOURCE_CHARACTERS` provides for mermaid.
 
 ### Configuration
 
-Override any of the defaults before `gitea-draw.js` loads, e.g. in
-`header.tmpl`:
+Override any of the defaults before the scripts load, e.g. in `header.tmpl`.
+Each file defaults the options it acts on and then re-applies `giteaDrawConfig`
+on top, so an override always wins whichever file the option belongs to:
 
 ```html
 <script>
@@ -602,9 +616,11 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
     alignment: true,            // the "Align…" entry in the selection menu
     snapDistance: 8,            // screen px a drag snaps over, 0 to switch off
     umlPens: true,              // the six UML relationship pens
+    // gitea-draw-history.js
     history: true,              // record every undoable action into the drawing
     historyMaxChars: 262144,    // past this the log collapses to a snapshot
     historyConfirmUndo: true,   // ask before undoing into an earlier session
+    // gitea-draw-playback.js
     playback: true,             // the "▶ Play the edit history" button
     playbackMaxGap: 1200,       // longest pause, in ms, playback acts out
     playbackSessionGap: 900,    // beat where one session ends and the next begins
@@ -710,14 +726,15 @@ with a finger. See [test/README.md](test/README.md).
 
 Run `giteaDrawDebug()` in the browser console on the page in question.
 
-**If it is not defined**, the script did not run. Find out which of the two
-reasons it is, in the console:
+**If it is not defined**, `gitea-draw.js` did not run. Find out which of the two
+reasons it is, in the console -- this lists all three script tags, and the first
+one is the one `giteaDrawDebug()` comes from:
 
 ```js
 [...document.scripts].map((s) => s.src).filter((s) => s.includes('gitea-draw'))
 ```
 
-* **Empty** -- the `<script>` tag is not in the page, so `header.tmpl` is not
+* **Empty** -- the `<script>` tags are not in the page, so `header.tmpl` is not
   being read. Check `<custom>/templates/custom/header.tmpl` really is under the
   *Custom File Root Path* the admin panel reports, and restart Gitea (templates
   are read at startup).
@@ -727,12 +744,16 @@ reasons it is, in the console:
   cache entry and will not help. `install.sh` stamps a fresh `?v=` on every run
   for this reason, but it only takes effect after a Gitea restart.
 
-**If it is defined**, it prints what the script sees. `scriptRevision` and
+**If it is defined**, it prints what the script sees. `scripts` and
 `cssRevision` tell you whether the browser is running the versions you
-installed -- the two files are cached independently, so one can be stale while
-the other is current. On a file editor page
-`codeEditors` must be at least 1 -- if it is 0, either Monaco has not finished
-loading, or your Gitea is too old to publish `window.codeEditors`.
+installed -- every file is cached on its own, so one can be stale while the
+others are current. `scripts` has one entry per script that loaded, with its URL
+and its revision; a missing entry means that file 404'd or was never installed,
+which shows up as a drawing that records nothing (`gitea-draw-history.js`) or
+one with no **▶ Play the edit history** button (`gitea-draw-playback.js`). On a
+file editor page `codeEditors` must be at least 1 -- if it is 0, either Monaco
+has not finished loading, or your Gitea is too old to publish
+`window.codeEditors`.
 
 If the pencil button works but **Align…** is not in the selection menu, open a
 board first and run `giteaDrawDebug()` again: `alignmentHooked` is only set once

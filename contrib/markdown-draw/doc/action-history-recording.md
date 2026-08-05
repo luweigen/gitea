@@ -11,6 +11,31 @@ Line references are to **js-draw 1.33.0**, `dist/mjs/…`, which is what
 `install.sh` pins. Re-check them after an upgrade -- there is a checklist at the
 end.
 
+## 0. Where the code is
+
+Two files, plus the one they are built on:
+
+| File | What is in it |
+|---|---|
+| `gitea-draw-history.js` | the log: its format, how it is stored in the SVG, how a recorded command is sanitized and read, and the recorder a board fills one in with |
+| `gitea-draw-playback.js` | the player, the step controls and the animation export -- everything that turns a log into something on screen |
+| `gitea-draw.js` | the buttons, the drawing board, and the namespace the other two hang off (`window.giteaDraw`) |
+
+The split is along one line: **knowing the format** is on the history side and
+**showing it** is on the playback side. §1's "the log is the source of truth"
+lives in the first, §7's "stepping backwards rebuilds" in the second. If a
+change has you reaching for `OP_DO` or a `commandType` string in the playback
+file, the reading of it belongs in the history file, next to the rest of the
+format.
+
+The two files load *after* `gitea-draw.js` and read its API when they load, so
+the order of the three `<script defer>` tags in `header.tmpl` is load-bearing.
+It only goes one way: the board reaches the recorder and the player through
+`draw.recording` / `draw.playback` when a reader clicks something, never while
+it is being loaded, so either file can be missing and drawing still works.
+`giteaDrawDebug().scripts` lists the ones that did load, with a revision each --
+they are cached separately, so one can be stale while the others are current.
+
 ## 1. The decision everything else follows from
 
 **The log is a complete script from an empty canvas. The SVG in the fence is a
