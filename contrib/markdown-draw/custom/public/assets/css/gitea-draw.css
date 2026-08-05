@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 15;
+  --markup-draw-css: 16;
 }
 
 .markup-draw {
@@ -183,33 +183,18 @@ body.markup-draw-open {
   cursor: default;
 }
 
-/* "Fit…": the one entry in the align panel that opens a panel of its own, so
-   it is a labelled row rather than another cell in the grid */
-.markup-draw-align-more {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 5px 7px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--foreground-color-1, currentcolor);
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.9em;
-  text-align: left;
-}
-
-.markup-draw-align-more:hover:not(:disabled),
-.markup-draw-align-more:focus-visible {
-  background: var(--background-color-2, rgb(0 0 0 / 8%));
-  color: var(--foreground-color-2, currentcolor);
-}
-
-.markup-draw-align-more:disabled {
-  opacity: 0.35;
+/* "Fit…" is greyed out when the selection is not one path.  js-draw's menu
+   options have no disabled state of their own -- every one it puts there is
+   always available -- so one is given here, including cancelling the hover it
+   would otherwise still light up with. */
+.markup-draw-fit-entry:disabled {
+  opacity: 0.4;
   cursor: default;
+}
+
+.markup-draw-fit-entry:disabled:hover {
+  background-color: transparent;
+  color: var(--foreground-color-1);
 }
 
 .markup-draw-align-back,

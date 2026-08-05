@@ -69,6 +69,10 @@ From there the behaviour is the same:
   at the corner of the selection: next to js-draw's own *Duplicate* / *Delete* /
   *Copy* there is an **Align…** entry. See
   [Aligning what you drew](#aligning-what-you-drew).
+* **Tidy up a stroke**: select one path and the same menu offers **Fit…**, which
+  redraws it along the edges of its own bounding box -- as a right-angled
+  connector, a rounded one, or a curve. See
+  [Fitting a path to its bounding box](#fitting-a-path-to-its-bounding-box).
 * **Draw a UML relationship**: the pen's *Shape* list has the six class-diagram
   arrows -- generalization, realization, composition, aggregation, association
   and dependency -- next to js-draw's own arrow and line. See
@@ -170,11 +174,14 @@ were.
 Every action is one undoable step: a single Ctrl+Z takes back a whole alignment,
 however many elements moved.
 
-### Fitting a path to its bounding box
+## Fitting a path to its bounding box
 
-Select **one** path and the align panel offers **Fit…**, which opens a panel of
-its own. It replaces a rough stroke with a clean one that runs along the edges of
-the box the stroke already fills:
+**Fit…** sits in the same menu as [Align…](#aligning-what-you-drew), next to it
+rather than inside it: they are different questions about the selection -- where
+it sits against everything else, and what shape one path in it should be.
+
+Select **one** path and it opens a panel offering to replace a rough stroke with
+a clean one that runs along the edges of the box the stroke already fills:
 
 |  | |
 |---|---|
@@ -196,11 +203,12 @@ A stroke that ends where it began -- a freehand circle, a loop -- has both ends
 on the same corner, so its route is the whole perimeter. *Curve* then makes every
 corner a control point and draws the ring inscribed in the box.
 
-Greyed out means one of:
+The entry is greyed out, with the reason as its tooltip, when the selection is
+one of:
 
-* more or less than one element is selected -- a fit is defined by one path's own
+* anything other than exactly one element -- a fit is defined by one path's own
   bounding box;
-* the selected element is a **filled shape rather than a line**. That is every
+* a **filled shape rather than a line**. That is every
   shape pen, the UML arrows, and js-draw's pressure-sensitive *Flat* pen: what
   looks like a line in those is the gap inside one closed outline, and running
   that outline around the box would leave a hairline where the shape was. The
@@ -646,7 +654,7 @@ Override any of the defaults before `gitea-draw.js` loads, e.g. in
     edgeToolbarMaxWidth: 800,   // below this width, use the touch toolbar
     alignment: true,            // the "Align…" entry in the selection menu
     snapDistance: 8,            // screen px a drag snaps over, 0 to switch off
-    fit: true,                  // the "Fit…" entry inside the align panel
+    fit: true,                  // the "Fit…" entry beside "Align…" in that menu
     fitCornerRadius: 0.25,      // rounded fit radius, of the box's shorter side
     umlPens: true,              // the six UML relationship pens
     history: true,              // record every undoable action into the drawing

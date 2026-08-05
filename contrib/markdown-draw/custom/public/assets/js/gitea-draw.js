@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '22';
+  const SCRIPT_REVISION = '23';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -1861,24 +1861,10 @@
     return elHead;
   }
 
-  // Swaps `elPanel` for the panel `build` returns, and back again when that one
-  // is dismissed.  Hiding rather than removing keeps the panel underneath as it
-  // was found -- which base object is chosen, which button had focus.
-  function pushPanel(elPanel, build) {
-    const elParent = elPanel.parentNode;
-    elPanel.style.display = 'none';
-    const elNext = build(() => {
-      elNext.remove();
-      elPanel.style.display = '';
-    });
-    elParent.append(elNext);
-    elNext.querySelector('button')?.focus();
-  }
-
-  // "Fit…", which the align panel opens for a single selected path.  It stays
-  // open after a fit, like the align panel does, so one shape can be tried
-  // three ways -- a fitted path fits the same way again, its box being the box
-  // it was just given.
+  // "Fit…", the panel behind the menu entry of that name.  It stays open after
+  // a fit, like the align panel does, so one shape can be tried three ways -- a
+  // fitted path fits the same way again, its box being the box it was just
+  // given.
   function buildFitPanel(ctx, onBack) {
     const elPanel = document.createElement('div');
     elPanel.className = 'markup-draw-align-panel';
@@ -1958,34 +1944,45 @@
       elGrid.append(elButton);
     }
     elPanel.append(elGrid);
-
-    // "Fit…" needs a panel of its own rather than three more cells: a fit is
-    // defined by one path's own bounding box, so it has nothing to say about a
-    // selection of several and would sit greyed out most of the time.
-    if (cfg.fit) {
-      const problem = fitProblem(ctx);
-      const elFit = document.createElement('button');
-      elFit.type = 'button';
-      elFit.className = 'markup-draw-align-more';
-      elFit.disabled = Boolean(problem);
-      elFit.title = problem || i18n.fitToBox;
-      elFit.append(makeGlyph(GLYPHS.fit), document.createTextNode(i18n.fit));
-      elFit.addEventListener('click', () => {
-        pushPanel(elPanel, (onFitBack) => buildFitPanel(ctx, () => {
-          onFitBack();
-          elFit.focus();
-        }));
-      });
-      elPanel.append(elFit);
-    }
     return elPanel;
   }
 
-  // Adds "Align…" to the menu the selection's "…" button (and a right click)
-  // opens.  js-draw builds that menu as a <dialog class="editor-popup-menu">
-  // holding a .content list of .editor-popup-menu-option buttons; everything
-  // js-draw puts there is left alone, ours is appended.
-  function injectAlignEntry(ctx, elRoot) {
+  // One entry in the selection's menu: a button that swaps the menu's own
+  // contents for a panel of ours, and puts them back on the way out.  Hiding
+  // rather than removing keeps whatever js-draw built exactly as it was found.
+  function makeMenuEntry(elContent, {glyph, label, className, problem, build}) {
+    const elEntry = document.createElement('button');
+    elEntry.type = 'button';
+    elEntry.className = `option editor-popup-menu-option ${className}`;
+    elEntry.setAttribute('role', 'menuitem');
+    elEntry.disabled = Boolean(problem);
+    if (problem) elEntry.title = problem;
+    elEntry.append(makeGlyph(glyph), document.createTextNode(label));
+    elEntry.addEventListener('click', () => {
+      const elHidden = [...elContent.children];
+      for (const el of elHidden) el.style.display = 'none';
+      const elPanel = build(() => {
+        elPanel.remove();
+        for (const el of elHidden) el.style.display = '';
+        elEntry.focus();
+      });
+      elContent.append(elPanel);
+      elPanel.querySelector('button')?.focus();
+    });
+    return elEntry;
+  }
+
+  // Adds "Align…" and "Fit…" to the menu the selection's "…" button (and a
+  // right click) opens.  js-draw builds that menu as a
+  // <dialog class="editor-popup-menu"> holding a .content list of
+  // .editor-popup-menu-option buttons; everything js-draw puts there is left
+  // alone, ours are appended.
+  //
+  // The two are siblings rather than one inside the other: they are different
+  // questions about the selection -- where it sits against everything else, and
+  // what shape one path in it should be -- and neither is a step on the way to
+  // the other.
+  function injectMenuEntries(ctx, elRoot) {
     // a menu that is on its way out keeps its element for the length of its
     // fade, so the one being opened is the last that is not fading
     const elDialogs = elRoot.querySelectorAll('dialog.editor-popup-menu:not(.-hide)');
@@ -1996,22 +1993,24 @@
     if (!elContent || !ctx.tool.getSelectedObjects().length) return;
     elDialog.setAttribute(ATTR_ALIGN_MENU, 'true');
 
-    const elEntry = document.createElement('button');
-    elEntry.type = 'button';
-    elEntry.className = 'option editor-popup-menu-option markup-draw-align-entry';
-    elEntry.setAttribute('role', 'menuitem');
-    elEntry.append(makeGlyph(GLYPHS.left), document.createTextNode(i18n.align));
-    elEntry.addEventListener('click', () => {
-      const elHidden = [...elContent.children];
-      for (const el of elHidden) el.style.display = 'none';
-      const elPanel = buildAlignPanel(ctx, () => {
-        elPanel.remove();
-        for (const el of elHidden) el.style.display = '';
-      });
-      elContent.append(elPanel);
-      elPanel.querySelector('button')?.focus();
-    });
-    elContent.append(elEntry);
+    elContent.append(makeMenuEntry(elContent, {
+      glyph: GLYPHS.left,
+      label: i18n.align,
+      className: 'markup-draw-align-entry',
+      build: (onBack) => buildAlignPanel(ctx, onBack),
+    }));
+    // Greyed out rather than left out: a fit needs one path and most selections
+    // are not one, so an entry that came and went would look like a bug, and
+    // the tooltip is the only place the reason can be said.
+    if (cfg.fit) {
+      elContent.append(makeMenuEntry(elContent, {
+        glyph: GLYPHS.fit,
+        label: i18n.fit,
+        className: 'markup-draw-fit-entry',
+        problem: fitProblem(ctx),
+        build: (onBack) => buildFitPanel(ctx, onBack),
+      }));
+    }
   }
 
   function setupAlignment(jsdraw, editor, elRoot) {
@@ -2073,10 +2072,10 @@
     tool.showContextMenu = (anchor, preferSelectionMenu = true) => {
       const result = showContextMenu(anchor, preferSelectionMenu);
       // the menu's <dialog> is built and shown synchronously, so it is already
-      // in the DOM; if js-draw ever changes that markup the entry silently does
+      // in the DOM; if js-draw ever changes that markup the entries silently do
       // not appear, which is the failure mode to prefer over a broken menu
       try {
-        injectAlignEntry(ctx, elRoot);
+        injectMenuEntries(ctx, elRoot);
       } catch {
         alignDebug.why = 'the selection menu no longer looks the way this expects';
       }
@@ -3619,7 +3618,8 @@
       config: cfg,
       giteaAssetVersion: window.config?.assetVersionEncoded ?? '(window.config missing)',
       jsDrawLoaded: Boolean(window.jsdraw?.Editor),
-      // false after a board has been opened means the "Align…" entry is missing
+      // false after a board has been opened means the "Align…" and "Fit…"
+      // entries are missing
       alignmentHooked: alignDebug.hooked,
       alignmentProblem: alignDebug.why,
       // the ids to look for under "Shape" in the pen dropdown

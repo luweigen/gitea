@@ -1,10 +1,10 @@
 // Copyright 2026 The Gitea Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// "Fit…", the panel the align panel opens for a single selected path: that it
-// is offered only where it means something, that each of its three fits puts
-// the path on the edges of the box the path already filled, and that one undo
-// takes the original back.
+// "Fit…", the second entry added to the selection menu: that it sits beside
+// "Align…" rather than inside it, that it is offered only where it means
+// something, that each of its three fits puts the path on the edges of the box
+// the path already filled, and that one undo takes the original back.
 //
 // Checks go through the saved SVG rather than through the editor's internals,
 // so what is asserted is what ends up in the markdown.  They also go through
@@ -55,23 +55,22 @@ async function selectWithin(page, [x1, y1], [x2, y2]) {
   await page.waitForTimeout(300);
 }
 
-// The align panel is hidden rather than removed while the fit panel is up, so
-// everything here is scoped to whichever panel is on show.
-const panel = (page) => page.locator('.markup-draw-align-panel:visible');
+// The menu's own entries are hidden rather than removed while a panel is up,
+// so anything that has to be reachable is asked for as visible.
+const panel = (page) => page.locator('.markup-draw-align-panel');
 const actions = (page) => panel(page).locator('.markup-draw-align-grid button');
-const fitEntry = (page) => panel(page).locator('.markup-draw-align-more');
+const fitEntry = (page) => page.locator('.markup-draw-fit-entry');
 
-async function openAlignPanel(page) {
+async function openMenu(page) {
   await page.locator('.selection-tool-selection-menu button').first().click();
   await page.locator('dialog.editor-popup-menu .content').waitFor({timeout: 5000});
-  await page.locator('.markup-draw-align-entry').click();
   await fitEntry(page).waitFor({timeout: 5000});
 }
 
 async function openFitPanel(page) {
-  await openAlignPanel(page);
+  await openMenu(page);
   await fitEntry(page).click();
-  await page.waitForTimeout(300);
+  await panel(page).waitFor({timeout: 5000});
 }
 
 const clickFit = async (page, name) => {
@@ -186,27 +185,40 @@ const AROUND_ELBOW = [[300, 260], [680, 520]];
 await openBoard(page);
 await drawStroke(page, roughElbow({...ELBOW, viaTop: true}));
 await selectWithin(page, ...AROUND_ELBOW);
-await openAlignPanel(page);
+await openMenu(page);
 
-check('"Fit…" is offered in the align panel',
-  (await fitEntry(page).textContent()).trim() === 'Fit…');
+const options = await page.locator('dialog.editor-popup-menu .content > button')
+  .evaluateAll((els) => els.map((el) => el.textContent.trim()));
+check('"Fit…" sits in the selection menu beside "Align…", not inside it',
+  options.includes('Fit…') && options.includes('Align…'), options.join(', '));
+check('...after it, and after everything js-draw put there',
+  options.indexOf('Fit…') === options.length - 1 &&
+  options.indexOf('Align…') === options.length - 2, options.join(', '));
+check("js-draw's own menu entries are left alone",
+  ['Duplicate', 'Delete', 'Copy to clipboard'].every((label) => options.includes(label)));
 check('"Fit…" is enabled for a single path', !await fitEntry(page).isDisabled());
+await screenshot(page, 'path-fit-menu');
 
 await fitEntry(page).click();
-await page.waitForTimeout(300);
-check('the fit panel replaces the align panel with three fits',
-  await actions(page).count() === 3 && await fitEntry(page).count() === 0);
+await panel(page).waitFor({timeout: 5000});
+check('the fit panel replaces the menu with three fits',
+  await actions(page).count() === 3 &&
+  await page.locator('dialog.editor-popup-menu .content > button:visible').count() === 0);
 check('the fit panel names what it fits to',
   (await panel(page).locator('.markup-draw-align-base').textContent()).includes('bounding box'));
 await screenshot(page, 'path-fit-panel');
 
 await panel(page).locator('.markup-draw-align-back').click();
 await page.waitForTimeout(250);
-check('"Back" returns to the align panel with its twelve actions',
-  await actions(page).count() === 12 && await fitEntry(page).count() === 1);
+check('"Back" returns to js-draw\'s own menu, not to the align panel',
+  await panel(page).count() === 0 &&
+  await page.locator('dialog.editor-popup-menu .content > button:visible').count() === options.length);
 
 await page.keyboard.press('Escape');
-await page.waitForTimeout(200);
+await page.waitForTimeout(300);
+check('Escape closes the menu without closing the board',
+  await page.locator('.markup-draw-overlay').count() === 1 &&
+  await page.locator('dialog.editor-popup-menu').count() === 0);
 await saveBoard(page);
 
 // --- when it is offered, and when it is not
@@ -218,7 +230,7 @@ const twoPaths = await runScenario({
   },
   act: async (page) => {
     await selectWithin(page, [300, 260], [1000, 520]);
-    await openAlignPanel(page);
+    await openMenu(page);
     return {
       disabled: await fitEntry(page).isDisabled(),
       why: await fitEntry(page).getAttribute('title'),
@@ -235,7 +247,7 @@ const filled = await runScenario({
   },
   act: async (page) => {
     await selectWithin(page, ...AROUND_ELBOW);
-    await openAlignPanel(page);
+    await openMenu(page);
     return {
       disabled: await fitEntry(page).isDisabled(),
       why: await fitEntry(page).getAttribute('title'),

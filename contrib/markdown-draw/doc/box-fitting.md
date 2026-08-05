@@ -123,10 +123,36 @@ Two ways out were considered and not taken:
 Both trade a refusal for a surprise. The refusal says why, in the entry's
 tooltip, so it is at least a dead end with a sign on it.
 
-## 5. How the replacement is dispatched
+## 5. Where the entry sits
+
+**Beside "Align…" in the selection menu, not inside its panel.** It was built
+the other way first, as a row at the bottom of the align panel, on the reasoning
+that both are ways of tidying a selection up.
+
+That reasoning does not survive contact with the menu. Align and Fit ask
+different questions -- *where does this sit against everything else* against
+*what shape should this one path be* -- and neither is a step on the way to the
+other, so nesting one in the other costs a click and an extra Back for no
+grouping anyone would look for. It also made the panel stack two deep, which the
+align panel's own base-object state has to survive being hidden and restored
+through.
+
+The cost of the flat arrangement is that the entry is greyed out most of the
+time, since most selections are not a single path. Leaving it out instead was
+the alternative, and it is worse: an entry that comes and goes as the selection
+changes reads as a bug, and there is nowhere left to say *why* it does not
+apply. Greyed out with the reason as its tooltip says it in the one place a user
+will look.
+
+js-draw's menu options have no disabled state of their own -- every entry it
+puts there is always available -- so `.markup-draw-fit-entry:disabled` supplies
+one, including cancelling the `:hover` highlight the option would otherwise
+still light up with.
+
+## 6. How the replacement is dispatched
 
 A fit is not a transform -- the geometry changes, not just its placement -- so
-unlike every action in the align panel next to it, it cannot be a
+unlike every action in the align panel beside it, it cannot be a
 `transformBy`. It is:
 
 ```js
@@ -151,7 +177,7 @@ The selection has to be moved onto the new component by hand
 shape can be tried three ways, and without that it would be pointing at what was
 just erased.
 
-## 6. Where the numbers came from
+## 7. Where the numbers came from
 
 | constant | value | why |
 |---|---|---|
@@ -159,10 +185,13 @@ just erased.
 | `FIT_CURVE_STEPS` | 8 | per curve command when flattening a path to a polyline. Only matters when re-fitting a path a previous fit already curved -- without it the score would compare the routes against a straight line between the curve's ends |
 | `cfg.fitCornerRadius` | 0.25 | of the shorter side. Large enough to read as deliberate at the sizes a drawing board is used at, small enough to leave straight run on both edges |
 
-## 7. If js-draw is upgraded
+## 8. If js-draw is upgraded
 
-The fit uses only public API, unlike the align panel it hangs off, so it is much
-less exposed. Worth re-checking anyway:
+The geometry uses only public API, so it is much less exposed than the menu it
+is reached from: `injectMenuEntries` appends to js-draw's popup-menu markup, and
+that is the fragile half -- but it is the same half the align entry already
+depends on, and it fails the same way, by the entry silently not appearing.
+Worth re-checking anyway:
 
 * `Stroke.getParts()` returning `RenderablePathSpecWithPath` -- the fit reads
   `.path` and `.style` off it.
