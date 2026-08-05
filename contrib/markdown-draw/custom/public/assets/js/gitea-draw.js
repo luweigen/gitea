@@ -19,7 +19,7 @@
 
   // bump when changing this file, giteaDrawDebug() reports it so that a stale
   // browser cache can be told apart from a real problem
-  const SCRIPT_REVISION = '23';
+  const SCRIPT_REVISION = '24';
   const scriptUrl = document.currentScript?.src ?? '(unknown)';
 
   const cfg = {
@@ -1262,12 +1262,24 @@
 
   // ------------------------------------------------ fitting a path to its box
   //
-  // "Fit…", reached from the align panel with exactly one path selected.  It
+  // "Fit…", reached from the selection menu with exactly one path selected.  It
   // replaces a rough stroke with a clean one that runs along the edges of the
-  // box the stroke already fills: the same two ends, moved onto the corners
-  // they are nearest, joined by a walk around the box's perimeter.  That walk
-  // is then drawn in one of three ways -- square corners, rounded corners, or
-  // as a Bezier curve whose control points are the corners it turns at.
+  // box the stroke already fills.  The route is:
+  //
+  //     the stroke's own start point, left exactly where it is
+  //     -> straight out from it onto an edge of the box
+  //     -> along the box's edges, through the corners on the way
+  //     -> onto the edge the other end sits off
+  //     -> the stroke's own end point, left exactly where it is
+  //
+  // so a G comes back as: up out of where the pen started, along the top, down
+  // the left, along the bottom, and out to where the pen stopped.  **The two
+  // ends do not move.**  They are what says which stroke this was; a fit that
+  // dragged them onto the nearest corners would turn every shape with the same
+  // bounding box into the same drawing.
+  //
+  // That route is then drawn in one of three ways -- square corners, rounded
+  // corners, or as a Bezier curve whose control points are the corners.
   //
   // This is the manual counterpart of the autocorrect measured in
   // doc/stroke-fitting.md, and it is manual because of what that note found:
@@ -1279,11 +1291,14 @@
   //
   // See doc/box-fitting.md for what each of the three does to which strokes.
 
-  // how many evenly spaced points a path is reduced to before the two ways
-  // round the box are scored against it
+  // how many evenly spaced points a path is reduced to before the candidate
+  // routes are scored against it, and how many each route is reduced to
   const FIT_SAMPLES = 64;
   // points per curve command when a path is flattened into a polyline
   const FIT_CURVE_STEPS = 8;
+  // a stroke whose two ends come closer to each other than this much of its
+  // box's perimeter is taken to be closed
+  const FIT_CLOSED = 0.1;
 
   // Only a stroked path can be fitted.  js-draw's freehand pen draws one --
   // {fill: transparent, stroke: {color, width}} -- but its pressure-sensitive
@@ -1386,38 +1401,122 @@
     (point, i) => i === 0 || point.distanceTo(points[i - 1]) > EPSILON,
   );
 
-  // The walk the fit follows.  Both ways round the perimeter reach the end
-  // corner from the start corner; the one the stroke actually took is the one
-  // its own points sit closer to, which is what the mean distance measures.
-  // Nothing else about the stroke is consulted -- only where it begins, where
-  // it ends, and which side it went.
-  function fitRoute(jsdraw, path, box) {
-    const corners = [box.topLeft, box.topRight, box.bottomRight, box.bottomLeft];
-    const samples = resamplePolyline(pathToPolyline(jsdraw, path), FIT_SAMPLES);
-    const nearestCorner = (point) => {
-      let best = 0;
-      for (let i = 1; i < corners.length; i++) {
-        if (point.distanceTo(corners[i]) < point.distanceTo(corners[best])) best = i;
-      }
-      return best;
+  // The box's perimeter as a loop of one number: the distance clockwise from
+  // the top left corner.  A walk between two points on the box is then
+  // arithmetic, rather than case analysis over which edges each of them is on.
+  function perimeterOf(jsdraw, box) {
+    const {w, h} = box;
+    const total = 2 * (w + h);
+    const at = (t) => {
+      const s = ((t % total) + total) % total;
+      if (s <= w) return jsdraw.Vec2.of(box.x + s, box.y);
+      if (s <= w + h) return jsdraw.Vec2.of(box.x + w, box.y + s - w);
+      if (s <= 2 * w + h) return jsdraw.Vec2.of(box.x + 2 * w + h - s, box.y + h);
+      return jsdraw.Vec2.of(box.x, box.y + total - s);
     };
-    const from = nearestCorner(samples[0]);
-    const to = nearestCorner(samples[samples.length - 1]);
+    // where `point` lands when pushed straight out onto `edge`, numbered from
+    // the top edge clockwise.  This is the segment that keeps the stroke's own
+    // end: it leaves the box at a right angle, so a square fit stays square.
+    const onto = (point, edge) => {
+      const x = Math.min(Math.max(point.x, box.x), box.x + w);
+      const y = Math.min(Math.max(point.y, box.y), box.y + h);
+      if (edge === 0) return x - box.x;
+      if (edge === 1) return w + (y - box.y);
+      if (edge === 2) return w + h + (box.x + w - x);
+      return 2 * w + h + (box.y + h - y);
+    };
+    return {total, corners: [0, w, w + h, 2 * w + h], at, onto};
+  }
 
-    // Both ends nearest the same corner means a closed stroke -- a circle, a
-    // loop -- and the only walk that returns to where it started is the whole
-    // perimeter.  Which way round it goes cannot matter, so it is not scored.
-    const walks = from === to
-      ? [[1, corners.length]]
-      : [[1, (to - from + 4) % 4], [-1, (from - to + 4) % 4]];
+  // The corners passed walking from `from` to `to` with `step` (+1 clockwise),
+  // in the order they are reached and not counting either end.
+  function cornersBetween(perimeter, from, to, step) {
+    const {total, corners, at} = perimeter;
+    const loop = (d) => ((d % total) + total) % total;
+    const span = loop(step > 0 ? to - from : from - to);
+    return corners
+      .map((corner) => loop(step > 0 ? corner - from : from - corner))
+      .filter((reached) => reached > EPSILON && reached < span - EPSILON)
+      .sort((a, b) => a - b)
+      .map((reached) => at(from + step * reached));
+  }
 
+  // The whole perimeter, from the corner the stroke started nearest.  A closed
+  // stroke's two ends are the same point, so there is nothing for the route to
+  // keep, and starting at a corner keeps the rounded and curved fits down to
+  // the four turns the box has rather than five.
+  function closedRoute(box, start) {
+    const corners = [box.topLeft, box.topRight, box.bottomRight, box.bottomLeft];
+    let first = 0;
+    for (let i = 1; i < corners.length; i++) {
+      if (start.distanceTo(corners[i]) < start.distanceTo(corners[first])) first = i;
+    }
+    const route = withoutRepeats(Array.from(
+      {length: corners.length + 1}, (unused, i) => corners[(first + i) % corners.length],
+    ));
+    return route.length < 3 ? null : route;
+  }
+
+  const meanDistanceTo = (points, polyline) => points.reduce(
+    (sum, point) => sum + distanceToRoute(point, polyline), 0,
+  ) / points.length;
+
+  // Both directions.  Charging only for how far the stroke sits from the route
+  // would make the longest route win every time: another side of the box can
+  // only bring the route nearer to the stroke, never further.  The second half
+  // charges for route that goes where the stroke did not, which is what turns
+  // "which way round did it go" into a question with an answer.
+  const routeCost = (samples, route) =>
+    meanDistanceTo(samples, route) +
+    meanDistanceTo(resamplePolyline(route, FIT_SAMPLES), samples);
+
+  // Which edge an end is pushed out onto: the nearest, so that the hop is the
+  // shortest one that reaches the box.
+  //
+  // Scoring all four edges against the stroke was tried instead, and is a trap.
+  // A hop long enough to cross the box can lie along the stroke *better* than
+  // the edge it stands in for does -- the ink is a couple of units inside the
+  // box, the edge is not -- so the best-matching route stopped being the one
+  // that hugs the box, which is the whole of what the fit promises.  The hop is
+  // the exception to that promise, so it is kept as small as it can be.
+  function nearestEdge(box, point) {
+    const distances = [
+      point.y - box.y, box.x + box.w - point.x,
+      box.y + box.h - point.y, point.x - box.x,
+    ];
+    return distances.indexOf(Math.min(...distances));
+  }
+
+  // The route the fit follows.  Its first and last points are the stroke's own
+  // two ends, unmoved; between them it leaves each end at a right angle for the
+  // nearest edge of the box, and walks the box's edges from one to the other.
+  //
+  // Which way round it walks is not decided by a rule: both are built and the
+  // one whose shape sits closest to the stroke's own wins.  A rule would have
+  // to guess at what the score can simply measure.
+  function fitRoute(jsdraw, path, box) {
+    const samples = resamplePolyline(pathToPolyline(jsdraw, path), FIT_SAMPLES);
+    const start = samples[0];
+    const end = samples[samples.length - 1];
+    const perimeter = perimeterOf(jsdraw, box);
+
+    if (start.distanceTo(end) < FIT_CLOSED * perimeter.total) {
+      return closedRoute(box, start);
+    }
+
+    const from = perimeter.onto(start, nearestEdge(box, start));
+    const to = perimeter.onto(end, nearestEdge(box, end));
     let chosen = null;
-    for (const [step, count] of walks) {
-      const route = withoutRepeats(Array.from(
-        {length: count + 1}, (unused, i) => corners[(from + step * i + 8) % 4],
-      ));
+    for (const step of [1, -1]) {
+      // an end already on the edge it is pushed onto joins the walk directly,
+      // and the duplicate point that leaves is dropped here
+      const route = withoutRepeats([
+        start, perimeter.at(from),
+        ...cornersBetween(perimeter, from, to, step),
+        perimeter.at(to), end,
+      ]);
       if (route.length < 2) continue;
-      const cost = samples.reduce((sum, point) => sum + distanceToRoute(point, route), 0);
+      const cost = routeCost(samples, route);
       if (!chosen || cost < chosen.cost) chosen = {route, cost};
     }
     return chosen?.route ?? null;
@@ -1492,19 +1591,28 @@
       };
     }
 
-    // An open route turns at no more than two corners -- three would mean
-    // leaving the box and coming back -- so it is always one Bezier.
+    // An open route turns wherever the box does between the two ends it keeps,
+    // which can be more corners than one Bezier has control points: an elbow
+    // has one and a G has four.  Up to two are that one Bezier; past that they
+    // become a chain of quadratics handed off at the midpoints between
+    // consecutive corners, the join that leaves the tangent continuous.
     const controls = route.slice(1, -1);
     const commands = [];
     if (!controls.length) commands.push(fitLineTo(jsdraw, endPoint));
     else if (controls.length === 1) commands.push(fitQuadTo(jsdraw, controls[0], endPoint));
-    else {
+    else if (controls.length === 2) {
       commands.push({
         kind: jsdraw.PathCommandType.CubicBezierTo,
         controlPoint1: controls[0],
         controlPoint2: controls[1],
         endPoint,
       });
+    } else {
+      for (let i = 0; i < controls.length; i++) {
+        commands.push(fitQuadTo(jsdraw, controls[i], i === controls.length - 1
+          ? endPoint
+          : controls[i].lerp(controls[i + 1], 0.5)));
+      }
     }
     return {startPoint: route[0], commands};
   }

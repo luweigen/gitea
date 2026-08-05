@@ -42,6 +42,29 @@ function roughElbow({x, y, w, h, viaTop}) {
   return points;
 }
 
+// A capital G in one stroke: from about two o'clock, anticlockwise over the
+// top, down the left, along the bottom and up the right, then in along the
+// crossbar.  Neither of its ends is at a corner of the box it spans and the
+// second is well inside it, which is the case the fit has to keep rather than
+// round off to the nearest corner.
+function roughG({x, y, w, h}) {
+  const cx = x + w / 2, cy = y + h / 2, rx = w / 2, ry = h / 2;
+  const wobble = (i) => ((i * 7) % 5) - 2;
+  const points = [];
+  const steps = 40;
+  for (let i = 0; i <= steps; i++) {
+    const angle = -Math.PI / 3 - (i / steps) * (Math.PI * 5) / 3;
+    points.push([
+      cx + rx * Math.cos(angle) + wobble(i),
+      cy + ry * Math.sin(angle) + wobble(i + 1),
+    ]);
+  }
+  for (let i = 1; i <= 8; i++) {
+    points.push([cx + rx - (i / 8) * rx * 0.9 + wobble(i), cy + wobble(i + 1)]);
+  }
+  return points;
+}
+
 async function useSelectionTool(page) {
   await page.locator('.toolbar-internalWidgetId--selection-tool-widget .toolbar-button')
     .first().click();
@@ -129,17 +152,31 @@ async function savedPath(page) {
   }, stripFence(value));
 }
 
-// how far the path strays from the edges of its own bounding box: 0 for a
-// square fit, a quarter of the corner radius for a rounded one, and a good
-// fraction of the box for a curve that leans into a corner without reaching it
-const offEdges = (path) => Math.max(...path.points.map(([x, y]) => Math.min(
-  Math.abs(x - path.box.x), Math.abs(x - (path.box.x + path.box.w)),
-  Math.abs(y - path.box.y), Math.abs(y - (path.box.y + path.box.h)),
-)));
+const insideBox = (box, [x, y]) => Math.min(
+  Math.abs(x - box.x), Math.abs(x - (box.x + box.w)),
+  Math.abs(y - box.y), Math.abs(y - (box.y + box.h)),
+);
+
+// how far the path strays from the edges of its own bounding box: for a square
+// fit only as far as the hop out to a kept end, a quarter of the corner radius
+// more for a rounded one, and a good fraction of the box for a curve
+const offEdges = (path) => Math.max(...path.points.map((point) => insideBox(path.box, point)));
+
+// how far in from the box the two kept ends sit, which is the length of the
+// longer of those two hops
+const endsInset = (path) => Math.max(...endsOf(path).map((point) => insideBox(path.box, point)));
 
 const nearest = (path, [cx, cy]) => Math.min(...path.points.map(
   ([x, y]) => Math.hypot(x - cx, y - cy),
 ));
+
+const endsOf = (path) => [path.points[0], path.points[path.points.length - 1]];
+
+// The fit is rounded to the viewport's grid on the way out, the same as every
+// stroke js-draw saves, so "unmoved" is to within that rounding.
+const keptEnds = (fitted, original) => endsOf(fitted).every(
+  ([x, y], i) => Math.hypot(x - endsOf(original)[i][0], y - endsOf(original)[i][1]) < 1.5,
+);
 
 // A corner between two samples is only ever found to within half the spacing
 // between them, which over these boxes is a little over one unit.  Anything
@@ -282,10 +319,15 @@ const sharp = await runScenario({
   },
 });
 check('a square fit leaves one path, not two', sharp.path.count === 1, `${sharp.path.count}`);
-check('a square fit is three commands: a move and two lines',
-  commandCount(sharp.path.d) === 3 && curveCount(sharp.path.d) === 0, sharp.path.d);
-check('every point of a square fit is on an edge of its box',
-  offEdges(sharp.path) < 0.5, offEdges(sharp.path).toFixed(3));
+check('a square fit starts and ends exactly where the stroke did',
+  keptEnds(sharp.path, rough.path),
+  `${JSON.stringify(endsOf(sharp.path))} vs ${JSON.stringify(endsOf(rough.path))}`);
+check('a square fit is straight lines only', curveCount(sharp.path.d) === 0, sharp.path.d);
+// reaching back out to a kept end is the only thing that may take a square fit
+// off an edge of the box, so the hop to the further of the two bounds it
+check('a square fit is on the box everywhere but the hops out to those ends',
+  offEdges(sharp.path) <= endsInset(sharp.path) + 0.5,
+  `${offEdges(sharp.path).toFixed(2)} off, ends ${endsInset(sharp.path).toFixed(2)} in`);
 check('a square fit keeps the box the rough stroke had',
   Math.abs(sharp.path.box.w - rough.path.box.w) < 1 &&
   Math.abs(sharp.path.box.h - rough.path.box.h) < 1,
@@ -304,11 +346,13 @@ const rounded = await runScenario({
     return {};
   },
 });
-check('a rounded fit curves exactly where the one corner is',
-  curveCount(rounded.path.d) === 1, rounded.path.d);
-check('a rounded fit still starts and ends on two corners of its box',
-  nearest(rounded.path, corners(rounded.path.box).topLeft) < TOUCHES &&
-  nearest(rounded.path, corners(rounded.path.box).bottomRight) < TOUCHES);
+// exactly one per turn the square fit makes, which is its every vertex bar the
+// two ends -- the ends are free and have nothing to round
+check('a rounded fit curves at each corner it turns and nowhere else',
+  curveCount(rounded.path.d) === commandCount(sharp.path.d) - 2,
+  `${curveCount(rounded.path.d)} curves, square fit turns ${commandCount(sharp.path.d) - 2} times`);
+check('a rounded fit starts and ends exactly where the stroke did',
+  keptEnds(rounded.path, rough.path));
 // a quadratic cut back by r from a right-angled corner sits r/4 inside it at
 // its furthest, and r is a quarter of the shorter side
 check('a rounded fit leaves the edges only at the corner',
@@ -326,10 +370,12 @@ const curve = await runScenario({
     return {};
   },
 });
-check('a curve fit is one Bezier', curveCount(curve.path.d) === 1, curve.path.d);
-check('a curve fit runs corner to corner of its box',
-  nearest(curve.path, corners(curve.path.box).topLeft) < TOUCHES &&
-  nearest(curve.path, corners(curve.path.box).bottomRight) < TOUCHES);
+// one Bezier per corner turned, the same as the rounded fit -- except that a
+// route turning only once or twice is a single quadratic or cubic instead
+check('a curve fit is a Bezier per corner it turns',
+  curveCount(curve.path.d) === commandCount(sharp.path.d) - 2, curve.path.d);
+check('a curve fit starts and ends exactly where the stroke did',
+  keptEnds(curve.path, rough.path));
 check('a curve fit leans into the corner between them without reaching it',
   nearest(curve.path, corners(curve.path.box).topRight) > 20 &&
   offEdges(curve.path) > Math.min(curve.path.box.w, curve.path.box.h) / 8,
@@ -355,6 +401,46 @@ check('a stroke that went under the bottom is fitted under the bottom',
   nearest(underneath.path, corners(underneath.path.box).bottomLeft) < TOUCHES &&
   nearest(underneath.path, corners(underneath.path.box).topRight) > 50);
 
+// --- the ends are kept, wherever on the shape they fell
+
+const G = {x: 400, y: 260, w: 260, h: 300};
+const AROUND_G = [[350, 210], [720, 620]];
+
+const roughGee = await runScenario({
+  draw: (page) => drawStroke(page, roughG(G)),
+  act: async () => ({}),
+});
+const gee = await runScenario({
+  draw: (page) => drawStroke(page, roughG(G)),
+  act: async (page) => {
+    await selectWithin(page, ...AROUND_G);
+    await openFitPanel(page);
+    await clickFit(page, 'sharp');
+    // the menu sits over the drawing, so put it away before photographing it
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(250);
+    await screenshot(page, 'path-fit-g');
+    return {};
+  },
+});
+check('a G keeps both of its ends, neither of which is at a corner',
+  keptEnds(gee.path, roughGee.path),
+  `${JSON.stringify(endsOf(gee.path))} vs ${JSON.stringify(endsOf(roughGee.path))}`);
+check('...which are not corners to begin with',
+  Math.min(...Object.values(corners(roughGee.path.box))
+    .map((corner) => nearest({points: endsOf(roughGee.path)}, corner))) > 20);
+check('a G is fitted as straight lines only', curveCount(gee.path.d) === 0, gee.path.d);
+check('a G is on the box everywhere but the hops out to those ends',
+  offEdges(gee.path) <= endsInset(gee.path) + 0.5,
+  `${offEdges(gee.path).toFixed(2)} off, ends ${endsInset(gee.path).toFixed(2)} in`);
+check('a G runs round the three corners its arc encloses',
+  ['topLeft', 'bottomLeft', 'bottomRight']
+    .every((corner) => nearest(gee.path, corners(gee.path.box)[corner]) < TOUCHES),
+  ['topLeft', 'bottomLeft', 'bottomRight', 'topRight']
+    .map((c) => `${c} ${nearest(gee.path, corners(gee.path.box)[c]).toFixed(1)}`).join(', '));
+check('...and not round the corner its gap is on',
+  nearest(gee.path, corners(gee.path.box).topRight) > 20);
+
 // --- a fit can be replaced, and taken back
 
 const rethought = await runScenario({
@@ -368,10 +454,12 @@ const rethought = await runScenario({
   },
 });
 check('a second fit works on the first, not beside it',
-  rethought.path.count === 1 && curveCount(rethought.path.d) === 1, rethought.path.d);
-check('...and lands on the same box the first one did',
+  rethought.path.count === 1 &&
+  curveCount(rethought.path.d) === curveCount(rounded.path.d), rethought.path.d);
+check('...and lands on the same box, and the same ends, the first one did',
   Math.abs(rethought.path.box.w - sharp.path.box.w) < 1 &&
-  Math.abs(rethought.path.box.h - sharp.path.box.h) < 1);
+  Math.abs(rethought.path.box.h - sharp.path.box.h) < 1 &&
+  keptEnds(rethought.path, sharp.path));
 
 const undone = await runScenario({
   draw: (page) => drawStroke(page, roughElbow({...ELBOW, viaTop: true})),

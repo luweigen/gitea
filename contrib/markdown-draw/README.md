@@ -70,8 +70,8 @@ From there the behaviour is the same:
   *Copy* there is an **Align…** entry. See
   [Aligning what you drew](#aligning-what-you-drew).
 * **Tidy up a stroke**: select one path and the same menu offers **Fit…**, which
-  redraws it along the edges of its own bounding box -- as a right-angled
-  connector, a rounded one, or a curve. See
+  redraws it along the edges of its own bounding box, keeping the two ends where
+  you put them -- as a right-angled connector, a rounded one, or a curve. See
   [Fitting a path to its bounding box](#fitting-a-path-to-its-bounding-box).
 * **Draw a UML relationship**: the pen's *Shape* list has the six class-diagram
   arrows -- generalization, realization, composition, aggregation, association
@@ -185,23 +185,33 @@ a clean one that runs along the edges of the box the stroke already fills:
 
 |  | |
 |---|---|
-| **right angles** | square corners, every point exactly on an edge of the box |
+| **right angles** | square corners, on the edges of the box the whole way |
 | **rounded corners** | the same route, with each turn rounded off |
-| **curve** | a Bézier whose end points are the route's ends and whose control points are the corners it turns at |
+| **curve** | a Bézier through the same route, with each corner as a control point |
 
-The route is taken from where the stroke starts, where it ends, and which way
-round the box it went -- the two ends move onto the corners they are nearest,
-and the walk between them follows the side the stroke took. So an L drawn over
-the top comes back as an elbow over the top, and the same L drawn under the
-bottom comes back as an elbow under the bottom.
+**The stroke's own two ends stay exactly where they are.** They are the first
+and last points of the fitted path; each is joined to the box by one straight
+hop out to the nearest edge, and the walk between those two joins follows the
+side of the box the stroke took. So an L drawn over the top comes back as an
+elbow over the top, and the same L drawn under the bottom comes back as an elbow
+under the bottom.
+
+A G, drawn in one stroke from about two o'clock and anticlockwise round to the
+crossbar, comes back as: **up** from where the pen started to the top edge,
+**along** the top to the top-left corner, **down** to the bottom-left, **along**
+the bottom, then **up** the right edge and **in** to where the pen stopped -- a
+square G, open where the pen started and barred at the height it stopped. Keeping
+the ends is what makes that a G rather than a rectangle: a G, a C and a loop all
+have the same bounding box, and it is only their ends that tell them apart.
 
 Nothing looks for corners *in* the stroke, which is why the same stroke always
 fits the same way and why a fitted path fits to itself: the panel stays open, so
 one shape can be tried all three ways, and a fit is one undoable step.
 
-A stroke that ends where it began -- a freehand circle, a loop -- has both ends
-on the same corner, so its route is the whole perimeter. *Curve* then makes every
-corner a control point and draws the ring inscribed in the box.
+A stroke that ends where it began -- a freehand circle, a loop -- is the one
+exception, because there its two ends are the same point and there is nothing to
+keep. Its route is the whole perimeter, and *curve* then makes every corner a
+control point and draws the ring inscribed in the box.
 
 The entry is greyed out, with the reason as its tooltip, when the selection is
 one of:
