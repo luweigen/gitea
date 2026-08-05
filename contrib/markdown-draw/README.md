@@ -325,9 +325,13 @@ gap that has to be closed smaller, or close it with a short stroke.
 
 A fill is an ordinary element from then on: one click selects it, one Ctrl+Z
 takes it back, the eraser removes it, and it moves and resizes with
-[Align…](#aligning-what-you-drew) like anything else. It does not follow the
-lines that closed it in, though -- move the box and the fill stays where it was,
-the same limitation the arrows have.
+[Align…](#aligning-what-you-drew) like anything else. The **Select** tool's own
+colour control recolours it too -- and because a fill's transparency *is* part
+of its colour there, that one input sets both: pick 80% alpha and the paint
+becomes 80% opaque. For a gradient it sets the colour the fade starts from; how
+far it fades is the pattern's business and is left alone. What a fill does not
+do is follow the lines that closed it in -- move the box and the fill stays
+where it was, the same limitation the arrows have.
 
 Set `fill` to `false` in `giteaDrawConfig` to leave the button out.
 `fillColour`, `fillOpacity`, `fillPattern` and `fillFadeTowards` set what a

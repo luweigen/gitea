@@ -169,6 +169,21 @@ off, so a board would open with the fill tool selected and drawing apparently
 broken. The tool is disabled before it joins the group. This is a one-line fix
 for a bug that looks like "the pen stopped working".
 
+**The selection menu's colour control needs three methods.** js-draw applies it
+to every selected component that answers to `isRestylableComponent` and
+*silently skips the rest* -- the input stays enabled either way, so a fill
+without `getStyle`/`updateStyle`/`forceStyle` leaves a control that shows
+transparent black (`Color4.average([])`) and does nothing when set. That is a
+worse state than a missing feature, and it is invisible from this file's own
+code, which is why it is written down here.
+
+The colour reported and accepted there carries the opacity in its **alpha**, the
+way a translucent stroke's does. It has to: the opacity slider lives in the fill
+tool's dropdown and is about the *next* fill, so alpha is the only channel from
+the selection menu to an existing one -- and Coloris is configured with
+`format: 'hex'` and no `alpha: false`, so the picker offers the slider whether or
+not anything reads it.
+
 **A fill goes underneath everything**, via the `initialZIndex` argument to
 `AbstractComponent`'s constructor rather than a second command. Translucent paint
 laid over a line washes it out, and paint is translucent by default. Passing the
@@ -219,6 +234,10 @@ Re-check, in order of how quietly each would break:
    `registerComponent`'s callback still receives the parsed `data` object.
 6. `ToolController.addPrimaryTool` still disables the previously enabled tool in
    the group.
+7. `isRestylableComponent` still looks for `getStyle`/`updateStyle`/`forceStyle`
+   plus the `isRestylableComponent` flag, and `createRestyleComponentCommand` is
+   still exported. If not, recolouring a fill from the selection menu goes back
+   to doing nothing.
 
 `test/suites/fill.mjs` covers all six from the outside: it fills, saves, reopens
 and compares the SVG. A js-draw upgrade that breaks any of them fails it.

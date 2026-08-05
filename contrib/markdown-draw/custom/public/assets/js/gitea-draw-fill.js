@@ -62,7 +62,7 @@
 
   // bump when changing this file; the files are cached separately, so
   // giteaDrawDebug() reports one revision per file
-  const REVISION = '1';
+  const REVISION = '2';
 
   const draw = window.giteaDraw;
   if (!draw) {
@@ -429,7 +429,15 @@
 
   function defineComponent(jsdraw) {
     if (FillRegion) return FillRegion;
-    const {AbstractComponent, Path, Color4, pathToRenderable} = jsdraw;
+    const {AbstractComponent, Path, Color4, pathToRenderable, createRestyleComponentCommand} = jsdraw;
+
+    const parseColour = (text) => {
+      try {
+        return Color4.fromString(text);
+      } catch {
+        return Color4.black;
+      }
+    };
 
     class FillRegionComponent extends AbstractComponent {
       constructor(path, style, zIndex) {
@@ -437,6 +445,9 @@
         this.path = path;
         this.style = style;
         this.contentBBox = path.bbox;
+        // what makes the selection menu's colour control act on this, see
+        // getStyle below
+        this.isRestylableComponent = true;
       }
 
       // --- what it looks like
@@ -444,14 +455,49 @@
       // The colour a renderer that can only manage one flat fill gets: the mean
       // of a gradient that runs to nothing is half of it.
       flatColour() {
-        let parsed;
-        try {
-          parsed = Color4.fromString(this.style.colour);
-        } catch {
-          parsed = Color4.black;
-        }
+        const parsed = parseColour(this.style.colour);
         const alpha = this.style.pattern === 'even' ? this.style.opacity : this.style.opacity / 2;
         return Color4.ofRGBA(parsed.r, parsed.g, parsed.b, alpha);
+      }
+
+      // --- restyling, from the "Select" tool's colour control
+      //
+      // js-draw's selection menu offers one colour input and applies it to every
+      // selected component that answers to `isRestylableComponent`.  Without
+      // these three methods a fill is skipped: the input stays enabled, shows
+      // transparent black, and setting it does nothing at all -- which looks far
+      // more like a bug than a missing feature.
+      //
+      // The colour carries the opacity in its alpha, the way a translucent
+      // stroke's does, so the one input sets both.  That is also the only way to
+      // reach the opacity from here: the slider that sets it lives in the fill
+      // tool's own dropdown, which is about the *next* fill rather than about
+      // whatever happens to be selected.  For a gradient this is the colour the
+      // fade starts at; how far it fades is the pattern's business, not the
+      // colour's, and is left alone.
+
+      getStyle() {
+        const parsed = parseColour(this.style.colour);
+        return {color: Color4.ofRGBA(parsed.r, parsed.g, parsed.b, this.style.opacity)};
+      }
+
+      updateStyle(style) {
+        return createRestyleComponentCommand(this.getStyle(), style, this);
+      }
+
+      forceStyle(style, editor) {
+        if (!style.color) return;
+        // replaced rather than mutated: a clone shares this object until one of
+        // the two changes
+        this.style = {
+          ...this.style,
+          colour: style.color.toHexString().slice(0, 7),
+          opacity: style.color.a,
+        };
+        if (editor) {
+          editor.image.queueRerenderOf(this);
+          editor.queueRerender();
+        }
       }
 
       renderToSVG(canvas) {
@@ -527,7 +573,10 @@
       }
 
       createClone() {
-        return new FillRegionComponent(this.path, this.style);
+        // Path is immutable and every method that changes the style replaces the
+        // object rather than writing into it, so a shallow copy is enough to
+        // keep a duplicate and its original apart.
+        return new FillRegionComponent(this.path, {...this.style});
       }
 
       description() {

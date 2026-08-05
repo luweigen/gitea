@@ -426,6 +426,86 @@ for (const [pattern, element] of [['linear', 'linearGradient'], ['radial', 'radi
   await page.close();
 }
 
+// --- the "Select" tool's colour control
+//
+// js-draw applies it to every selected component that answers to
+// `isRestylableComponent`, and silently skips the rest -- so a fill that did not
+// implement it would leave the control enabled, showing transparent black, doing
+// nothing.  The colour carries the opacity in its alpha, the way a translucent
+// stroke's does, so the one input sets both.
+
+const FORMAT_COLOUR = '.markup-draw-overlay .selection-format-menu input.coloris_input';
+
+// Coloris writes into the input and fires these; going through the DOM rather
+// than through the picker keeps the check about the fill rather than about a
+// third-party colour widget.
+async function setSelectionColour(page, value) {
+  await page.evaluate((colour) => {
+    const input = document.querySelector(
+      '.markup-draw-overlay .selection-format-menu input.coloris_input',
+    );
+    input.value = colour;
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+    input.dispatchEvent(new Event('close'));
+  }, value);
+  await page.waitForTimeout(400);
+}
+
+// a rubber band drawn well inside the box catches the fill and nothing else
+async function selectTheFill(page) {
+  await page.locator('.markup-draw-overlay .toolbar-internalWidgetId--selection-tool-widget .toolbar-button')
+    .first().click();
+  await page.waitForTimeout(400);
+  await drawStroke(page, [[420, 350], [520, 450]]);
+  await page.waitForTimeout(400);
+}
+
+for (const pattern of ['even', 'radial']) {
+  const page = watchPage(await browser.newPage({viewport: {width: 1280, height: 900}}));
+  await page.goto(BASE);
+  await openBoard(page);
+  await drawBox(page, [300, 250, 800, 600]);
+  await chooseFill(page, {pattern});
+  await page.mouse.click(550, 420);
+  await page.waitForTimeout(500);
+
+  await selectTheFill(page);
+  check(`[${pattern}] the colour control shows the paint, not transparent black`,
+    await page.locator(FORMAT_COLOUR).inputValue() === '#1e6bb880',
+    await page.locator(FORMAT_COLOUR).inputValue());
+
+  await setSelectionColour(page, '#e01b24cc');
+  check(`[${pattern}] and setting it takes`,
+    await page.locator(FORMAT_COLOUR).inputValue() === '#e01b24cc',
+    await page.locator(FORMAT_COLOUR).inputValue());
+  await screenshot(page, `fill-restyled-${pattern}`);
+
+  await saveBoard(page);
+  const group = fillGroups(await savedSvg(page))[0] ?? '';
+  check(`[${pattern}] the new colour is what is painted`,
+    group.includes('rgba(224, 27, 36, '), group.slice(0, 240));
+  // the alpha of the colour is the fill's opacity: there is no second control
+  // for it here, and dropping it would make half the picker do nothing
+  check(`[${pattern}] the alpha of the colour became the opacity`,
+    group.includes('opacity&quot;:0.8'), group.slice(0, 240));
+  if (pattern === 'radial') {
+    check('[radial] a restyled gradient still fades to nothing',
+      group.includes('stop-opacity="0"') && group.includes('stop-opacity="0.8"'),
+      group.slice(0, 320));
+  }
+
+  // one restyle is one undoable step, and the recorder can replay it
+  await reopen(page);
+  const replayed = (await page.evaluate(() => window.giteaDrawDebug())).history;
+  check(`[${pattern}] a restyle replays out of the recorded log`,
+    replayed.rejected === null, replayed.rejected ?? '');
+  await saveBoard(page);
+  check(`[${pattern}] and the fill comes back restyled`,
+    (fillGroups(await savedSvg(page))[0] ?? '').includes('rgba(224, 27, 36, '));
+
+  await page.close();
+}
+
 // --- the touch toolbar
 //
 // A narrow screen gets js-draw's edge toolbar instead of the dropdown one, and
