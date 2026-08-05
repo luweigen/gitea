@@ -77,6 +77,10 @@ From there the behaviour is the same:
   at the corner of the selection: next to js-draw's own *Duplicate* / *Delete* /
   *Copy* there is an **Align…** entry. See
   [Aligning what you drew](#aligning-what-you-drew).
+* **Tidy up a stroke**: select one path and the same menu offers **Fit…**, which
+  redraws it along the edges of its own bounding box, keeping the two ends where
+  you put them -- as a right-angled connector, a rounded one, or a curve. See
+  [Fitting a path to its bounding box](#fitting-a-path-to-its-bounding-box).
 * **Draw a UML relationship**: the pen's *Shape* list has the six class-diagram
   arrows -- generalization, realization, composition, aggregation, association
   and dependency -- next to js-draw's own arrow and line. See
@@ -177,6 +181,65 @@ were.
 
 Every action is one undoable step: a single Ctrl+Z takes back a whole alignment,
 however many elements moved.
+
+## Fitting a path to its bounding box
+
+**Fit…** sits in the same menu as [Align…](#aligning-what-you-drew), next to it
+rather than inside it: they are different questions about the selection -- where
+it sits against everything else, and what shape one path in it should be.
+
+Select **one** path and it opens a panel offering to replace a rough stroke with
+a clean one that runs along the edges of the box the stroke already fills:
+
+|  | |
+|---|---|
+| **right angles** | square corners, on the edges of the box the whole way |
+| **rounded corners** | the same route, with each turn rounded off |
+| **curve** | a Bézier through the same route, with each corner as a control point |
+
+**The stroke's own two ends stay exactly where they are.** They are the first
+and last points of the fitted path; each is joined to the box by one straight
+hop out to the nearest edge, and the walk between those two joins follows the
+side of the box the stroke took. So an L drawn over the top comes back as an
+elbow over the top, and the same L drawn under the bottom comes back as an elbow
+under the bottom.
+
+A G, drawn in one stroke from about two o'clock and anticlockwise round to the
+crossbar, comes back as: **up** from where the pen started to the top edge,
+**along** the top to the top-left corner, **down** to the bottom-left, **along**
+the bottom, then **up** the right edge and **in** to where the pen stopped -- a
+square G, open where the pen started and barred at the height it stopped. Keeping
+the ends is what makes that a G rather than a rectangle: a G, a C and a loop all
+have the same bounding box, and it is only their ends that tell them apart.
+
+Nothing looks for corners *in* the stroke, which is why the same stroke always
+fits the same way and why a fitted path fits to itself: the panel stays open, so
+one shape can be tried all three ways, and a fit is one undoable step.
+
+A stroke that ends where it began -- a freehand circle, a loop -- is the one
+exception, because there its two ends are the same point and there is nothing to
+keep. Its route is the whole perimeter, and *curve* then makes every corner a
+control point and draws the ring inscribed in the box.
+
+The entry is greyed out, with the reason as its tooltip, when the selection is
+one of:
+
+* anything other than exactly one element -- a fit is defined by one path's own
+  bounding box;
+* a **filled shape rather than a line**. That is every
+  shape pen, the UML arrows, and js-draw's pressure-sensitive *Flat* pen: what
+  looks like a line in those is the gap inside one closed outline, and running
+  that outline around the box would leave a hairline where the shape was. The
+  freehand *Round* and *Polyline* pens draw stroked paths and can be fitted.
+
+Set `fit` to `false` in `giteaDrawConfig` to leave the entry out, or
+`fitCornerRadius` to change how hard the rounded corners turn -- it is a fraction
+of the shorter side of the box, `0.25` by default.
+
+This is the manual half of an idea that started out automatic;
+[doc/box-fitting.md](doc/box-fitting.md) is the maintainer's note on why it ended
+up a button, and [doc/stroke-fitting.md](doc/stroke-fitting.md) is the
+measurement that decided it.
 
 ## UML relationship arrows
 
@@ -628,6 +691,8 @@ on top, so an override always wins whichever file the option belongs to:
     edgeToolbarMaxWidth: 800,   // below this width, use the touch toolbar
     alignment: true,            // the "Align…" entry in the selection menu
     snapDistance: 8,            // screen px a drag snaps over, 0 to switch off
+    fit: true,                  // the "Fit…" entry beside "Align…" in that menu
+    fitCornerRadius: 0.25,      // rounded fit radius, of the box's shorter side
     umlPens: true,              // the six UML relationship pens
     // gitea-draw-history.js
     history: true,              // record every undoable action into the drawing

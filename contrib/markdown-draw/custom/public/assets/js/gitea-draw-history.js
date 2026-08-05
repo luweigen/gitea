@@ -79,6 +79,7 @@
     stepErase: 'an erase',
     stepMove: 'a move or resize',
     stepDuplicate: 'a duplicate',
+    stepReshape: 'a reshaped element',
     stepGroup: (n) => `a group of ${n} changes`,
     stepSomething: 'this step',
   });
@@ -643,9 +644,15 @@
       case 'inverse': return describeCommand(data, depth + 1);
       case 'union': {
         const children = Array.isArray(data?.data) ? data.data : [];
-        return children.length === 1
-          ? describeCommand(children[0], depth + 1)
-          : i18n.stepGroup(children.length);
+        if (children.length === 1) return describeCommand(children[0], depth + 1);
+        // an erase and an add together are one element replaced by another,
+        // which is what "Fit…" dispatches; calling that "a group of 2 changes"
+        // would hide the one thing about the step worth reading
+        const kinds = children.map((child) => child?.commandType);
+        if (kinds.length === 2 && kinds.includes('erase') && kinds.includes('add-element')) {
+          return i18n.stepReshape;
+        }
+        return i18n.stepGroup(children.length);
       }
       default: return i18n.stepSomething;
     }

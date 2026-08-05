@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 14;
+  --markup-draw-css: 16;
 }
 
 .markup-draw {
@@ -119,6 +119,15 @@ body.markup-draw-open {
   opacity: 1;
 }
 
+/* the fit glyphs draw a route rather than a block, so they are stroked; the
+   faint rects behind them are the bounding box the route follows */
+.markup-draw-glyph path.markup-draw-glyph-line {
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .markup-draw-align-panel {
   display: flex;
   flex-direction: column;
@@ -172,6 +181,20 @@ body.markup-draw-open {
 .markup-draw-align-button:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+/* "Fit…" is greyed out when the selection is not one path.  js-draw's menu
+   options have no disabled state of their own -- every one it puts there is
+   always available -- so one is given here, including cancelling the hover it
+   would otherwise still light up with. */
+.markup-draw-fit-entry:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.markup-draw-fit-entry:disabled:hover {
+  background-color: transparent;
+  color: var(--foreground-color-1);
 }
 
 .markup-draw-align-back,

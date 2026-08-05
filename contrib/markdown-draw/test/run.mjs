@@ -20,6 +20,7 @@ const ALL_SUITES = [
   'combo-editor',
   'history',
   'alignment',
+  'path-fit',
   'uml-pens',
   'mobile',
   'file-editor',

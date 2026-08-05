@@ -108,7 +108,10 @@ const options = await page.locator('dialog.editor-popup-menu .content > button')
 check('"Align…" is added to the selection menu', options.includes('Align…'), options.join(', '));
 check("js-draw's own menu entries are left alone",
   ['Duplicate', 'Delete', 'Copy to clipboard'].every((label) => options.includes(label)));
-check('the align entry is the last one', options[options.length - 1] === 'Align…');
+// the two entries this customization adds come after everything js-draw put
+// there, "Fit…" after "Align…"; path-fit.mjs covers the second of them
+check('the added entries come last, in that order',
+  options.slice(-2).join(', ') === 'Align…, Fit…', options.join(', '));
 
 await page.locator('.markup-draw-align-entry').click();
 await page.locator('.markup-draw-align-grid').waitFor({timeout: 5000});

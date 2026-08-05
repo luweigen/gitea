@@ -36,7 +36,7 @@
   // bump when changing this file; the three files are fetched and cached
   // separately, so giteaDrawDebug() reports a revision per file and a stale
   // browser cache can be told apart from a real problem
-  const REVISION = '22';
+  const REVISION = '25';
 
   // Every option lives here, but only the ones this file acts on are defaulted
   // here: the other two files add their own on load, so an option sits next to
@@ -60,6 +60,12 @@
     // element's edge or centre before it snaps onto it; 0 turns that off and
     // leaves only the menu
     snapDistance: 8,
+    // offer "Fit…" inside the align panel when a single path is selected, see
+    // the path fitting section
+    fit: true,
+    // corner radius of a rounded fit, as a fraction of the shorter side of the
+    // path's own bounding box
+    fitCornerRadius: 0.25,
     // offer the six UML relationship pens in the pen dropdown, see the UML pens
     // section
     umlPens: true,
@@ -100,6 +106,16 @@
     matchWidth: 'Match width',
     matchHeight: 'Match height',
     matchSize: 'Match width and height',
+    fit: 'Fit…',
+    fitTitle: 'Fit',
+    fitToBox: 'Fitted to its own bounding box',
+    fitSharp: 'Right angles along the bounding box',
+    fitRounded: 'Rounded corners along the bounding box',
+    fitCurve: 'Curve through the bounding box corners',
+    // why the entry is greyed out, shown as its tooltip
+    fitNeedsOne: 'Fitting works on one path at a time',
+    fitNeedsLine: 'This element is a filled shape rather than a line',
+    fitNeedsBox: 'This path is too small to have a bounding box',
     // kept short: js-draw lays the pen types out in a grid whose cells a longer
     // name overflows
     umlGeneralization: 'Generalization',
@@ -573,9 +589,19 @@
   const SVG_NS = 'http://www.w3.org/2000/svg';
 
   // Icons are drawn here rather than fetched: js-draw has none for alignment,
-  // and an extra request for twelve 16x16 glyphs is not worth it.  A shape is
-  // either [x, y, w, h] or ['path', d]; the "rule" class marks the edge the
+  // and an extra request for sixteen 16x16 glyphs is not worth it.  A shape is
+  // [x, y, w, h], ['path', d] for a filled outline, or ['line', d, width] for a
+  // stroked one -- the fit glyphs draw a line, which no fill can describe
+  // without doubling back on itself.  The "rule" class marks the edge the
   // blocks line up against so it can be drawn more strongly than they are.
+  //
+  // The fit glyphs share one faint box, so that the three of them read as three
+  // routes across the same rectangle: it runs between (3,4) and (13,12), which
+  // is where every fit path below starts and ends.
+  const GLYPH_BOX = [
+    [3, 3.5, 10, 1], [3, 11.5, 10, 1], [2.5, 4, 1, 8], [12.5, 4, 1, 8],
+  ];
+
   const GLYPHS = {
     left: [[1, 1, 1.5, 14, 'rule'], [3.5, 3, 10, 3.5], [3.5, 9.5, 6.5, 3.5]],
     centerX: [[7.25, 1, 1.5, 14, 'rule'], [3, 3, 10, 3.5], [4.75, 9.5, 6.5, 3.5]],
@@ -591,6 +617,10 @@
     matchSize: [[1.5, 4, 6, 8], [8.5, 4, 6, 8]],
     back: [['path', 'M10.5 2.5 5 8l5.5 5.5z']],
     next: [['path', 'M5.5 2.5 11 8l-5.5 5.5z']],
+    fit: [...GLYPH_BOX, ['line', 'M3 4h10v8', 1.9]],
+    fitRounded: [...GLYPH_BOX, ['line', 'M3 4h7a3 3 0 0 1 3 3v5', 1.9]],
+    // a quadratic whose control point is the corner the box shares with it
+    fitCurve: [...GLYPH_BOX, ['line', 'M3 4q10 0 10 8', 1.9]],
   };
 
   function makeGlyph(shapes) {
@@ -599,9 +629,13 @@
     svg.setAttribute('aria-hidden', 'true');
     svg.classList.add('markup-draw-glyph');
     for (const shape of shapes) {
-      if (shape[0] === 'path') {
+      if (shape[0] === 'path' || shape[0] === 'line') {
         const elPath = document.createElementNS(SVG_NS, 'path');
         elPath.setAttribute('d', shape[1]);
+        if (shape[0] === 'line') {
+          elPath.setAttribute('stroke-width', shape[2]);
+          elPath.classList.add('markup-draw-glyph-line');
+        }
         svg.append(elPath);
         continue;
       }
@@ -737,6 +771,398 @@
       return translateCommand(ctx.jsdraw, component, snapped.x - box.x, snapped.y - box.y);
     });
     applyAlignCommands(ctx, objects, commands, i18n.snapToGrid);
+  }
+
+  // ------------------------------------------------ fitting a path to its box
+  //
+  // "Fit…", reached from the selection menu with exactly one path selected.  It
+  // replaces a rough stroke with a clean one that runs along the edges of the
+  // box the stroke already fills.  The route is:
+  //
+  //     the stroke's own start point, left exactly where it is
+  //     -> straight out from it onto an edge of the box
+  //     -> along the box's edges, through the corners on the way
+  //     -> onto the edge the other end sits off
+  //     -> the stroke's own end point, left exactly where it is
+  //
+  // so a G comes back as: up out of where the pen started, along the top, down
+  // the left, along the bottom, and out to where the pen stopped.  **The two
+  // ends do not move.**  They are what says which stroke this was; a fit that
+  // dragged them onto the nearest corners would turn every shape with the same
+  // bounding box into the same drawing.
+  //
+  // That route is then drawn in one of three ways -- square corners, rounded
+  // corners, or as a Bezier curve whose control points are the corners.
+  //
+  // This is the manual counterpart of the autocorrect measured in
+  // doc/stroke-fitting.md, and it is manual because of what that note found:
+  // no corner detector it tried was stable, the best of them answering
+  // differently on one redraw in ten.  Nothing here detects a corner.  A
+  // bounding box has four of them whether the hand shook or not, so the same
+  // stroke fits the same way every time, and the fit happens because a button
+  // was pressed rather than because a guess fired.
+  //
+  // See doc/box-fitting.md for what each of the three does to which strokes.
+
+  // how many evenly spaced points a path is reduced to before the candidate
+  // routes are scored against it, and how many each route is reduced to
+  const FIT_SAMPLES = 64;
+  // points per curve command when a path is flattened into a polyline
+  const FIT_CURVE_STEPS = 8;
+  // a stroke whose two ends come closer to each other than this much of its
+  // box's perimeter is taken to be closed
+  const FIT_CLOSED = 0.1;
+
+  // Only a stroked path can be fitted.  js-draw's freehand pen draws one --
+  // {fill: transparent, stroke: {color, width}} -- but its pressure-sensitive
+  // pen, its shape pens and the UML pens above all draw a *filled outline*
+  // instead, where the visible line is the gap between two sides of one closed
+  // loop.  Running that loop around the box would leave a hairline where a
+  // shape used to be, so those are refused rather than ruined.
+  function fittablePart(component) {
+    const parts = component?.getParts?.();
+    if (!parts || parts.length !== 1) return null;
+    const part = parts[0];
+    if (!part.path || !part.style?.stroke) return null;
+    return part;
+  }
+
+  // why "Fit…" is greyed out, or '' when it is not
+  function fitProblem(ctx) {
+    const objects = ctx.tool.getSelectedObjects();
+    if (objects.length !== 1) return i18n.fitNeedsOne;
+    const part = fittablePart(objects[0]);
+    if (!part) return i18n.fitNeedsLine;
+    const box = part.path.getExactBBox();
+    if (Math.max(box.w, box.h) < EPSILON) return i18n.fitNeedsBox;
+    return '';
+  }
+
+  // de Casteljau.  A curve has to contribute its shape and not just its end
+  // points, or re-fitting a path that a previous fit already curved would score
+  // the two ways round the box against a straight line between its ends.
+  function appendCurvePoints(from, command, into) {
+    const hull = command.controlPoint
+      ? [from, command.controlPoint, command.endPoint]
+      : [from, command.controlPoint1, command.controlPoint2, command.endPoint];
+    for (let step = 1; step <= FIT_CURVE_STEPS; step++) {
+      const t = step / FIT_CURVE_STEPS;
+      let level = hull;
+      while (level.length > 1) {
+        const next = [];
+        for (let i = 1; i < level.length; i++) next.push(level[i - 1].lerp(level[i], t));
+        level = next;
+      }
+      into.push(level[0]);
+    }
+  }
+
+  function pathToPolyline(jsdraw, path) {
+    const points = [path.startPoint];
+    for (const command of path.parts) {
+      if (command.kind === jsdraw.PathCommandType.LineTo ||
+          command.kind === jsdraw.PathCommandType.MoveTo) {
+        points.push(command.point);
+      } else {
+        appendCurvePoints(points[points.length - 1], command, points);
+      }
+    }
+    return points;
+  }
+
+  // Evenly spaced points along a polyline.  Without this the score below would
+  // count wherever the pen dawdled twice, and a stroke slows at its corners --
+  // which is exactly where the two candidate routes differ most.
+  function resamplePolyline(points, count) {
+    const along = [0];
+    for (let i = 1; i < points.length; i++) {
+      along.push(along[i - 1] + points[i].distanceTo(points[i - 1]));
+    }
+    const total = along[along.length - 1];
+    if (!(total > EPSILON)) return [points[0], points[points.length - 1]];
+    const out = [];
+    let at = 1;
+    for (let i = 0; i < count; i++) {
+      const target = (total * i) / (count - 1);
+      while (at < along.length - 1 && along[at] < target) at++;
+      const span = along[at] - along[at - 1];
+      out.push(points[at - 1].lerp(points[at], span > EPSILON ? (target - along[at - 1]) / span : 0));
+    }
+    return out;
+  }
+
+  function distanceToSegment(point, from, to) {
+    const along = to.minus(from);
+    const lengthSquared = along.dot(along);
+    if (lengthSquared < EPSILON) return point.distanceTo(from);
+    const t = Math.min(1, Math.max(0, point.minus(from).dot(along) / lengthSquared));
+    return point.distanceTo(from.plus(along.times(t)));
+  }
+
+  const distanceToRoute = (point, route) => {
+    let best = Infinity;
+    for (let i = 1; i < route.length; i++) {
+      best = Math.min(best, distanceToSegment(point, route[i - 1], route[i]));
+    }
+    return best;
+  };
+
+  // A zero-width or zero-height box has its corners on top of each other, and a
+  // route through a repeated point has an edge with no direction for a rounded
+  // corner to be cut back along.
+  const withoutRepeats = (points) => points.filter(
+    (point, i) => i === 0 || point.distanceTo(points[i - 1]) > EPSILON,
+  );
+
+  // The box's perimeter as a loop of one number: the distance clockwise from
+  // the top left corner.  A walk between two points on the box is then
+  // arithmetic, rather than case analysis over which edges each of them is on.
+  function perimeterOf(jsdraw, box) {
+    const {w, h} = box;
+    const total = 2 * (w + h);
+    const at = (t) => {
+      const s = ((t % total) + total) % total;
+      if (s <= w) return jsdraw.Vec2.of(box.x + s, box.y);
+      if (s <= w + h) return jsdraw.Vec2.of(box.x + w, box.y + s - w);
+      if (s <= 2 * w + h) return jsdraw.Vec2.of(box.x + 2 * w + h - s, box.y + h);
+      return jsdraw.Vec2.of(box.x, box.y + total - s);
+    };
+    // where `point` lands when pushed straight out onto `edge`, numbered from
+    // the top edge clockwise.  This is the segment that keeps the stroke's own
+    // end: it leaves the box at a right angle, so a square fit stays square.
+    const onto = (point, edge) => {
+      const x = Math.min(Math.max(point.x, box.x), box.x + w);
+      const y = Math.min(Math.max(point.y, box.y), box.y + h);
+      if (edge === 0) return x - box.x;
+      if (edge === 1) return w + (y - box.y);
+      if (edge === 2) return w + h + (box.x + w - x);
+      return 2 * w + h + (box.y + h - y);
+    };
+    return {total, corners: [0, w, w + h, 2 * w + h], at, onto};
+  }
+
+  // The corners passed walking from `from` to `to` with `step` (+1 clockwise),
+  // in the order they are reached and not counting either end.
+  function cornersBetween(perimeter, from, to, step) {
+    const {total, corners, at} = perimeter;
+    const loop = (d) => ((d % total) + total) % total;
+    const span = loop(step > 0 ? to - from : from - to);
+    return corners
+      .map((corner) => loop(step > 0 ? corner - from : from - corner))
+      .filter((reached) => reached > EPSILON && reached < span - EPSILON)
+      .sort((a, b) => a - b)
+      .map((reached) => at(from + step * reached));
+  }
+
+  // The whole perimeter, from the corner the stroke started nearest.  A closed
+  // stroke's two ends are the same point, so there is nothing for the route to
+  // keep, and starting at a corner keeps the rounded and curved fits down to
+  // the four turns the box has rather than five.
+  function closedRoute(box, start) {
+    const corners = [box.topLeft, box.topRight, box.bottomRight, box.bottomLeft];
+    let first = 0;
+    for (let i = 1; i < corners.length; i++) {
+      if (start.distanceTo(corners[i]) < start.distanceTo(corners[first])) first = i;
+    }
+    const route = withoutRepeats(Array.from(
+      {length: corners.length + 1}, (unused, i) => corners[(first + i) % corners.length],
+    ));
+    return route.length < 3 ? null : route;
+  }
+
+  const meanDistanceTo = (points, polyline) => points.reduce(
+    (sum, point) => sum + distanceToRoute(point, polyline), 0,
+  ) / points.length;
+
+  // Both directions.  Charging only for how far the stroke sits from the route
+  // would make the longest route win every time: another side of the box can
+  // only bring the route nearer to the stroke, never further.  The second half
+  // charges for route that goes where the stroke did not, which is what turns
+  // "which way round did it go" into a question with an answer.
+  const routeCost = (samples, route) =>
+    meanDistanceTo(samples, route) +
+    meanDistanceTo(resamplePolyline(route, FIT_SAMPLES), samples);
+
+  // Which edge an end is pushed out onto: the nearest, so that the hop is the
+  // shortest one that reaches the box.
+  //
+  // Scoring all four edges against the stroke was tried instead, and is a trap.
+  // A hop long enough to cross the box can lie along the stroke *better* than
+  // the edge it stands in for does -- the ink is a couple of units inside the
+  // box, the edge is not -- so the best-matching route stopped being the one
+  // that hugs the box, which is the whole of what the fit promises.  The hop is
+  // the exception to that promise, so it is kept as small as it can be.
+  function nearestEdge(box, point) {
+    const distances = [
+      point.y - box.y, box.x + box.w - point.x,
+      box.y + box.h - point.y, point.x - box.x,
+    ];
+    return distances.indexOf(Math.min(...distances));
+  }
+
+  // The route the fit follows.  Its first and last points are the stroke's own
+  // two ends, unmoved; between them it leaves each end at a right angle for the
+  // nearest edge of the box, and walks the box's edges from one to the other.
+  //
+  // Which way round it walks is not decided by a rule: both are built and the
+  // one whose shape sits closest to the stroke's own wins.  A rule would have
+  // to guess at what the score can simply measure.
+  function fitRoute(jsdraw, path, box) {
+    const samples = resamplePolyline(pathToPolyline(jsdraw, path), FIT_SAMPLES);
+    const start = samples[0];
+    const end = samples[samples.length - 1];
+    const perimeter = perimeterOf(jsdraw, box);
+
+    if (start.distanceTo(end) < FIT_CLOSED * perimeter.total) {
+      return closedRoute(box, start);
+    }
+
+    const from = perimeter.onto(start, nearestEdge(box, start));
+    const to = perimeter.onto(end, nearestEdge(box, end));
+    let chosen = null;
+    for (const step of [1, -1]) {
+      // an end already on the edge it is pushed onto joins the walk directly,
+      // and the duplicate point that leaves is dropped here
+      const route = withoutRepeats([
+        start, perimeter.at(from),
+        ...cornersBetween(perimeter, from, to, step),
+        perimeter.at(to), end,
+      ]);
+      if (route.length < 2) continue;
+      const cost = routeCost(samples, route);
+      if (!chosen || cost < chosen.cost) chosen = {route, cost};
+    }
+    return chosen?.route ?? null;
+  }
+
+  const fitLineTo = (jsdraw, point) => ({kind: jsdraw.PathCommandType.LineTo, point});
+  const fitQuadTo = (jsdraw, controlPoint, endPoint) => ({
+    kind: jsdraw.PathCommandType.QuadraticBezierTo, controlPoint, endPoint,
+  });
+
+  // A route that ends where it began has no free ends, which changes what the
+  // rounded and curved fits have to do with its first corner.
+  const isClosedRoute = (route) =>
+    route[0].distanceTo(route[route.length - 1]) < EPSILON;
+
+  const sharpFit = (jsdraw, route) => ({
+    startPoint: route[0],
+    commands: route.slice(1).map((point) => fitLineTo(jsdraw, point)),
+  });
+
+  // Every corner is cut back along both of its edges and the cut ends joined by
+  // a quadratic whose control point is the corner itself -- the construction a
+  // rounded corner already is, rather than an arc approximating one.
+  function roundedFit(jsdraw, route, radius) {
+    const closed = isClosedRoute(route);
+    const points = closed ? route.slice(0, -1) : route;
+    const count = points.length;
+    const edge = (i) => points[(i + 1) % count].minus(points[i]);
+    // never more than half of either edge, or two corners sharing a short one
+    // would round through each other and the line would double back
+    const radiusAt = (i) => Math.min(
+      radius,
+      edge((i - 1 + count) % count).magnitude() / 2,
+      edge(i).magnitude() / 2,
+    );
+    const before = (i) =>
+      points[i].minus(edge((i - 1 + count) % count).normalized().times(radiusAt(i)));
+    const after = (i) => points[i].plus(edge(i).normalized().times(radiusAt(i)));
+
+    // a closed route is rounded at its first corner too, so the path starts
+    // part way along the first edge instead of at the corner behind it; an open
+    // one keeps its two free ends square, there being no turn to round there
+    const startPoint = closed ? after(0) : points[0];
+    const commands = [];
+    for (let i = 1; i <= (closed ? count - 1 : count - 2); i++) {
+      commands.push(fitLineTo(jsdraw, before(i)), fitQuadTo(jsdraw, points[i], after(i)));
+    }
+    if (closed) {
+      commands.push(fitLineTo(jsdraw, before(0)), fitQuadTo(jsdraw, points[0], startPoint));
+    } else {
+      commands.push(fitLineTo(jsdraw, points[count - 1]));
+    }
+    return {startPoint, commands};
+  }
+
+  // The route's ends become the curve's ends and the corners it turns at become
+  // the control points, so the curve leans into each corner of the box without
+  // reaching it: one corner is a quadratic, two are a cubic.
+  function curveFit(jsdraw, route) {
+    const endPoint = route[route.length - 1];
+
+    // A closed route has no ends to anchor a curve to, so every corner becomes
+    // a control point and the curve runs from edge midpoint to edge midpoint --
+    // the standard closed quadratic spline, which around a rectangle draws the
+    // loop inscribed in it that a freehand circle should come back as.
+    if (isClosedRoute(route)) {
+      const controls = route.slice(0, -1);
+      const between = (i) => controls[i].lerp(controls[(i + 1) % controls.length], 0.5);
+      return {
+        startPoint: between(controls.length - 1),
+        commands: controls.map((control, i) => fitQuadTo(jsdraw, control, between(i))),
+      };
+    }
+
+    // An open route turns wherever the box does between the two ends it keeps,
+    // which can be more corners than one Bezier has control points: an elbow
+    // has one and a G has four.  Up to two are that one Bezier; past that they
+    // become a chain of quadratics handed off at the midpoints between
+    // consecutive corners, the join that leaves the tangent continuous.
+    const controls = route.slice(1, -1);
+    const commands = [];
+    if (!controls.length) commands.push(fitLineTo(jsdraw, endPoint));
+    else if (controls.length === 1) commands.push(fitQuadTo(jsdraw, controls[0], endPoint));
+    else if (controls.length === 2) {
+      commands.push({
+        kind: jsdraw.PathCommandType.CubicBezierTo,
+        controlPoint1: controls[0],
+        controlPoint2: controls[1],
+        endPoint,
+      });
+    } else {
+      for (let i = 0; i < controls.length; i++) {
+        commands.push(fitQuadTo(jsdraw, controls[i], i === controls.length - 1
+          ? endPoint
+          : controls[i].lerp(controls[i + 1], 0.5)));
+      }
+    }
+    return {startPoint: route[0], commands};
+  }
+
+  const FITS = {sharp: sharpFit, rounded: roundedFit, curve: curveFit};
+
+  // An erase and an add, united, so that one Ctrl+Z puts the original stroke
+  // back -- the cheap rejection doc/stroke-fitting.md asks any fit to have.
+  // The new stroke keeps the old one's style and z-index, so nothing about it
+  // changes but its geometry and where it sits in the stacking order stays put.
+  function fitSelection(ctx, kind) {
+    if (fitProblem(ctx)) return;
+    const component = ctx.tool.getSelectedObjects()[0];
+    const part = fittablePart(component);
+    const box = part.path.getExactBBox();
+    const route = fitRoute(ctx.jsdraw, part.path, box);
+    if (!route) return;
+
+    const {startPoint, commands} = FITS[kind](
+      ctx.jsdraw, route, Math.min(box.w, box.h) * cfg.fitCornerRadius,
+    );
+    // rounding keeps the exported path free of long decimals, for the same
+    // reason the UML pens round: this is markdown someone has to read in a diff
+    const fitted = new ctx.jsdraw.Path(startPoint, commands)
+      .mapPoints((point) => ctx.editor.viewport.roundPoint(point));
+    const stroke = new ctx.jsdraw.Stroke(
+      [ctx.jsdraw.pathToRenderable(fitted, part.style)], component.getZIndex(),
+    );
+
+    ctx.editor.dispatch(ctx.jsdraw.uniteCommands([
+      new ctx.jsdraw.Erase([component]),
+      ctx.editor.image.addComponent(stroke),
+    ], {description: i18n[`fit${kind[0].toUpperCase()}${kind.slice(1)}`]}));
+    // the fitted stroke is a different component, so the selection has to be
+    // moved onto it or the panel would still be pointing at what was erased
+    ctx.tool.setSelection([stroke]);
+    ctx.updateHighlight();
   }
 
   // Which element is the base, and the outline that says so.
@@ -1044,6 +1470,45 @@
     return elButton;
   }
 
+  // A panel's title row: the way back to whatever opened it, and its name.
+  function makePanelHead(title, onBack) {
+    const elHead = document.createElement('div');
+    elHead.className = 'markup-draw-align-head';
+    const elBack = makeAlignButton(GLYPHS.back, i18n.back, onBack);
+    elBack.classList.add('markup-draw-align-back');
+    const elTitle = document.createElement('span');
+    elTitle.textContent = title;
+    elHead.append(elBack, elTitle);
+    return elHead;
+  }
+
+  // "Fit…", the panel behind the menu entry of that name.  It stays open after
+  // a fit, like the align panel does, so one shape can be tried three ways -- a
+  // fitted path fits the same way again, its box being the box it was just
+  // given.
+  function buildFitPanel(ctx, onBack) {
+    const elPanel = document.createElement('div');
+    elPanel.className = 'markup-draw-align-panel';
+    elPanel.append(makePanelHead(i18n.fitTitle, onBack));
+
+    const elNote = document.createElement('div');
+    elNote.className = 'markup-draw-align-base';
+    elNote.textContent = i18n.fitToBox;
+    elPanel.append(elNote);
+
+    const elGrid = document.createElement('div');
+    elGrid.className = 'markup-draw-align-grid';
+    for (const [glyph, label, kind] of [
+      [GLYPHS.fit, i18n.fitSharp, 'sharp'],
+      [GLYPHS.fitRounded, i18n.fitRounded, 'rounded'],
+      [GLYPHS.fitCurve, i18n.fitCurve, 'curve'],
+    ]) {
+      elGrid.append(makeAlignButton(glyph, label, () => fitSelection(ctx, kind)));
+    }
+    elPanel.append(elGrid);
+    return elPanel;
+  }
+
   // The panel that replaces the menu's own contents when "Align…" is picked.
   // It stays open after an action: js-draw's menu has a transparent backdrop,
   // so the drawing is visible behind it and alignments can be chained.
@@ -1052,15 +1517,7 @@
 
     const elPanel = document.createElement('div');
     elPanel.className = 'markup-draw-align-panel';
-
-    const elHead = document.createElement('div');
-    elHead.className = 'markup-draw-align-head';
-    const elBack = makeAlignButton(GLYPHS.back, i18n.back, onBack);
-    elBack.classList.add('markup-draw-align-back');
-    const elTitle = document.createElement('span');
-    elTitle.textContent = i18n.alignTitle;
-    elHead.append(elBack, elTitle);
-    elPanel.append(elHead);
+    elPanel.append(makePanelHead(i18n.alignTitle, onBack));
 
     const elBase = document.createElement('div');
     elBase.className = 'markup-draw-align-base';
@@ -1111,11 +1568,42 @@
     return elPanel;
   }
 
-  // Adds "Align…" to the menu the selection's "…" button (and a right click)
-  // opens.  js-draw builds that menu as a <dialog class="editor-popup-menu">
-  // holding a .content list of .editor-popup-menu-option buttons; everything
-  // js-draw puts there is left alone, ours is appended.
-  function injectAlignEntry(ctx, elRoot) {
+  // One entry in the selection's menu: a button that swaps the menu's own
+  // contents for a panel of ours, and puts them back on the way out.  Hiding
+  // rather than removing keeps whatever js-draw built exactly as it was found.
+  function makeMenuEntry(elContent, {glyph, label, className, problem, build}) {
+    const elEntry = document.createElement('button');
+    elEntry.type = 'button';
+    elEntry.className = `option editor-popup-menu-option ${className}`;
+    elEntry.setAttribute('role', 'menuitem');
+    elEntry.disabled = Boolean(problem);
+    if (problem) elEntry.title = problem;
+    elEntry.append(makeGlyph(glyph), document.createTextNode(label));
+    elEntry.addEventListener('click', () => {
+      const elHidden = [...elContent.children];
+      for (const el of elHidden) el.style.display = 'none';
+      const elPanel = build(() => {
+        elPanel.remove();
+        for (const el of elHidden) el.style.display = '';
+        elEntry.focus();
+      });
+      elContent.append(elPanel);
+      elPanel.querySelector('button')?.focus();
+    });
+    return elEntry;
+  }
+
+  // Adds "Align…" and "Fit…" to the menu the selection's "…" button (and a
+  // right click) opens.  js-draw builds that menu as a
+  // <dialog class="editor-popup-menu"> holding a .content list of
+  // .editor-popup-menu-option buttons; everything js-draw puts there is left
+  // alone, ours are appended.
+  //
+  // The two are siblings rather than one inside the other: they are different
+  // questions about the selection -- where it sits against everything else, and
+  // what shape one path in it should be -- and neither is a step on the way to
+  // the other.
+  function injectMenuEntries(ctx, elRoot) {
     // a menu that is on its way out keeps its element for the length of its
     // fade, so the one being opened is the last that is not fading
     const elDialogs = elRoot.querySelectorAll('dialog.editor-popup-menu:not(.-hide)');
@@ -1126,22 +1614,24 @@
     if (!elContent || !ctx.tool.getSelectedObjects().length) return;
     elDialog.setAttribute(ATTR_ALIGN_MENU, 'true');
 
-    const elEntry = document.createElement('button');
-    elEntry.type = 'button';
-    elEntry.className = 'option editor-popup-menu-option markup-draw-align-entry';
-    elEntry.setAttribute('role', 'menuitem');
-    elEntry.append(makeGlyph(GLYPHS.left), document.createTextNode(i18n.align));
-    elEntry.addEventListener('click', () => {
-      const elHidden = [...elContent.children];
-      for (const el of elHidden) el.style.display = 'none';
-      const elPanel = buildAlignPanel(ctx, () => {
-        elPanel.remove();
-        for (const el of elHidden) el.style.display = '';
-      });
-      elContent.append(elPanel);
-      elPanel.querySelector('button')?.focus();
-    });
-    elContent.append(elEntry);
+    elContent.append(makeMenuEntry(elContent, {
+      glyph: GLYPHS.left,
+      label: i18n.align,
+      className: 'markup-draw-align-entry',
+      build: (onBack) => buildAlignPanel(ctx, onBack),
+    }));
+    // Greyed out rather than left out: a fit needs one path and most selections
+    // are not one, so an entry that came and went would look like a bug, and
+    // the tooltip is the only place the reason can be said.
+    if (cfg.fit) {
+      elContent.append(makeMenuEntry(elContent, {
+        glyph: GLYPHS.fit,
+        label: i18n.fit,
+        className: 'markup-draw-fit-entry',
+        problem: fitProblem(ctx),
+        build: (onBack) => buildFitPanel(ctx, onBack),
+      }));
+    }
   }
 
   function setupAlignment(jsdraw, editor, elRoot) {
@@ -1203,10 +1693,10 @@
     tool.showContextMenu = (anchor, preferSelectionMenu = true) => {
       const result = showContextMenu(anchor, preferSelectionMenu);
       // the menu's <dialog> is built and shown synchronously, so it is already
-      // in the DOM; if js-draw ever changes that markup the entry silently does
+      // in the DOM; if js-draw ever changes that markup the entries silently do
       // not appear, which is the failure mode to prefer over a broken menu
       try {
-        injectAlignEntry(ctx, elRoot);
+        injectMenuEntries(ctx, elRoot);
       } catch {
         alignDebug.why = 'the selection menu no longer looks the way this expects';
       }
@@ -1741,7 +2231,8 @@
       config: cfg,
       giteaAssetVersion: window.config?.assetVersionEncoded ?? '(window.config missing)',
       jsDrawLoaded: Boolean(window.jsdraw?.Editor),
-      // false after a board has been opened means the "Align…" entry is missing
+      // false after a board has been opened means the "Align…" and "Fit…"
+      // entries are missing
       alignmentHooked: alignDebug.hooked,
       alignmentProblem: alignDebug.why,
       // the ids to look for under "Shape" in the pen dropdown

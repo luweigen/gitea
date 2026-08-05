@@ -1,7 +1,16 @@
 # Fitting a freehand stroke to an elbow or a curve
 
-Research note. Nothing here is implemented -- this is what was measured before
-deciding whether to, and what the numbers say about how it would have to work.
+Research note. None of the algorithms below are implemented -- this is what was
+measured before deciding whether to, and what the numbers say about how it would
+have to work.
+
+**What the numbers decided:** none of it shipped. §3.2 -- no corner detector is
+stable across redraws -- ruled out an autocorrect that fires on its own, and what
+shipped instead reads the fit off the stroke's *bounding box*, where the corners
+do not have to be found because they cannot move. See
+[box-fitting.md](box-fitting.md) for that feature and
+[README.md](../README.md#fitting-a-path-to-its-bounding-box) for what it does.
+Everything below stays on file for whoever wants the general version.
 
 The question: a user drags a rough L across the board and wants a clean
 right-angled connector, or drags a rough arc and wants a smooth curve. Which
