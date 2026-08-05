@@ -299,12 +299,11 @@ it. Nothing about those lines changes: the fill is a separate element, it has no
 edge of its own, and it goes *underneath* everything, so the drawing stays as
 crisp as it was.
 
-The dropdown holds three settings, all remembered for the next drawing:
+The dropdown holds two settings, both remembered for the next drawing:
 
 | Setting | |
 |---|---|
-| **Colour** | js-draw's own colour picker, with the pipette |
-| **Opacity** | 5% to 100%, **50% by default** -- paint you can read a line through |
+| **Colour** | js-draw's own colour picker, with the pipette. The picker's **alpha slider is the transparency**, and it opens at **50%** -- paint you can read a line through. Picking one of the six preset swatches, or a colour off the canvas with the pipette, picks it *opaque*, the same as it would for a pen; drag the alpha slider back down for a translucent one. |
 | **Fill** | *Evenly*, *Fading across* (with a side to fade towards), or *Fading out from where you click* |
 
 Both fading patterns run from the chosen colour to fully transparent in the same
@@ -327,15 +326,15 @@ A fill is an ordinary element from then on: one click selects it, one Ctrl+Z
 takes it back, the eraser removes it, and it moves and resizes with
 [Align…](#aligning-what-you-drew) like anything else. The **Select** tool's own
 colour control recolours it too -- and because a fill's transparency *is* part
-of its colour there, that one input sets both: pick 80% alpha and the paint
-becomes 80% opaque. For a gradient it sets the colour the fade starts from; how
+of its colour, there as in the fill tool's own dropdown, that one input sets
+both: pick 80% alpha and the paint becomes 80% opaque. For a gradient it sets the colour the fade starts from; how
 far it fades is the pattern's business and is left alone. What a fill does not
 do is follow the lines that closed it in -- move the box and the fill stays
 where it was, the same limitation the arrows have.
 
 Set `fill` to `false` in `giteaDrawConfig` to leave the button out.
-`fillColour`, `fillOpacity`, `fillPattern` and `fillFadeTowards` set what a
-fresh browser starts with; `fillInkAlpha`, `fillUnderlap`, `fillSimplify`,
+`fillColour`, `fillOpacity` (the alpha the picker opens on), `fillPattern` and
+`fillFadeTowards` set what a fresh browser starts with; `fillInkAlpha`, `fillUnderlap`, `fillSimplify`,
 `fillMaxRaster` and `fillMinArea` tune the tracing and are documented in
 `gitea-draw-fill.js` next to the code that reads them.
 
@@ -789,7 +788,7 @@ on top, so an override always wins whichever file the option belongs to:
     // gitea-draw-fill.js
     fill: true,                 // the "Fill" button beside the pens
     fillColour: '#1e6bb8',      // what a fresh browser starts with
-    fillOpacity: 0.5,           // half transparent, so a line reads through it
+    fillOpacity: 0.5,           // the alpha the colour picker opens on
     fillPattern: 'even',        // 'even' / 'linear' / 'radial'
     fillFadeTowards: 'bottom',  // which side a linear fade runs out on
     fillMaxRaster: 1600,        // longest side of the offscreen raster, in px

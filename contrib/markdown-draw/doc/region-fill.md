@@ -178,11 +178,9 @@ worse state than a missing feature, and it is invisible from this file's own
 code, which is why it is written down here.
 
 The colour reported and accepted there carries the opacity in its **alpha**, the
-way a translucent stroke's does. It has to: the opacity slider lives in the fill
-tool's dropdown and is about the *next* fill, so alpha is the only channel from
-the selection menu to an existing one -- and Coloris is configured with
-`format: 'hex'` and no `alpha: false`, so the picker offers the slider whether or
-not anything reads it.
+way a translucent stroke's does -- and the same way the fill tool's own dropdown
+does, so the two controls mean the same thing by a colour. See §6 for why that is
+the only control either of them has.
 
 **A fill goes underneath everything**, via the `initialZIndex` argument to
 `AbstractComponent`'s constructor rather than a second command. Translucent paint
@@ -197,9 +195,23 @@ threshold is in screen pixels so it does not change with the zoom.
 **The reason a click filled nothing goes on the canvas**, not into
 `window.alert`, following the same rule as the board's other questions.
 
-**The colour picker's own alpha is dropped.** The opacity slider is the one place
-the opacity is set. Two controls quietly multiplying into one number is a worse
-thing to explain than one control that ignores part of another.
+**The colour picker's alpha is the opacity, and there is no slider beside it.**
+js-draw configures Coloris with `format: 'hex'` and no `alpha: false`, so the
+picker has always drawn an alpha slider under the hue one; a separate opacity
+slider would have been a second control for the same number, and the two would
+eventually disagree. `makeColorInput` hands back a `Color4` whose `.a` is that
+slider, and `Color4.fromHex` reads the eight-digit form, so nothing had to be
+worked around to use it.
+
+The cost, which is worth knowing before someone "fixes" it: the six preset
+swatches are `Color4.red.toHexString()` and friends -- fully opaque -- and the
+pipette reads a pixel off the composited canvas, which sits on an opaque
+background. So both set the alpha to 1: `#1e6bb880` becomes `#ff0000` on a
+swatch click. That is the bargain every drawing program makes once colour and
+opacity are one control, and it reads as "I picked *that* colour" rather than as
+something going wrong. Second-guessing it -- keeping the old alpha whenever an
+incoming colour happens to be opaque -- would make 100% unreachable from a
+swatch and is not worth the magic.
 
 ## 7. What this does not do
 

@@ -6,7 +6,7 @@
 /* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
    cached stylesheet can be told apart from a real problem */
 :root {
-  --markup-draw-css: 17;
+  --markup-draw-css: 18;
 }
 
 .markup-draw {
@@ -458,8 +458,7 @@ body.markup-draw-open {
 
 /* --- the fill tool, see gitea-draw-fill.js */
 
-/* The dropdown rows follow js-draw's own layout: a label, then the control.
-   The opacity row carries a readout as well, so it is laid out by hand. */
+/* The dropdown rows follow js-draw's own layout: a label, then the control. */
 .markup-draw-fill-controls > div {
   display: flex;
   align-items: center;
@@ -470,16 +469,9 @@ body.markup-draw-open {
   flex: none;
 }
 
-.markup-draw-fill-controls input[type="range"],
 .markup-draw-fill-controls select {
   flex: 1;
   min-width: 0;
-}
-
-.markup-draw-fill-readout {
-  flex: none;
-  font-variant-numeric: tabular-nums;
-  opacity: 0.8;
 }
 
 .markup-draw-fill-hint {

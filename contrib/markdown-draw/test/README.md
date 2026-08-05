@@ -37,7 +37,7 @@ To poke at the harness by hand: `node server.mjs`, then open
 | `alignment` | the "Align…" entry in the selection menu, the guides that snap a drag, and the geometry both produce |
 | `path-fit` | the "Fit…" entry beside "Align…" in the selection menu: where it sits, when it is offered, the geometry of its three fits, that a G keeps both of its ends, and that one undo takes the original stroke back |
 | `uml-pens` | the six UML relationship pens: that each draws its notation, that an arrow stays one element across a save and reload, and that it records and replays like any other stroke |
-| `fill` | the fill tool: that a click inside four separate strokes finds the area they close off and one outside is refused, that each of the three patterns saves as the SVG it claims to, that something drawn inside is left as a hole, that the "Select" tool's colour control recolours a fill, and that a fill survives both round trips -- the recorded log and the SVG in the markdown |
+| `fill` | the fill tool: that a click inside four separate strokes finds the area they close off and one outside is refused, that each of the three patterns saves as the SVG it claims to, that something drawn inside is left as a hole, that the colour picker's alpha is the fill's transparency in both the tool dropdown and the "Select" menu, and that a fill survives both round trips -- the recorded log and the SVG in the markdown |
 | `mobile` | drawing with a finger, via raw CDP touch events on an iPhone-sized viewport, including a finger-driven alignment |
 | `file-editor` | the repository file editor against the real Monaco build Gitea pins |
 | `file-editor-layouts` | the same button across three generations of Gitea's editor markup |

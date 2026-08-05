@@ -62,7 +62,7 @@
 
   // bump when changing this file; the files are cached separately, so
   // giteaDrawDebug() reports one revision per file
-  const REVISION = '2';
+  const REVISION = '3';
 
   const draw = window.giteaDraw;
   if (!draw) {
@@ -82,6 +82,7 @@
     fill: true,
     // what a fresh board starts with, until the toolbar state is restored
     fillColour: '#1e6bb8',
+    // the alpha the colour picker opens on; there is no separate control for it
     fillOpacity: 0.5,
     fillPattern: 'even', // 'even' | 'linear' | 'radial'
     fillFadeTowards: 'bottom', // 'bottom' | 'top' | 'right' | 'left'
@@ -110,8 +111,8 @@
     // the tool's own name, as a screen reader reads it out
     fillTool: 'Fill a closed area',
     fillHint: 'Click inside an area that what you have drawn closes off.',
+    // the picker behind it sets the transparency too, through the colour's alpha
     fillColourLabel: 'Colour',
-    fillOpacityLabel: 'Opacity',
     fillPatternLabel: 'Fill',
     fillPatternEven: 'Evenly',
     fillPatternLinear: 'Fading across',
@@ -400,6 +401,15 @@
       style.pattern = 'even';
     }
     return style;
+  }
+
+  // `#rrggbb` plus an opacity, as the `#rrggbbaa` the colour picker speaks.
+  // Everything else here keeps the two apart, because the SVG does: a stop's
+  // colour and its `stop-opacity` are separate attributes, and a gradient needs
+  // the same colour at both ends with only the alpha differing.
+  function withAlpha(colour, opacity) {
+    const value = Math.round(Math.min(1, Math.max(0, opacity)) * 255);
+    return `${colour}${value.toString(16).padStart(2, '0')}`;
   }
 
   // FNV-1a, as an unsigned base-36 string.  Not a checksum of anything: it only
@@ -923,12 +933,21 @@
           'toolbar-spacedList', 'toolbar-nonbutton-controls-main-list', 'markup-draw-fill-controls',
         );
 
+        // The colour input carries the opacity in its alpha rather than there
+        // being a slider of its own beside it.  js-draw's picker is Coloris with
+        // `format: 'hex'` and no `alpha: false`, so it has always drawn an alpha
+        // slider under the hue one -- a second control for the same number would
+        // have been a second control that disagrees, and the selection menu's
+        // colour input already works this way (see getStyle on the component).
+        //
+        // The cost is that the six preset swatches and the pipette are opaque
+        // colours, so picking one is picking 100%: `#1e6bb880` becomes `#ff0000`
+        // on a swatch click.  That is the same bargain every drawing program
+        // makes once colour and opacity are one control, and it reads as "I
+        // picked *that* colour" rather than as something going wrong.
         const colour = jsdraw.makeColorInput(editor, (picked) => {
-          // The alpha of whatever the picker hands back is dropped on purpose:
-          // the slider below is the one place the opacity is set, and two
-          // controls quietly multiplying into one number is a worse thing to
-          // explain than one control that ignores part of another.
           chosen.colour = picked.toHexString().slice(0, 7);
+          chosen.opacity = picked.a;
           onChange();
         });
         // the colour control is a container around its input, so the label has
@@ -936,30 +955,6 @@
         const elColourRow = makeRow(i18n.fillColourLabel, colour.container);
         colour.input.id = `markup-draw-fill-colour-${serial}`;
         elColourRow.querySelector('label').setAttribute('for', colour.input.id);
-
-        const elOpacity = document.createElement('input');
-        elOpacity.type = 'range';
-        elOpacity.min = '5';
-        elOpacity.max = '100';
-        elOpacity.step = '5';
-        elOpacity.value = String(Math.round(chosen.opacity * 100));
-        const elOpacityRow = makeRow(
-          i18n.fillOpacityLabel, elOpacity, `markup-draw-fill-opacity-${serial}`,
-        );
-        // a slider with no number beside it cannot be set to the same value
-        // twice on purpose, and "half transparent" is a value people mean
-        const elReadout = document.createElement('span');
-        elReadout.className = 'markup-draw-fill-readout';
-        const showOpacity = () => {
-          elReadout.textContent = `${Math.round(chosen.opacity * 100)}%`;
-        };
-        showOpacity();
-        elOpacityRow.append(elReadout);
-        elOpacity.addEventListener('input', () => {
-          chosen.opacity = Number(elOpacity.value) / 100;
-          showOpacity();
-          onChange();
-        });
 
         const elPattern = document.createElement('select');
         for (const [value, label] of [
@@ -996,9 +991,7 @@
 
         // only a gradient that runs along a line has a side to run towards
         this.updateInputs = () => {
-          colour.setValue(chosen.colour);
-          elOpacity.value = String(Math.round(chosen.opacity * 100));
-          showOpacity();
+          colour.setValue(withAlpha(chosen.colour, chosen.opacity));
           elPattern.value = chosen.pattern;
           elTowards.value = chosen.towards;
           elTowardsRow.style.display = chosen.pattern === 'linear' ? '' : 'none';
@@ -1018,9 +1011,7 @@
         elHint.className = 'markup-draw-fill-hint';
         elHint.textContent = i18n.fillHint;
 
-        elList.replaceChildren(
-          elColourRow, elOpacityRow, elPatternRow, elTowardsRow, elHint,
-        );
+        elList.replaceChildren(elColourRow, elPatternRow, elTowardsRow, elHint);
         dropdown.replaceChildren(elList);
         return true;
       }

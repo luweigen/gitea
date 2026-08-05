@@ -16,7 +16,9 @@ const {check, finish} = createChecks('fill');
 
 const FILL_BUTTON = '.markup-draw-overlay .toolbar-internalWidgetId--gitea-draw-fill .toolbar-button';
 const PATTERN_SELECT = '.markup-draw-overlay select[id^="markup-draw-fill-pattern"]';
-const OPACITY_SLIDER = '.markup-draw-overlay input[id^="markup-draw-fill-opacity"]';
+// there is no opacity control of its own: the colour input carries it in its
+// alpha, so an eight-digit hex is how a test asks for a transparency
+const COLOUR_INPUT = '.markup-draw-overlay input[id^="markup-draw-fill-colour"]';
 
 // The tool button toggles its own dropdown and whether it starts open depends on
 // what the last interaction left behind -- click until it is the way it is
@@ -31,10 +33,23 @@ async function setDropdown(page, open) {
   }
 }
 
-async function chooseFill(page, {pattern, opacity} = {}) {
+// Coloris writes into the input and fires these two; going through the DOM
+// rather than through the picker keeps a check about the fill rather than about
+// a third-party colour widget.
+async function setColourInput(page, selector, value) {
+  await page.evaluate(([sel, colour]) => {
+    const input = document.querySelector(sel);
+    input.value = colour;
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+    input.dispatchEvent(new Event('close'));
+  }, [selector, value]);
+  await page.waitForTimeout(400);
+}
+
+async function chooseFill(page, {pattern, colour} = {}) {
   await setDropdown(page, true);
   if (pattern) await page.locator(PATTERN_SELECT).first().selectOption(pattern);
-  if (opacity) await page.locator(OPACITY_SLIDER).first().fill(String(opacity));
+  if (colour) await setColourInput(page, COLOUR_INPUT, colour);
   await page.waitForTimeout(200);
   await setDropdown(page, false);
 }
@@ -246,26 +261,45 @@ for (const [pattern, element] of [['linear', 'linearGradient'], ['radial', 'radi
   await page.close();
 }
 
-// --- the opacity control
+// --- the colour input, which is also the opacity control
+//
+// One control, not two: js-draw's picker is Coloris with an alpha slider, so a
+// separate opacity slider would have been a second control for the same number.
 
 {
   const page = watchPage(await browser.newPage({viewport: {width: 1280, height: 900}}));
   await page.goto(BASE);
   await openBoard(page);
+
+  // the box first: opening the dropdown selects the fill tool, and the pen
+  // cannot draw while it is the one holding the pointer
   await drawBox(page, [300, 250, 800, 600]);
-  await chooseFill(page, {opacity: 25});
+
+  await setDropdown(page, true);
+  check('the dropdown has no opacity slider of its own',
+    await page.locator('.markup-draw-overlay .markup-draw-fill-controls input[type="range"]').count() === 0);
+  check('the colour input opens on the default colour at the default opacity',
+    await page.locator(COLOUR_INPUT).inputValue() === '#1e6bb880',
+    await page.locator(COLOUR_INPUT).inputValue());
+  await screenshot(page, 'fill-dropdown');
+
+  await chooseFill(page, {colour: '#e01b2440'});
   await page.mouse.click(550, 420);
   await page.waitForTimeout(500);
   await saveBoard(page);
 
   const group = fillGroups(await savedSvg(page))[0] ?? '';
-  check('the opacity slider sets what is painted',
-    group.includes('0.25)'), group.slice(0, 200));
+  check('the colour is what is painted', group.includes('rgba(224, 27, 36, '),
+    group.slice(0, 200));
+  check('and its alpha is the opacity painted at',
+    group.includes('rgba(224, 27, 36, 0.251)') || group.includes('rgba(224, 27, 36, 0.25'),
+    group.slice(0, 200));
 
-  // and it comes back with the board, so the next fill is the one just set up
+  // and both come back with the board, so the next fill is the one just set up
   await reopen(page);
   const restored = (await page.evaluate(() => window.giteaDrawDebug())).filling.chosen;
-  check('the setting is remembered for the next board', restored?.opacity === 0.25,
+  check('the setting is remembered for the next board',
+    restored?.colour === '#e01b24' && Math.abs(restored.opacity - 0.25) < 0.01,
     JSON.stringify(restored));
 
   await page.close();
@@ -436,21 +470,6 @@ for (const [pattern, element] of [['linear', 'linearGradient'], ['radial', 'radi
 
 const FORMAT_COLOUR = '.markup-draw-overlay .selection-format-menu input.coloris_input';
 
-// Coloris writes into the input and fires these; going through the DOM rather
-// than through the picker keeps the check about the fill rather than about a
-// third-party colour widget.
-async function setSelectionColour(page, value) {
-  await page.evaluate((colour) => {
-    const input = document.querySelector(
-      '.markup-draw-overlay .selection-format-menu input.coloris_input',
-    );
-    input.value = colour;
-    input.dispatchEvent(new Event('input', {bubbles: true}));
-    input.dispatchEvent(new Event('close'));
-  }, value);
-  await page.waitForTimeout(400);
-}
-
 // a rubber band drawn well inside the box catches the fill and nothing else
 async function selectTheFill(page) {
   await page.locator('.markup-draw-overlay .toolbar-internalWidgetId--selection-tool-widget .toolbar-button')
@@ -474,7 +493,7 @@ for (const pattern of ['even', 'radial']) {
     await page.locator(FORMAT_COLOUR).inputValue() === '#1e6bb880',
     await page.locator(FORMAT_COLOUR).inputValue());
 
-  await setSelectionColour(page, '#e01b24cc');
+  await setColourInput(page, FORMAT_COLOUR, '#e01b24cc');
   check(`[${pattern}] and setting it takes`,
     await page.locator(FORMAT_COLOUR).inputValue() === '#e01b24cc',
     await page.locator(FORMAT_COLOUR).inputValue());
