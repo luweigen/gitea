@@ -1,0 +1,132 @@
+{{if .IsMarkup}}
+{{/* Markdown/AsciiDoc/Org 等渲染视图的打印样式：只打印文件正文，去掉站点导航等界面元素。
+     仅在渲染视图（.IsMarkup）下注入，不影响其它页面。 */}}
+<style>
+@page {
+	margin: 16mm 14mm;
+}
+
+@media print {
+	/* 1) 强制浅色配色：用户即使使用暗色主题，打印出来也是黑字白底 */
+	:root {
+		color-scheme: light;
+		--color-body: #ffffff;
+		--color-box-body: #ffffff;
+		--color-box-header: #ffffff;
+		--color-text: #181c21;
+		--color-text-dark: #000000;
+		--color-text-light: #30363b;
+		--color-text-light-1: #4b5259;
+		--color-text-light-2: #5b6167;
+		--color-text-light-3: #6a7178;
+		--color-secondary: #d0d7de;
+		--color-secondary-dark-1: #c7ced5;
+		--color-primary: #4183c4;
+		--color-markup-table-row: #0030600a;
+		--color-markup-code-block: #00306010;
+		--color-markup-code-inline: #00306012;
+	}
+	html, body {
+		background: #fff !important;
+		color: var(--color-text) !important;
+	}
+
+	/* 2) 隐藏正文以外的一切界面元素 */
+	#navbar,                          /* 站点顶部导航 */
+	.secondary-nav,                   /* 仓库标题 + 仓库内 tab 栏 */
+	.page-footer,                     /* 站点页脚 */
+	.repo-button-row,                 /* 分支下拉 / 面包屑 / 文件搜索 */
+	.repository-summary,              /* commits / branches / tags 统计条 */
+	.repo-view-file-tree-container,   /* 左侧文件树 */
+	#repo-file-commit-box,            /* 最近一次提交信息 */
+	.file-header,                     /* 文件工具条 Raw/Blame/History/编辑… */
+	.repo-home-sidebar-top,
+	.repo-home-sidebar-bottom,
+	.language-stats,
+	.language-stats-details,
+	.ui.message,                      /* 各类提示条 */
+	.markup .anchor,                  /* 标题旁的 # 锚点图标 */
+	.ui.button.code-copy,             /* 代码块复制按钮 */
+	.auto-hide-control,
+	[data-tippy-root], .tippy-box,
+	.ui.modal, .ui.dimmer, .toastify {
+		display: none !important;
+	}
+
+	/* 3) 拆掉布局包裹：限宽容器、卡片边框、圆角、内边距 */
+	.full.height,
+	.page-content,
+	.ui.container,
+	.repo-view-container,
+	.repo-view-content,
+	.non-diff-file-content,
+	.non-diff-file-content > .ui.segment {
+		display: block !important;
+		width: auto !important;
+		max-width: none !important;
+		margin: 0 !important;
+		padding: 0 !important;
+		border: none !important;
+		border-radius: 0 !important;
+		box-shadow: none !important;
+		background: transparent !important;
+		overflow: visible !important;
+	}
+
+	/* 4) 正文：保留 Web 上的 .markup 排版，只去掉内边距并放大到适合纸张的字号 */
+	.file-view.markup {
+		padding: 0 !important;
+		overflow: visible !important;
+		font-size: 11pt !important;
+		/* 让代码块/表格的浅色底纹在打印时也保留，效果与网页一致 */
+		-webkit-print-color-adjust: exact;
+		print-color-adjust: exact;
+	}
+
+	/* 5) 防裁剪与分页优化 */
+	.markup, .markup > * {
+		overflow: visible !important;
+	}
+	.markup pre,
+	.markup .code-block-container pre {
+		white-space: pre-wrap !important;
+		word-break: break-word !important;
+		overflow: visible !important;
+		break-inside: avoid;
+	}
+	.markup table {
+		display: table !important;
+		width: 100% !important;
+	}
+	.markup tr,
+	.markup img,
+	.markup blockquote {
+		break-inside: avoid;
+	}
+	.markup h1, .markup h2, .markup h3, .markup h4, .markup h5, .markup h6 {
+		break-after: avoid;
+	}
+	.markup img {
+		max-width: 100% !important;
+	}
+	.markup a {
+		color: inherit !important;
+		text-decoration: underline;
+	}
+}
+</style>
+<script>
+// 打印前展开所有 <details> 折叠块，打印后恢复（折叠内容用纯 CSS 无法可靠展开）
+(() => {
+	let opened = [];
+	addEventListener('beforeprint', () => {
+		opened = [...document.querySelectorAll('.file-view.markup details:not([open])')];
+		for (const el of opened) el.open = true;
+	});
+	addEventListener('afterprint', () => {
+		for (const el of opened) el.open = false;
+		opened = [];
+	});
+})();
+</script>
+{{end}}
