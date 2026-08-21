@@ -1,0 +1,506 @@
+/* Copyright 2026 The Gitea Authors. All rights reserved.
+   SPDX-License-Identifier: MIT
+
+   Styles for contrib/markdown-draw, see README.md there. */
+
+/* bumped whenever this file changes; giteaDrawDebug() reads it back so a stale
+   cached stylesheet can be told apart from a real problem */
+:root {
+  --markup-draw-css: 18;
+}
+
+.markup-draw {
+  margin: 1em 0;
+}
+
+.markup-draw-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  /* drawings are stored with an opaque background, the border only frames them */
+  background: #fff;
+  border: 1px solid var(--color-secondary);
+  border-radius: var(--border-radius);
+}
+
+.markup-draw-actions {
+  margin-top: 4px;
+}
+
+/* file editor button: inline next to the other editor controls when this Gitea
+   version has them, otherwise on a line of its own above the editor */
+.markup-draw-button-inline {
+  white-space: nowrap;
+}
+
+.markup-draw-button-standalone {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0;
+  white-space: nowrap;
+}
+
+.markup-draw-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  background: var(--color-body);
+  overscroll-behavior: contain;
+}
+
+/* js-draw's colour inputs are Coloris, which appends its picker to <body> with
+   ".clr-picker { z-index: 1000 }" instead of putting it inside the editor. That
+   is below the board, so clicking a colour swatch used to dim the screen (that
+   overlay *is* inside the board) while the picker itself stayed hidden behind
+   it. "body >" outranks Coloris' class selector, so no !important is needed. */
+body > #clr-picker {
+  z-index: 10000;
+}
+
+.markup-draw-host {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text);
+}
+
+/* js-draw defaults to a fixed 400px height, here it should fill the overlay */
+.markup-draw-host .imageEditorContainer {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+}
+
+body.markup-draw-open {
+  overflow: hidden;
+}
+
+/* --- alignment, see the "alignment" section of gitea-draw.js.
+   The colours come from js-draw's own custom properties so that the panel
+   follows the board rather than the surrounding Gitea theme -- js-draw picks
+   its palette from prefers-color-scheme, and a panel that sat inside its menu
+   while using Gitea's colours would look out of place. */
+
+/* The menu behind the selection's "…" button opens on top of the very elements
+   it acts on -- js-draw anchors it to the corner of the selection -- and the
+   align panel replaces it in place, so both would hide what is about to be
+   lined up. Letting the drawing through keeps the selection, and the outlined
+   base object, visible while an action is picked. js-draw's dialog and its
+   backdrop are already transparent; the list inside it is what is opaque.
+   Override --markup-draw-menu-opacity to taste, 100% restores js-draw's own
+   opaque menu. Browsers without color-mix() get exactly that. */
+.markup-draw-overlay {
+  --markup-draw-menu-opacity: 50%;
+}
+
+.markup-draw-overlay .editor-popup-menu > .content {
+  background-color: color-mix(
+    in srgb, var(--background-color-1) var(--markup-draw-menu-opacity), transparent
+  );
+}
+
+.markup-draw-glyph {
+  width: 1em;
+  height: 1em;
+  fill: currentcolor;
+}
+
+/* the edge the blocks line up against, drawn stronger than the blocks */
+.markup-draw-glyph rect {
+  opacity: 0.55;
+}
+
+.markup-draw-glyph rect.markup-draw-glyph-rule {
+  opacity: 1;
+}
+
+/* the fit glyphs draw a route rather than a block, so they are stroked; the
+   faint rects behind them are the bounding box the route follows */
+.markup-draw-glyph path.markup-draw-glyph-line {
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.markup-draw-align-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  min-width: 148px;
+}
+
+.markup-draw-align-head,
+.markup-draw-align-base {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9em;
+}
+
+.markup-draw-align-head {
+  font-weight: bold;
+}
+
+.markup-draw-align-base {
+  justify-content: space-between;
+  opacity: 0.8;
+}
+
+.markup-draw-align-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+}
+
+.markup-draw-align-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--foreground-color-1, currentcolor);
+  cursor: pointer;
+  font-size: 1em;
+}
+
+.markup-draw-align-button:hover:not(:disabled),
+.markup-draw-align-button:focus-visible {
+  background: var(--background-color-2, rgb(0 0 0 / 8%));
+  color: var(--foreground-color-2, currentcolor);
+}
+
+.markup-draw-align-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* "Fit…" is greyed out when the selection is not one path.  js-draw's menu
+   options have no disabled state of their own -- every one it puts there is
+   always available -- so one is given here, including cancelling the hover it
+   would otherwise still light up with. */
+.markup-draw-fit-entry:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.markup-draw-fit-entry:disabled:hover {
+  background-color: transparent;
+  color: var(--foreground-color-1);
+}
+
+.markup-draw-align-back,
+.markup-draw-align-next {
+  padding: 3px;
+  flex: none;
+}
+
+/* pinned to the editor's rendering area so nothing can spill over the toolbar;
+   purely decorative, so it must never take a pointer event */
+.markup-draw-canvas-overlay {
+  position: fixed;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.markup-draw-base-box {
+  position: absolute;
+  border: 2px dashed #e0561a;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 60%) inset;
+}
+
+/* --- edit history.
+
+   Asked before an undo reaches back into an earlier editing session. Like the
+   align panel it lives inside the board, so it takes js-draw's palette rather
+   than Gitea's; unlike the align panel it must be readable rather than
+   see-through, because it is a question about work that is about to disappear. */
+.markup-draw-confirm {
+  max-width: 24em;
+  padding: 14px 16px;
+  border: 1px solid var(--background-color-3, rgb(0 0 0 / 20%));
+  border-radius: 8px;
+  background: var(--background-color-1, #fff);
+  color: var(--foreground-color-1, currentcolor);
+  box-shadow: 0 4px 20px rgb(0 0 0 / 25%);
+}
+
+.markup-draw-confirm::backdrop {
+  background: rgb(0 0 0 / 35%);
+}
+
+.markup-draw-confirm p {
+  margin: 0 0 10px;
+}
+
+.markup-draw-confirm-title {
+  font-weight: bold;
+}
+
+.markup-draw-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.markup-draw-confirm-actions button {
+  padding: 6px 12px;
+  border: 1px solid var(--background-color-3, rgb(0 0 0 / 20%));
+  border-radius: 4px;
+  background: var(--background-color-2, transparent);
+  color: inherit;
+  cursor: pointer;
+  font-size: 1em;
+}
+
+.markup-draw-confirm-actions button:hover,
+.markup-draw-confirm-actions button:focus-visible {
+  background: var(--background-color-3, rgb(0 0 0 / 8%));
+}
+
+/* the format menu: one button per choice, each with a line about what it means */
+.markup-draw-choice {
+  min-width: 22em;
+}
+
+.markup-draw-choice-option {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--background-color-3, rgb(0 0 0 / 20%));
+  border-radius: 6px;
+  background: var(--background-color-2, transparent);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font-size: 1em;
+}
+
+.markup-draw-choice-option:hover,
+.markup-draw-choice-option:focus-visible {
+  background: var(--background-color-3, rgb(0 0 0 / 8%));
+}
+
+.markup-draw-choice-label {
+  display: block;
+  font-weight: bold;
+}
+
+.markup-draw-choice-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.9em;
+  opacity: 0.75;
+}
+
+/* --- playing a recorded history back.
+
+   The board's overlay with a control bar instead of a toolbar. The canvas is
+   inert: playback drives it, and a click that started drawing on it would put
+   the picture out of step with the log being replayed into it. */
+.markup-draw-player {
+  flex-direction: column;
+}
+
+.markup-draw-player-host .imageEditorContainer {
+  pointer-events: none;
+}
+
+.markup-draw-player-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--color-secondary);
+  background: var(--color-body);
+  color: var(--color-text);
+}
+
+.markup-draw-player-bar button {
+  padding: 5px 12px;
+  border: 1px solid var(--color-secondary);
+  border-radius: var(--border-radius);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1em;
+  white-space: nowrap;
+}
+
+.markup-draw-player-bar button:hover:not(:disabled),
+.markup-draw-player-bar button:focus-visible {
+  background: var(--color-secondary);
+}
+
+.markup-draw-player-bar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.markup-draw-player-progress {
+  flex: 1;
+  min-width: 60px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-secondary);
+}
+
+.markup-draw-player-fill {
+  width: 0;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--color-primary, #4183c4);
+  transition: width 80ms linear;
+}
+
+.markup-draw-player-caption {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 0.9em;
+  opacity: 0.75;
+}
+
+/* On a phone the buttons are what has to survive; the caption is commentary and
+   gives up its room first, then wraps onto a second line rather than pushing
+   anything off the edge. */
+@media (max-width: 560px) {
+  .markup-draw-player-bar {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+  }
+
+  .markup-draw-player-caption {
+    order: 1;
+    flex-basis: 100%;
+    text-align: left;
+  }
+}
+
+/* a transient message -- saved, or why a step could not be removed -- shown
+   where the caption goes, so the bar does not gain a slot that is empty the
+   rest of the time */
+.markup-draw-player-caption.markup-draw-player-note {
+  opacity: 1;
+  font-weight: bold;
+}
+
+.markup-draw-player-step {
+  flex: none;
+  font-size: 0.9em;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+/* The glyph buttons are given a floor so the bar keeps its shape: without it,
+   swapping play for pause would shuffle everything to its right. */
+.markup-draw-player-back,
+.markup-draw-player-forward,
+.markup-draw-player-play,
+.markup-draw-player-restart,
+.markup-draw-player-close {
+  min-width: 2.6em;
+  padding: 5px 8px;
+  text-align: center;
+  /* the glyphs are punctuation, and inherit the surrounding font's idea of it */
+  line-height: 1.4;
+}
+
+.markup-draw-player-save:not(:disabled) {
+  border-color: var(--color-primary, #4183c4);
+  font-weight: bold;
+}
+
+/* nothing to drive once playback has failed; only "close" still means anything */
+.markup-draw-player-dead .markup-draw-player-play,
+.markup-draw-player-dead .markup-draw-player-restart,
+.markup-draw-player-dead .markup-draw-player-progress {
+  display: none;
+}
+
+/* The editor an export replays into. Off to the side rather than hidden: js-draw
+   measures its container, and a box with no size renders nothing to record. */
+.markup-draw-export-host {
+  position: fixed;
+  top: 0;
+  left: -10000px;
+  width: 960px;
+  height: 720px;
+  pointer-events: none;
+}
+
+/* Guides shown while dragging. Rotated about their left edge, so one rule
+   draws both axes -- and stays right when the viewport itself is rotated. */
+.markup-draw-guide {
+  position: absolute;
+  height: 0;
+  transform-origin: 0 0;
+  border-top: 1px solid #e5178e;
+  /* legible over both dark ink and a white background */
+  box-shadow: 0 1px 0 rgb(255 255 255 / 55%), 0 -1px 0 rgb(255 255 255 / 55%);
+}
+
+/* --- the fill tool, see gitea-draw-fill.js */
+
+/* The dropdown rows follow js-draw's own layout: a label, then the control. */
+.markup-draw-fill-controls > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.markup-draw-fill-controls > div > label {
+  flex: none;
+}
+
+.markup-draw-fill-controls select {
+  flex: 1;
+  min-width: 0;
+}
+
+.markup-draw-fill-hint {
+  font-size: 0.85em;
+  opacity: 0.8;
+  /* the hint is a sentence, not a row of controls */
+  display: block;
+}
+
+/* Why a click filled nothing, said over the drawing it is about rather than in
+   a browser dialog -- the board's other questions do the same. It is never in
+   the way of a second try: pointer events go straight through it. */
+.markup-draw-fill-note {
+  position: absolute;
+  left: 50%;
+  bottom: 12%;
+  transform: translateX(-50%);
+  max-width: 80%;
+  padding: 6px 12px;
+  border-radius: var(--border-radius, 4px);
+  background: rgb(0 0 0 / 78%);
+  color: #fff;
+  font-size: 0.9em;
+  text-align: center;
+  pointer-events: none;
+  transition: opacity 0.4s ease-in;
+  z-index: 3;
+}
+
+.markup-draw-fill-note-fading {
+  opacity: 0;
+}

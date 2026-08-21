@@ -1,0 +1,31 @@
+{{/* markdown-draw:begin -- managed by contrib/markdown-draw/install.sh.
+     Everything between this line and the closing marker below is replaced on
+     the next run, so keep any customization of your own outside of it.
+     (Do not repeat the closing marker's text anywhere in here: install.sh
+     deletes the block with a line range and would stop at the first match.)
+
+     contrib/markdown-draw: freehand drawing in markdown, powered by js-draw.
+     This file is rendered inside <head> on every page, see templates/base/head.tmpl.
+
+     The "v" below is the cache buster and install.sh stamps it on every run.
+     Gitea's own {{AssetVersion}} cannot be used here: it only changes when Gitea
+     itself is upgraded, so an updated gitea-draw.js would keep being served from
+     the browser cache for STATIC_CACHE_TIME (6h by default). If you edit the
+     files by hand, change this string by hand too.
+
+     The four scripts are one program split into four files, and the order
+     matters: gitea-draw.js publishes the namespace the other three hang
+     themselves off, and gitea-draw-playback.js reads a log that
+     gitea-draw-history.js knows how to unpack. "defer" runs them in document
+     order, which is what keeps that promise. Dropping any of the last three
+     leaves drawing and editing working, without recording, playback or the
+     fill tool -- but a drawing that already contains a filled area needs
+     gitea-draw-fill.js to be edited without losing it. */}}
+{{$v := "__MARKDOWN_DRAW_VERSION__"}}
+<link rel="stylesheet" href="{{AssetUrlPrefix}}/css/gitea-draw.css?v={{$v}}">
+<script>window.giteaDrawConfig = {assetsPrefix: "{{AssetUrlPrefix}}/js-draw"};</script>
+<script src="{{AssetUrlPrefix}}/js/gitea-draw.js?v={{$v}}" defer></script>
+<script src="{{AssetUrlPrefix}}/js/gitea-draw-history.js?v={{$v}}" defer></script>
+<script src="{{AssetUrlPrefix}}/js/gitea-draw-playback.js?v={{$v}}" defer></script>
+<script src="{{AssetUrlPrefix}}/js/gitea-draw-fill.js?v={{$v}}" defer></script>
+{{/* markdown-draw:end */}}

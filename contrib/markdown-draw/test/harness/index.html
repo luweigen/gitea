@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<!-- Mirrors templates/shared/combomarkdowneditor.tmpl: the editor used by
+     issues, pull requests, comments, the wiki and releases. -->
+<html data-theme="gitea-light">
+<head>
+<meta charset="utf-8">
+<!-- Gitea sets this in templates/base/head.tmpl; without it a mobile viewport
+     lays out at 980px and media queries do not match what users see. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>markdown-draw harness -- comment editor</title>
+<link rel="stylesheet" href="/css/gitea-draw.css">
+<style>
+  :root { --color-secondary: #ccc; --color-body: #fff; --color-text: #000; --border-radius: 4px; }
+  body { font-family: sans-serif; margin: 1rem; }
+  markdown-toolbar { display: block; border: 1px solid #ccc; padding: 4px; }
+  .markdown-toolbar-group { display: inline-block; }
+  textarea.markdown-text-editor { width: 100%; height: 120px; font-family: monospace; }
+  .markup { border: 1px solid #ddd; padding: 8px; margin-top: 1rem; min-height: 40px; }
+</style>
+<script>window.giteaDrawConfig = {assetsPrefix: '/js-draw', ...(window.__cfgOverride || {})};</script>
+<script src="/js/gitea-draw.js" defer></script>
+<script src="/js/gitea-draw-history.js" defer></script>
+<script src="/js/gitea-draw-playback.js" defer></script>
+<script src="/js/gitea-draw-fill.js" defer></script>
+</head>
+<body>
+<div class="combo-markdown-editor">
+  <markdown-toolbar>
+    <div class="markdown-toolbar-group"><button type="button" class="markdown-toolbar-button">B</button></div>
+  </markdown-toolbar>
+  <text-expander><textarea class="markdown-text-editor"></textarea></text-expander>
+  <!-- the editor's own preview tab -->
+  <div class="markup" id="preview"></div>
+</div>
+
+<!-- a rendered comment elsewhere on the page, with no editor behind it -->
+<div class="markup" id="standalone"></div>
+
+<script src="/harness.js"></script>
+</body>
+</html>

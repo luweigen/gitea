@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<!-- Worst case: no header, no tabs, and the edited file name only present in
+     the hidden tree_path field. The button must still appear, in the last
+     fallback position, and the markdown check must still find a file name. -->
+<html data-theme="gitea-light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>markdown-draw harness -- file editor (bare layout)</title>
+<link rel="stylesheet" href="/css/gitea-draw.css">
+<link rel="stylesheet" href="/fileeditor.css">
+<script>window.giteaDrawConfig = {assetsPrefix: '/js-draw', ...(window.__cfgOverride || {})};</script>
+<script src="/js/gitea-draw.js" defer></script>
+<script src="/js/gitea-draw-history.js" defer></script>
+<script src="/js/gitea-draw-playback.js" defer></script>
+<script src="/js/gitea-draw-fill.js" defer></script>
+</head>
+<body>
+<form class="ui edit form form-fetch-action" method="post" action="#">
+  <div class="repo-editor-header">
+    <div class="breadcrumb">
+      <input type="hidden" id="tree_path" name="tree_path" value="docs/Draw.md">
+    </div>
+  </div>
+  <div class="ui active tab">
+    <textarea id="edit_area" name="content" class="tw-hidden"
+      data-previewable-extensions=".md,.markdown,.csv,.org"></textarea>
+    <div class="editor-loading is-loading"></div>
+  </div>
+  <div class="ui tab markup" id="filepreview"></div>
+</form>
+
+<script src="/monaco/min/vs/loader.js"></script>
+<script src="/harness.js"></script>
+<script src="/fileeditor.js"></script>
+</body>
+</html>

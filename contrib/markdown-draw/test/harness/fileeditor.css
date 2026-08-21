@@ -1,0 +1,49 @@
+/* Copyright 2026 The Gitea Authors. All rights reserved.
+   SPDX-License-Identifier: MIT
+
+   Just enough of Gitea's layout for the file editor harness pages. */
+
+:root {
+  --color-secondary: #ccc;
+  --color-body: #fff;
+  --color-text: #000;
+  --border-radius: 4px;
+}
+
+body {
+  font-family: sans-serif;
+  margin: 1rem;
+}
+
+.flex-text-block {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.tw-justify-between {
+  justify-content: space-between;
+}
+
+.repo-editor-menu {
+  display: inline-flex;
+  gap: 8px;
+  border: 1px solid #ccc;
+  padding: 4px;
+}
+
+.monaco-editor-container {
+  height: 300px;
+  border: 1px solid #ccc;
+}
+
+.tw-hidden {
+  display: none;
+}
+
+.markup {
+  border: 1px solid #ddd;
+  padding: 8px;
+  margin-top: 1rem;
+  min-height: 40px;
+}

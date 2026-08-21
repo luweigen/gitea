@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<!-- Mirrors templates/repo/editor/edit.tmpl as of Gitea main: Monaco, with the
+     write/preview tab menu and the indent / line-wrap controls beside it. -->
+<html data-theme="gitea-light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>markdown-draw harness -- file editor (current layout)</title>
+<link rel="stylesheet" href="/css/gitea-draw.css">
+<link rel="stylesheet" href="/fileeditor.css">
+<script>window.giteaDrawConfig = {assetsPrefix: '/js-draw', ...(window.__cfgOverride || {})};</script>
+<script src="/js/gitea-draw.js" defer></script>
+<script src="/js/gitea-draw-history.js" defer></script>
+<script src="/js/gitea-draw-playback.js" defer></script>
+<script src="/js/gitea-draw-fill.js" defer></script>
+</head>
+<body>
+<form class="ui edit form form-fetch-action" method="post" action="#">
+  <div class="repo-editor-header">
+    <div class="breadcrumb">
+      <input id="file-name" maxlength="255" value="Draw.md" required>
+    </div>
+  </div>
+  <div class="ui top attached header">
+    <div class="flex-text-block tw-justify-between tw-flex-wrap">
+      <div class="ui compact small menu small-menu-items repo-editor-menu tw-self-start">
+        <a class="active item" data-tab="write">Edit file</a>
+        <a class="item" data-tab="preview">Preview</a>
+      </div>
+      <div class="flex-text-block code-editor-options">
+        <div class="native-select"><select class="js-indent-style-select"><option value="space">Spaces</option></select></div>
+      </div>
+    </div>
+  </div>
+  <div class="ui active tab" data-tab="write">
+    <textarea id="edit_area" name="content" class="tw-hidden"
+      data-previewable-extensions=".md,.markdown,.csv,.org"></textarea>
+    <div class="editor-loading is-loading"></div>
+  </div>
+  <div class="ui tab markup" data-tab="preview" id="filepreview"></div>
+</form>
+
+<script src="/monaco/min/vs/loader.js"></script>
+<script src="/harness.js"></script>
+<script src="/fileeditor.js"></script>
+</body>
+</html>
