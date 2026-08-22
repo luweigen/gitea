@@ -1,0 +1,389 @@
+{{/* Markdown 渲染结果里的表格 —— 悬停时在右上角显示一个按钮，点击把该表格导出成 PNG 图片。
+     纯自定义模板方案：不改 Gitea 源码、不重新编译前端资源，也不引入任何外部依赖。 */}}
+<script>
+(() => {
+	'use strict';
+
+	// ------------------------------ 可调参数 ------------------------------
+	const EXPORT_SCALE = 2;              // 导出倍率（1 = 与屏幕等大，2 = 两倍分辨率，文字更清晰）
+	const PADDING = 8;                   // 表格四周留白（CSS 像素）
+	const MAX_CANVAS_SIDE = 8192;        // canvas 单边上限，超大表格会自动降低倍率
+	const TABLE_SELECTOR = '.markup table';
+
+	// ------------------------------ 小工具 ------------------------------
+	const isTransparent = (color) => !color || color === 'transparent' ||
+		/^rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0\s*\)$/.test(color);
+
+	function isVisible(el) {
+		if (el.checkVisibility) return el.checkVisibility({visibilityProperty: true});
+		const style = getComputedStyle(el);
+		return style.display !== 'none' && style.visibility !== 'hidden';
+	}
+
+	// 往上找第一个不透明的背景色，作为导出图的底色（深色主题下导出的图也不会是透明底）
+	function effectiveBackground(el) {
+		for (let node = el; node; node = node.parentElement) {
+			const bg = getComputedStyle(node).backgroundColor;
+			if (!isTransparent(bg)) return bg;
+		}
+		return '#ffffff';
+	}
+
+	function loadImage(src) {
+		return new Promise((resolve, reject) => {
+			const img = new Image();
+			img.onload = () => resolve(img);
+			img.onerror = () => reject(new Error('图片加载失败: ' + src.slice(0, 64)));
+			img.src = src;
+		});
+	}
+
+	// ------------------------------ 绘制：背景与边框 ------------------------------
+	function paintBox(ctx, el) {
+		const rect = el.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0) return;
+		const style = getComputedStyle(el);
+
+		if (!isTransparent(style.backgroundColor)) {
+			ctx.fillStyle = style.backgroundColor;
+			ctx.fillRect(rect.left, rect.top, rect.width, rect.height);
+		}
+
+		const side = (width, color, lineStyle, x, y, w, h) => {
+			if (!width || lineStyle === 'none' || lineStyle === 'hidden' || isTransparent(color)) return;
+			ctx.fillStyle = color;
+			ctx.fillRect(x, y, w, h);
+		};
+		const top = parseFloat(style.borderTopWidth) || 0;
+		const right = parseFloat(style.borderRightWidth) || 0;
+		const bottom = parseFloat(style.borderBottomWidth) || 0;
+		const left = parseFloat(style.borderLeftWidth) || 0;
+		side(top, style.borderTopColor, style.borderTopStyle, rect.left, rect.top, rect.width, top);
+		side(bottom, style.borderBottomColor, style.borderBottomStyle, rect.left, rect.bottom - bottom, rect.width, bottom);
+		side(left, style.borderLeftColor, style.borderLeftStyle, rect.left, rect.top, left, rect.height);
+		side(right, style.borderRightColor, style.borderRightStyle, rect.right - right, rect.top, right, rect.height);
+	}
+
+	// ------------------------------ 绘制：复选框（任务列表） ------------------------------
+	function paintCheckbox(ctx, el) {
+		const rect = el.getBoundingClientRect();
+		if (rect.width <= 0 || rect.height <= 0) return;
+		const color = getComputedStyle(el).color;
+		const size = Math.min(rect.width, rect.height);
+		ctx.save();
+		ctx.strokeStyle = isTransparent(color) ? '#6a7178' : color;
+		ctx.lineWidth = Math.max(1, size * 0.08);
+		ctx.strokeRect(rect.left + 0.5, rect.top + 0.5, rect.width - 1, rect.height - 1);
+		if (el.checked) {
+			ctx.beginPath();
+			ctx.lineWidth = Math.max(1.2, size * 0.16);
+			ctx.lineCap = 'round';
+			ctx.lineJoin = 'round';
+			ctx.moveTo(rect.left + rect.width * 0.22, rect.top + rect.height * 0.52);
+			ctx.lineTo(rect.left + rect.width * 0.44, rect.top + rect.height * 0.74);
+			ctx.lineTo(rect.left + rect.width * 0.78, rect.top + rect.height * 0.28);
+			ctx.stroke();
+		}
+		ctx.restore();
+	}
+
+	// ------------------------------ 绘制：文本 ------------------------------
+	// 把一个文本节点拆成"每个行盒一段"，位置直接取浏览器排好版的结果，
+	// 因此换行、列宽、对齐方式都和页面上看到的完全一致，不需要自己实现断行。
+	function textLines(node) {
+		const range = document.createRange();
+		range.selectNodeContents(node);
+		const rects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+		if (rects.length === 0) return [];
+		if (rects.length === 1) return [{text: node.nodeValue, rect: rects[0]}];
+
+		// 多行：逐字符量一次，按行盒 top 分组，得到每一行的文字与位置
+		const text = node.nodeValue;
+		const groups = [];
+		let cur = null;
+		for (let i = 0; i < text.length; i++) {
+			range.setStart(node, i);
+			range.setEnd(node, i + 1);
+			const r = range.getBoundingClientRect();
+			if (r.width <= 0 && r.height <= 0) continue; // 折行处被吃掉的空格
+			if (cur && Math.abs(r.top - cur.top) < 0.5) {
+				cur.right = Math.max(cur.right, r.right);
+				cur.end = i + 1;
+			} else {
+				if (cur) groups.push(cur);
+				cur = {top: r.top, bottom: r.bottom, left: r.left, right: r.right, start: i, end: i + 1};
+			}
+		}
+		if (cur) groups.push(cur);
+		return groups.map((g) => ({
+			text: text.slice(g.start, g.end),
+			rect: {left: g.left, top: g.top, width: g.right - g.left, height: g.bottom - g.top},
+		}));
+	}
+
+	function paintTextLine(ctx, text, rect, style) {
+		if (!text.trim()) return;
+		const metrics = ctx.measureText(text);
+		const ascent = metrics.fontBoundingBoxAscent;
+		const descent = metrics.fontBoundingBoxDescent;
+		let y;
+		if (Number.isFinite(ascent) && Number.isFinite(descent) && ascent + descent > 0) {
+			// 把字体的 ascent+descent 垂直居中放进行盒，和浏览器分配 half-leading 的结果一致
+			ctx.textBaseline = 'alphabetic';
+			y = rect.top + (rect.height - (ascent + descent)) / 2 + ascent;
+		} else {
+			ctx.textBaseline = 'middle';
+			y = rect.top + rect.height / 2;
+		}
+		ctx.textAlign = 'left';
+
+		// canvas 里的字体回退可能和页面不完全一致，按行盒宽度横向微调，保证不串列
+		let squeeze = 1;
+		if (metrics.width > 0 && rect.width > 0) {
+			const ratio = rect.width / metrics.width;
+			if (Math.abs(ratio - 1) > 0.02 && ratio > 0.5 && ratio < 2) squeeze = ratio;
+		}
+		if (squeeze === 1) {
+			ctx.fillText(text, rect.left, y);
+		} else {
+			ctx.save();
+			ctx.translate(rect.left, 0);
+			ctx.scale(squeeze, 1);
+			ctx.fillText(text, 0, y);
+			ctx.restore();
+		}
+
+		// 删除线 / 下划线（~~文字~~、<u>）
+		const decoration = style.textDecorationLine || style.textDecoration || '';
+		if (decoration.includes('line-through') || decoration.includes('underline')) {
+			const width = squeeze === 1 ? Math.min(metrics.width, rect.width) : rect.width;
+			const thickness = Math.max(1, parseFloat(style.fontSize) * 0.07);
+			ctx.fillStyle = isTransparent(style.textDecorationColor) ? style.color : style.textDecorationColor;
+			if (decoration.includes('line-through')) {
+				ctx.fillRect(rect.left, y - (ascent || parseFloat(style.fontSize) * 0.8) * 0.32, width, thickness);
+			}
+			if (decoration.includes('underline')) {
+				ctx.fillRect(rect.left, y + thickness * 1.5, width, thickness);
+			}
+			ctx.fillStyle = style.color;
+		}
+	}
+
+	// ------------------------------ 把一个表格画到 canvas ------------------------------
+	async function tableToCanvas(table) {
+		// .markup table 是 display:block; width:100%; overflow:auto 的滚动容器：
+		// 表格盒子的宽度是容器宽度，而真正的表格内容既可能比它窄（右边一大片空白），
+		// 也可能比它宽（右侧列被滚动条藏起来）。所以取所有行/单元格的并集作为导出范围，
+		// 这样无论当前滚到哪里，导出的都是完整且不带多余留白的表格。
+		const tableRect = table.getBoundingClientRect();
+		let boxes = [...table.querySelectorAll('caption, thead, tbody, tfoot, tr, th, td')]
+			.filter(isVisible)
+			.map((el) => el.getBoundingClientRect())
+			.filter((r) => r.width > 0 && r.height > 0);
+		if (boxes.length === 0) boxes = [tableRect];
+		const originX = Math.min(...boxes.map((r) => r.left));
+		const originY = Math.min(...boxes.map((r) => r.top));
+		const width = Math.max(...boxes.map((r) => r.right)) - originX + PADDING * 2;
+		const height = Math.max(...boxes.map((r) => r.bottom)) - originY + PADDING * 2;
+
+		let scale = EXPORT_SCALE;
+		const limit = Math.min(MAX_CANVAS_SIDE / width, MAX_CANVAS_SIDE / height);
+		if (limit < scale) {
+			scale = Math.max(limit, 0.25);
+			console.warn('[table-export-png] 表格过大，导出倍率降到', scale.toFixed(2));
+		}
+
+		const canvas = document.createElement('canvas');
+		canvas.width = Math.ceil(width * scale);
+		canvas.height = Math.ceil(height * scale);
+		const ctx = canvas.getContext('2d');
+		ctx.scale(scale, scale);
+		ctx.fillStyle = effectiveBackground(table);
+		ctx.fillRect(0, 0, width, height);
+		// 之后所有绘制都可以直接使用 getBoundingClientRect() 的视口坐标
+		ctx.translate(PADDING - originX, PADDING - originY);
+
+		const elements = [table, ...table.querySelectorAll('*')]
+			.filter((el) => !el.ownerSVGElement && isVisible(el)); // <svg> 内部整体当图片画，不逐个元素画
+
+		// 1) 背景与边框
+		for (const el of elements) paintBox(ctx, el);
+
+		// 2) 图片 / 内联 SVG / 复选框（先并发加载，再统一绘制，保证叠放顺序稳定）
+		const pending = [];
+		for (const el of elements) {
+			const tag = el.tagName.toLowerCase();
+			if (tag === 'img') {
+				pending.push(imageOf(el).then((img) => img && {img, rect: el.getBoundingClientRect()}));
+			} else if (tag === 'svg') {
+				pending.push(svgImageOf(el).then((img) => img && {img, rect: el.getBoundingClientRect()}));
+			} else if (tag === 'input' && el.type === 'checkbox') {
+				paintCheckbox(ctx, el);
+			}
+		}
+		for (const item of await Promise.all(pending)) {
+			if (!item || item.rect.width <= 0 || item.rect.height <= 0) continue;
+			try {
+				ctx.drawImage(item.img, item.rect.left, item.rect.top, item.rect.width, item.rect.height);
+			} catch (err) {
+				console.warn('[table-export-png] 图片绘制失败，已跳过：', err);
+			}
+		}
+
+		// 3) 文本
+		const walker = document.createTreeWalker(table, NodeFilter.SHOW_TEXT);
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+			if (!node.nodeValue || !node.nodeValue.trim()) continue;
+			const parent = node.parentElement;
+			if (!parent || parent.ownerSVGElement || !isVisible(parent)) continue;
+			const style = getComputedStyle(parent);
+			ctx.fillStyle = style.color;
+			ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+			if ('letterSpacing' in ctx) {
+				ctx.letterSpacing = style.letterSpacing === 'normal' ? '0px' : style.letterSpacing;
+			}
+			for (const line of textLines(node)) paintTextLine(ctx, line.text, line.rect, style);
+		}
+
+		return canvas;
+	}
+
+	// 跨域图片会污染 canvas，导致后面 toBlob 直接抛 SecurityError，所以宁可跳过
+	async function imageOf(img) {
+		const src = img.currentSrc || img.src;
+		if (!src) return null;
+		if (!src.startsWith('data:')) {
+			try {
+				if (new URL(src, location.href).origin !== location.origin) {
+					console.warn('[table-export-png] 跳过跨域图片（会污染 canvas）：', src);
+					return null;
+				}
+			} catch {
+				return null;
+			}
+		}
+		if (img.complete && img.naturalWidth > 0) return img;
+		try {
+			await img.decode();
+			return img;
+		} catch {
+			return null;
+		}
+	}
+
+	// 内联 SVG（图标等）：序列化成 data: URL 再当普通图片画。
+	// 用 data: 而不是 blob:，前者在 Chrome 里不会污染 canvas。
+	async function svgImageOf(svg) {
+		try {
+			const rect = svg.getBoundingClientRect();
+			const clone = svg.cloneNode(true);
+			clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+			clone.setAttribute('width', String(rect.width));
+			clone.setAttribute('height', String(rect.height));
+			// SVG 图像里读不到页面的 CSS，把当前颜色内联进去（图标常用 fill: currentColor）
+			const style = getComputedStyle(svg);
+			clone.style.color = style.color;
+			if (style.fill && style.fill !== 'none') clone.style.fill = style.fill;
+			const text = new XMLSerializer().serializeToString(clone);
+			return await loadImage('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(text));
+		} catch (err) {
+			console.warn('[table-export-png] 内联 SVG 导出失败，已跳过：', err);
+			return null;
+		}
+	}
+
+	// ------------------------------ 文件名 ------------------------------
+	function fileNameFor(table) {
+		let title = '';
+		for (let node = table; node && !title; node = node.parentElement) {
+			for (let prev = node.previousElementSibling; prev; prev = prev.previousElementSibling) {
+				if (/^H[1-6]$/.test(prev.tagName)) {
+					title = prev.textContent.trim();
+					break;
+				}
+			}
+			if (node.classList && node.classList.contains('markup')) break;
+		}
+		if (!title) title = (document.title || 'table').split(/[·|]/)[0].trim();
+		const index = [...document.querySelectorAll(TABLE_SELECTOR)].indexOf(table) + 1;
+		const safe = title.replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'table';
+		return `${safe}-table${index}.png`;
+	}
+
+	// ------------------------------ 导出按钮 ------------------------------
+	const button = document.createElement('button');
+	button.type = 'button';
+	button.className = 'ui mini button';
+	button.title = '把这个表格导出为 PNG 图片';
+	button.textContent = '⤓ PNG';
+	button.style.cssText = [
+		'position:fixed', 'z-index:200', 'display:none', 'padding:4px 8px',
+		'line-height:1.2', 'font-size:12px', 'cursor:pointer', 'opacity:0.9',
+	].join(';');
+	// 允许把这段脚本放进 header.tmpl（那时 <body> 还不存在）
+	if (document.body) document.body.appendChild(button);
+	else addEventListener('DOMContentLoaded', () => document.body.appendChild(button), {once: true});
+
+	let target = null;
+
+	function hide() {
+		target = null;
+		button.style.display = 'none';
+	}
+
+	function place() {
+		if (!target || !target.isConnected) return hide();
+		const rect = target.getBoundingClientRect();
+		if (rect.bottom < 0 || rect.top > innerHeight || rect.width <= 0) return hide();
+		button.style.display = 'block';
+		const w = button.offsetWidth;
+		const h = button.offsetHeight;
+		// 贴在表格右上角，长表格滚动时按钮跟着停在可见区域内
+		const left = Math.max(6, Math.min(rect.right - w - 6, innerWidth - w - 6));
+		const top = Math.min(Math.max(rect.top + 6, 6), Math.max(rect.bottom - h - 6, 6));
+		button.style.left = `${left}px`;
+		button.style.top = `${top}px`;
+	}
+
+	document.addEventListener('pointerover', (e) => {
+		const el = e.target instanceof Element ? e.target : null;
+		if (!el || button.contains(el)) return;
+		const table = el.closest(TABLE_SELECTOR);
+		if (table) {
+			target = table;
+			place();
+		} else {
+			hide();
+		}
+	});
+	addEventListener('scroll', place, {passive: true, capture: true});
+	addEventListener('resize', place);
+
+	button.addEventListener('click', async () => {
+		const table = target;
+		if (!table || button.disabled) return;
+		const label = button.textContent;
+		button.disabled = true;
+		button.textContent = '⏳ …';
+		try {
+			const canvas = await tableToCanvas(table);
+			const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+			if (!blob) throw new Error('PNG 编码失败');
+			const a = document.createElement('a');
+			a.href = URL.createObjectURL(blob);
+			a.download = fileNameFor(table);
+			a.click();
+			setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+			button.textContent = '✓ PNG';
+		} catch (err) {
+			console.error('[table-export-png] 导出失败：', err);
+			button.textContent = '✗ 失败';
+		} finally {
+			setTimeout(() => {
+				button.textContent = label;
+				button.disabled = false;
+			}, 1500);
+		}
+	});
+})();
+</script>
