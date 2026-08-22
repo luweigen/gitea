@@ -48,7 +48,8 @@ async function renderMermaid(el) {
 
     // 控制按钮
     const controls = document.createElement('div');
-    controls.style.cssText = 'position:absolute; top:8px; right:8px; display:flex; gap:4px; z-index:10;';
+    // 放左上角,避免与 Gitea 在右上角加的复制按钮重叠
+    controls.style.cssText = 'position:absolute; top:8px; left:8px; display:flex; gap:4px; z-index:10;';
     controls.innerHTML = `
       <button type="button" class="ui mini icon button" data-act="zoom-in" title="放大">+</button>
       <button type="button" class="ui mini icon button" data-act="reset" title="重置">⟲</button>
