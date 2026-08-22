@@ -22,6 +22,38 @@ const HAS_CAP = Number.isFinite(MAX_HEIGHT) && MAX_HEIGHT > 0;
 // 导出 PNG 的放大倍数(相对图形自然尺寸),越大文字越清晰、文件越大
 const EXPORT_SCALE = 2;
 
+// mermaid 默认用 htmlLabels(foreignObject 里包 HTML)渲染标签,而部分浏览器(Safari)
+// 无法把 SVG 里的 foreignObject 光栅化到 canvas —— 图能画出来但标签是空白。
+// 这里用一张 8x8 的探针图实测一次能力,不做 UA 嗅探。
+let foreignObjectOk = null;
+async function canRasterizeForeignObject() {
+  if (foreignObjectOk !== null) return foreignObjectOk;
+  const probe = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">'
+    + '<foreignObject width="8" height="8">'
+    + '<div xmlns="http://www.w3.org/1999/xhtml" style="width:8px;height:8px;background:#000"></div>'
+    + '</foreignObject></svg>';
+  try {
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('探针图加载失败'));
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(probe);
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = 8;
+    canvas.height = 8;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 8, 8);
+    ctx.drawImage(img, 0, 0, 8, 8);
+    // foreignObject 里的黑色方块画出来了才算支持
+    foreignObjectOk = ctx.getImageData(0, 0, 8, 8).data[0] < 128;
+  } catch {
+    foreignObjectOk = false;
+  }
+  return foreignObjectOk;
+}
+
 async function renderMermaid(el) {
   const pre = el.closest('pre');
   if (!pre || pre.hasAttribute('data-render-done')) return;
@@ -97,10 +129,17 @@ async function renderMermaid(el) {
     });
 
     // 导出 PNG:用 mermaid 原始 SVG 字符串(未被 pan-zoom 改过)按自然尺寸离屏渲染,
-    // 因此无论当前缩放/平移到哪里,导出的都是完整图形
+    // 因此无论当前缩放/平移到哪里,导出的都是完整图形。这里有两个坑:
+    //   1. mermaid 返回的 SVG 字符串是 HTML 序列化的结果,文本里的不换行空格(U+00A0)
+    //      会写成 &nbsp;,而 XML 没有这个实体 —— 按 image/svg+xml 解析会直接失败
+    //      (Chrome 与 Safari 都会),这是"SVG 图像加载失败"的真正原因。改按 text/html
+    //      解析(实体表齐全,DOMParser 也不会执行脚本),再用 XMLSerializer 序列化回
+    //      合法 XML。
+    //   2. Chrome 把含 foreignObject 的 SVG 从 blob: URL 装进 <img> 后会污染 canvas,
+    //      导致 toBlob 抛 SecurityError;改用 data: URL 则不会。
     async function svgToPngBlob(svgText) {
-      const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
-      const root = doc.documentElement;
+      const root = new DOMParser().parseFromString(svgText, 'text/html').querySelector('svg');
+      if (!root) throw new Error('SVG 解析失败');
       const evb = (root.getAttribute('viewBox') || '').split(/\s+/).map(Number);
       const w = (evb.length === 4 && evb[2] > 0) ? evb[2] : (svgContainer.clientWidth || 800);
       const h = (evb.length === 4 && evb[3] > 0) ? evb[3] : (svgContainer.clientHeight || 600);
@@ -108,49 +147,51 @@ async function renderMermaid(el) {
       root.setAttribute('height', String(Math.round(h * EXPORT_SCALE)));
       root.style.maxWidth = 'none';
 
-      const svgUrl = URL.createObjectURL(new Blob(
-        [new XMLSerializer().serializeToString(doc)],
-        {type: 'image/svg+xml;charset=utf-8'},
-      ));
-      try {
-        const img = new Image();
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
-          img.onerror = () => reject(new Error('SVG 图像加载失败'));
-          img.src = svgUrl;
-        });
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(w * EXPORT_SCALE);
-        canvas.height = Math.round(h * EXPORT_SCALE);
-        const ctx = canvas.getContext('2d');
-        // 填上容器背景色,避免透明底的 PNG 在深色主题/看图软件里发黑
-        const bg = getComputedStyle(svgContainer).backgroundColor;
-        ctx.fillStyle = (!bg || bg === 'rgba(0, 0, 0, 0)') ? '#ffffff' : bg;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
-        if (!blob) throw new Error('PNG 编码失败');
-        return blob;
-      } finally {
-        URL.revokeObjectURL(svgUrl);
-      }
+      const svgUrl = 'data:image/svg+xml;charset=utf-8,'
+        + encodeURIComponent(new XMLSerializer().serializeToString(root));
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error('SVG 图像加载失败'));
+        img.src = svgUrl;
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(w * EXPORT_SCALE);
+      canvas.height = Math.round(h * EXPORT_SCALE);
+      const ctx = canvas.getContext('2d');
+      // 填上容器背景色,避免透明底的 PNG 在深色主题/看图软件里发黑
+      const bg = getComputedStyle(svgContainer).backgroundColor;
+      ctx.fillStyle = (!bg || bg === 'rgba(0, 0, 0, 0)') ? '#ffffff' : bg;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) throw new Error('PNG 编码失败');
+      return blob;
+    }
+
+    // 用纯 SVG <text> 标签(htmlLabels:false)重新渲染一份专供导出,页面显示不受影响。
+    // init 指令插在 YAML frontmatter 之后,免得破坏图自带的配置
+    async function renderWithTextLabels() {
+      const directive = '%%{init: {"flowchart":{"htmlLabels":false},"class":{"htmlLabels":false}}}%%\n';
+      const fm = /^---\r?\n[\s\S]*?\r?\n---\r?\n/.exec(source);
+      const exportSource = fm
+        ? source.slice(0, fm[0].length) + directive + source.slice(fm[0].length)
+        : directive + source;
+      const {svg: textLabelSvg} = await mermaid.render(id + '-export-' + Math.random().toString(36).slice(2), exportSource);
+      return textLabelSvg;
     }
 
     async function exportPng() {
+      // 能光栅化 foreignObject 就直接用页面上这份 SVG(排版与页面完全一致),
+      // 不能的话(Safari)换成纯文本标签的版本,免得导出的图标签是空白
+      const useOriginal = await canRasterizeForeignObject();
       let blob;
       try {
-        blob = await svgToPngBlob(svg);
+        blob = await svgToPngBlob(useOriginal ? svg : await renderWithTextLabels());
       } catch (err) {
-        // Safari 无法把含 foreignObject(htmlLabels)的 SVG 装进 Image/canvas,
-        // 退回用纯 SVG 文本标签重新渲染一份专供导出,页面显示不受影响
+        if (!useOriginal) throw err;
         console.warn('原始 SVG 导出失败,改用 htmlLabels:false 重新渲染导出:', err);
-        const directive = '%%{init: {"flowchart":{"htmlLabels":false},"class":{"htmlLabels":false}}}%%\n';
-        const fm = /^---\r?\n[\s\S]*?\r?\n---\r?\n/.exec(source);
-        const exportSource = fm
-          ? source.slice(0, fm[0].length) + directive + source.slice(fm[0].length)
-          : directive + source;
-        const rerendered = await mermaid.render(id + '-export-' + Math.random().toString(36).slice(2), exportSource);
-        blob = await svgToPngBlob(rerendered.svg);
+        blob = await svgToPngBlob(await renderWithTextLabels());
       }
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);

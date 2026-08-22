@@ -67,10 +67,19 @@ gitea manager reload-templates
 ## 已知限制
 
 * mermaid 主题在页面加载时按当前 Gitea 主题选定，切换主题后需刷新页面已渲染的图才会跟随。
+* mermaid 返回的 SVG 字符串是 HTML 序列化的结果，文本里的不换行空格（U+00A0，
+  从网页/文档复制中文时很常见）会写成 `&nbsp;`——XML 没有这个实体，所以导出时
+  只能按 `text/html` 解析再用 `XMLSerializer` 转回合法 XML；按 `image/svg+xml`
+  解析会在所有浏览器上直接失败（表现为控制台的“SVG 图像加载失败”）。
+* 导出用的临时 SVG 走 `data:` URL 而不是 `blob:` URL：Chrome 里含
+  `foreignObject` 的 SVG 从 `blob:` URL 装进 `<img>` 会污染 canvas，
+  `toBlob` 随即抛 SecurityError。
 * mermaid 11 的 flowchart 默认用 `htmlLabels`（`foreignObject`）渲染标签，
-  Safari 无法把这类 SVG 装进 `Image`/canvas。导出时会自动检测：失败则用
-  `htmlLabels: false`（纯 SVG `<text>` 标签）重新渲染一份专供导出，页面显示
-  不受影响，只是导出图里的标签排版与页面略有差异。
+  个别浏览器（如 Safari）无法把 `foreignObject` 光栅化到 canvas，导出图里标签
+  会是空白。导出前会用一张 8×8 探针图实测该能力（不做 UA 嗅探），不支持时改用
+  `htmlLabels: false`（纯 SVG `<text>` 标签）重新渲染一份专供导出，页面显示不受
+  影响，只是导出图里的标签排版与页面略有差异；mermaid 11 的连线标签即使在
+  `htmlLabels: false` 下仍用 `foreignObject`，这类浏览器上连线标签可能仍为空白。
 * 与内置渲染是"先到先得"的竞态：本脚本经 CDN ESM 加载，正常情况下先于 Gitea
   懒加载的 mermaid chunk 完成接管；极端网络条件下若内置渲染抢先，该代码块会
   退回内置的静态 iframe 显示，不会重复渲染或报错。
