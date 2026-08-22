@@ -57,6 +57,8 @@ gitea manager reload-templates
 
 都在 `footer.tmpl` 顶部：
 
+* `THEME_LIGHT` / `THEME_DARK`：mermaid 配色主题。亮色站点默认 `default`（标准彩色），
+  可改 `neutral`（灰度）、`forest`、`base`；暗色站点默认 `dark`。
 * `MIN_HEIGHT` / `MAX_HEIGHT`：容器高度范围。`MAX_HEIGHT = 0` 表示不封顶（默认，
   框高完全随图形增长）；设为正数则封顶到该值，超出部分用缩放/平移查看；
   两者设为同一正数（如 500）则固定高度。
