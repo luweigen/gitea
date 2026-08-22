@@ -1,0 +1,180 @@
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+import elkLayouts from 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk/dist/mermaid-layout-elk.esm.min.mjs';
+import svgPanZoom from 'https://cdn.jsdelivr.net/npm/svg-pan-zoom@3.6.2/+esm';
+
+mermaid.registerLayoutLoaders(elkLayouts);
+mermaid.initialize({
+  startOnLoad: false,
+  theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'neutral',
+  securityLevel: 'strict',
+  suppressErrorRendering: true,
+});
+
+// 高度自适应参数:框高随图形宽高比等比增长
+//   MAX_HEIGHT 设为正数  -> 封顶到该值(超出部分用缩放/平移查看)
+//   MAX_HEIGHT 设为 0 或 Infinity -> 不封顶,框高完全随图形增长
+//   MIN_HEIGHT 与 MAX_HEIGHT 设为同一正数 -> 固定高度
+const MIN_HEIGHT = 80;
+const MAX_HEIGHT = 0;
+const HAS_CAP = Number.isFinite(MAX_HEIGHT) && MAX_HEIGHT > 0;
+
+// 导出 PNG 的放大倍数(相对图形自然尺寸),越大文字越清晰、文件越大
+const EXPORT_SCALE = 2;
+
+async function renderMermaid(el) {
+  const pre = el.closest('pre');
+  if (!pre || pre.hasAttribute('data-render-done')) return;
+  // 两个属性分别阻止旧版与新版 Gitea 内置的 mermaid 渲染
+  pre.setAttribute('data-render-done', 'true');
+  pre.setAttribute('data-markup-mermaid-rendered', 'true');
+
+  const source = el.textContent;
+  const id = 'mermaid-' + Math.random().toString(36).slice(2);
+
+  try {
+    const {svg, bindFunctions} = await mermaid.render(id, source);
+
+    // 外层容器
+    const block = document.createElement('div');
+    block.className = 'mermaid-block';
+    block.style.cssText = 'position:relative; border:1px solid var(--color-secondary); border-radius:4px; overflow:hidden;';
+
+    // SVG 容器(高度稍后根据图形宽高比自适应计算)
+    const svgContainer = document.createElement('div');
+    svgContainer.style.cssText = 'width:100%; background:var(--color-box-body);';
+    svgContainer.innerHTML = svg;
+    block.appendChild(svgContainer);
+
+    // 控制按钮
+    const controls = document.createElement('div');
+    controls.style.cssText = 'position:absolute; top:8px; right:8px; display:flex; gap:4px; z-index:10;';
+    controls.innerHTML = `
+      <button type="button" class="ui mini icon button" data-act="zoom-in" title="放大">+</button>
+      <button type="button" class="ui mini icon button" data-act="reset" title="重置">⟲</button>
+      <button type="button" class="ui mini icon button" data-act="zoom-out" title="缩小">−</button>
+      <button type="button" class="ui mini icon button" data-act="fit" title="适应">⛶</button>
+      <button type="button" class="ui mini icon button" data-act="export" title="导出 PNG">⤓</button>
+    `;
+    block.appendChild(controls);
+
+    pre.replaceWith(block);
+    bindFunctions?.(svgContainer);
+
+    // 需要让 SVG 自适应容器
+    const svgEl = svgContainer.querySelector('svg');
+    svgEl.setAttribute('width', '100%');
+    svgEl.setAttribute('height', '100%');
+    svgEl.style.maxWidth = 'none';
+
+    // 从 viewBox 读取图形真实宽高比,用于按容器宽度等比换算高度
+    const vb = (svgEl.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+    const aspect = (vb.length === 4 && vb[2] > 0 && vb[3] > 0) ? vb[2] / vb[3] : null;
+
+    // 根据当前容器宽度计算自适应高度
+    const fitHeight = () => {
+      const w = svgContainer.clientWidth || block.clientWidth;
+      if (!w) return;
+      // 按容器宽度等比换算自然高度;没有有效 viewBox 时退回到封顶值/600
+      const natural = aspect ? w / aspect : (HAS_CAP ? MAX_HEIGHT : 600);
+      let h = Math.max(MIN_HEIGHT, natural);
+      if (HAS_CAP) h = Math.min(h, MAX_HEIGHT);
+      svgContainer.style.height = h + 'px';
+    };
+
+    fitHeight();
+
+    // 初始化 pan-zoom(fit 让图形完整放入自适应后的视口)
+    const panZoom = svgPanZoom(svgEl, {
+      zoomEnabled: true,
+      controlIconsEnabled: false,
+      fit: true,
+      center: true,
+      minZoom: 0.1,
+      maxZoom: 20,
+      zoomScaleSensitivity: 0.3,
+    });
+
+    // 导出 PNG:用 mermaid 原始 SVG 字符串(未被 pan-zoom 改过)按自然尺寸离屏渲染,
+    // 因此无论当前缩放/平移到哪里,导出的都是完整图形
+    async function exportPng() {
+      const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+      const root = doc.documentElement;
+      const evb = (root.getAttribute('viewBox') || '').split(/\s+/).map(Number);
+      const w = (evb.length === 4 && evb[2] > 0) ? evb[2] : (svgContainer.clientWidth || 800);
+      const h = (evb.length === 4 && evb[3] > 0) ? evb[3] : (svgContainer.clientHeight || 600);
+      root.setAttribute('width', String(Math.round(w * EXPORT_SCALE)));
+      root.setAttribute('height', String(Math.round(h * EXPORT_SCALE)));
+      root.style.maxWidth = 'none';
+
+      const svgUrl = URL.createObjectURL(new Blob(
+        [new XMLSerializer().serializeToString(doc)],
+        {type: 'image/svg+xml;charset=utf-8'},
+      ));
+      try {
+        const img = new Image();
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = () => reject(new Error('SVG 图像加载失败'));
+          img.src = svgUrl;
+        });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(w * EXPORT_SCALE);
+        canvas.height = Math.round(h * EXPORT_SCALE);
+        const ctx = canvas.getContext('2d');
+        // 填上容器背景色,避免透明底的 PNG 在深色主题/看图软件里发黑
+        const bg = getComputedStyle(svgContainer).backgroundColor;
+        ctx.fillStyle = (!bg || bg === 'rgba(0, 0, 0, 0)') ? '#ffffff' : bg;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+        if (!blob) throw new Error('PNG 编码失败');
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = id + '.png';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      } finally {
+        URL.revokeObjectURL(svgUrl);
+      }
+    }
+
+    controls.addEventListener('click', (e) => {
+      const act = e.target.closest('button')?.dataset.act;
+      if (!act) return;
+      if (act === 'zoom-in') panZoom.zoomIn();
+      else if (act === 'zoom-out') panZoom.zoomOut();
+      else if (act === 'reset') panZoom.resetZoom(), panZoom.center();
+      else if (act === 'fit') panZoom.fit(), panZoom.center();
+      else if (act === 'export') exportPng().catch((err) => console.error('PNG 导出失败:', err));
+    });
+
+    // 容器宽度变化时重新计算高度并适应(用宽度变化做防抖,避免改高度引发的回环)
+    let lastWidth = svgContainer.clientWidth;
+    new ResizeObserver(() => {
+      const w = svgContainer.clientWidth;
+      if (w !== lastWidth) {
+        lastWidth = w;
+        fitHeight();
+      }
+      panZoom.resize();
+      panZoom.fit();
+      panZoom.center();
+    }).observe(svgContainer);
+  } catch (err) {
+    console.error('Mermaid render error:', err);
+    pre.innerHTML = `<code style="color:red;">Mermaid error: ${err.message}</code>`;
+  }
+}
+
+const observer = new MutationObserver((mutations) => {
+  for (const m of mutations) {
+    for (const node of m.addedNodes) {
+      if (node.nodeType !== 1) continue;
+      node.querySelectorAll?.('code.language-mermaid').forEach(renderMermaid);
+    }
+  }
+});
+observer.observe(document.body, {childList: true, subtree: true});
+document.querySelectorAll('code.language-mermaid').forEach(renderMermaid);
+</script>
