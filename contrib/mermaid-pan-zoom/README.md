@@ -63,12 +63,19 @@ gitea manager reload-templates
   框高完全随图形增长）；设为正数则封顶到该值，超出部分用缩放/平移查看；
   两者设为同一正数（如 500）则固定高度。
 * `EXPORT_SCALE`：导出 PNG 相对自然尺寸的放大倍数，默认 2，越大文字越清晰、文件越大。
+* `MAX_VIEWBOX_GROWTH`：内容画到 `viewBox` 外面时，每一侧最多把 `viewBox` 扩大到声明
+  尺寸的多少倍，默认 0.25（25%）。标签溢出这种小幅超界会被兜住；某一侧超出太多
+  （gantt 会把辅助图形画到很远的空白处）则维持原样，免得图被挤成一条线。
 * 想导出固定白底而不是主题背景色，把 `exportPng` 里的 `ctx.fillStyle` 赋值
   改成 `ctx.fillStyle = '#ffffff'`。
 
 ## 已知限制
 
 * mermaid 主题在页面加载时按当前 Gitea 主题选定，切换主题后需刷新页面已渲染的图才会跟随。
+* 有些图（如 `radar-beta`）会把轴标签、图例画到自己声明的 `viewBox` 之外，靠
+  `overflow="visible"` 在页面上勉强露出来，而 `<img>` 光栅化严格按 `viewBox` 裁切，
+  导出的 PNG 里这些标签会被切掉。脚本渲染后会量一次真实内容包围盒并按需扩大
+  `viewBox`（页面显示与导出都按扩过的来），扩大幅度受 `MAX_VIEWBOX_GROWTH` 限制。
 * mermaid 返回的 SVG 字符串是 HTML 序列化的结果，文本里的不换行空格（U+00A0，
   从网页/文档复制中文时很常见）会写成 `&nbsp;`——XML 没有这个实体，所以导出时
   只能按 `text/html` 解析再用 `XMLSerializer` 转回合法 XML；按 `image/svg+xml`
