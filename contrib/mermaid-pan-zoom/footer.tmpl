@@ -98,8 +98,8 @@ async function renderMermaid(el) {
 
     // 导出 PNG:用 mermaid 原始 SVG 字符串(未被 pan-zoom 改过)按自然尺寸离屏渲染,
     // 因此无论当前缩放/平移到哪里,导出的都是完整图形
-    async function exportPng() {
-      const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
+    async function svgToPngBlob(svgText) {
+      const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
       const root = doc.documentElement;
       const evb = (root.getAttribute('viewBox') || '').split(/\s+/).map(Number);
       const w = (evb.length === 4 && evb[2] > 0) ? evb[2] : (svgContainer.clientWidth || 800);
@@ -130,14 +130,33 @@ async function renderMermaid(el) {
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
         if (!blob) throw new Error('PNG 编码失败');
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = id + '.png';
-        a.click();
-        URL.revokeObjectURL(a.href);
+        return blob;
       } finally {
         URL.revokeObjectURL(svgUrl);
       }
+    }
+
+    async function exportPng() {
+      let blob;
+      try {
+        blob = await svgToPngBlob(svg);
+      } catch (err) {
+        // Safari 无法把含 foreignObject(htmlLabels)的 SVG 装进 Image/canvas,
+        // 退回用纯 SVG 文本标签重新渲染一份专供导出,页面显示不受影响
+        console.warn('原始 SVG 导出失败,改用 htmlLabels:false 重新渲染导出:', err);
+        const directive = '%%{init: {"flowchart":{"htmlLabels":false},"class":{"htmlLabels":false}}}%%\n';
+        const fm = /^---\r?\n[\s\S]*?\r?\n---\r?\n/.exec(source);
+        const exportSource = fm
+          ? source.slice(0, fm[0].length) + directive + source.slice(fm[0].length)
+          : directive + source;
+        const rerendered = await mermaid.render(id + '-export-' + Math.random().toString(36).slice(2), exportSource);
+        blob = await svgToPngBlob(rerendered.svg);
+      }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = id + '.png';
+      a.click();
+      URL.revokeObjectURL(a.href);
     }
 
     controls.addEventListener('click', (e) => {

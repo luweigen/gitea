@@ -68,8 +68,9 @@ gitea manager reload-templates
 
 * mermaid 主题在页面加载时按当前 Gitea 主题选定，切换主题后需刷新页面已渲染的图才会跟随。
 * mermaid 11 的 flowchart 默认用 `htmlLabels`（`foreignObject`）渲染标签，
-  Chrome / Firefox 导出 PNG 正常，Safari 把这类 SVG 画到 canvas 时标签可能空白；
-  如有此问题，在 `mermaid.initialize` 里加 `flowchart: {htmlLabels: false}` 规避。
+  Safari 无法把这类 SVG 装进 `Image`/canvas。导出时会自动检测：失败则用
+  `htmlLabels: false`（纯 SVG `<text>` 标签）重新渲染一份专供导出，页面显示
+  不受影响，只是导出图里的标签排版与页面略有差异。
 * 与内置渲染是"先到先得"的竞态：本脚本经 CDN ESM 加载，正常情况下先于 Gitea
   懒加载的 mermaid chunk 完成接管；极端网络条件下若内置渲染抢先，该代码块会
   退回内置的静态 iframe 显示，不会重复渲染或报错。
