@@ -12,10 +12,11 @@
 	const EXPORT_SCALE = 2;              // 导出倍率（1 = 与屏幕等大，2 = 两倍分辨率，文字更清晰）
 	const PADDING = 8;                   // 导出内容四周的留白（CSS 像素）
 	const MAX_CANVAS_SIDE = 8192;        // canvas 单边上限，超大内容会自动降低倍率
-	// 表格总是可以导出；下面这些块级元素只有在包含数学公式（KaTeX）时才给按钮，
-	// 否则每个段落上都冒出一个按钮太吵。
-	const TABLE_SELECTOR = '.markup table';
-	const BLOCK_SELECTOR = ['p', 'li', 'blockquote', 'dd', 'dt', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']
+	// 表格、列表、引用块永远整体导出（悬停在其中任何一处，导出的都是最外层那一个）；
+	// 其余块级元素只有在包含数学公式（KaTeX）时才给按钮，否则每个段落上都冒出按钮太吵。
+	const CONTAINER_SELECTOR = ['table', 'ol', 'ul', 'blockquote']
+		.map((tag) => `.markup ${tag}`).join(', ');
+	const BLOCK_SELECTOR = ['p', 'li', 'dd', 'dt', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']
 		.map((tag) => `.markup ${tag}`).join(', ');
 	const MATH_SELECTOR = '.katex';
 
@@ -53,15 +54,21 @@
 		return true;
 	}
 
+	// 一直往上找，返回最外层匹配的祖先（嵌套列表取最外面那个 ol/ul）
+	function outermost(el, selector) {
+		let found = null;
+		for (let node = el.closest(selector); node; node = node.parentElement && node.parentElement.closest(selector)) {
+			found = node;
+		}
+		return found;
+	}
+
 	function exportTarget(el) {
-		const table = el.closest(TABLE_SELECTOR);
-		if (table) return table;                       // 表格里的段落等，仍然整张表导出
-		let block = el.closest(BLOCK_SELECTOR);
-		if (!block) return null;
-		// 引用块里的段落，连同左边的竖线整块导出
-		const quote = block.closest('.markup blockquote');
-		if (quote) block = quote;
-		return hasMath(block) ? block : null;
+		// 表格 / 列表 / 引用块：悬停在单元格、列表项、引用段落上，导出的都是整体
+		const container = outermost(el, CONTAINER_SELECTOR);
+		if (container) return container.tagName === 'TABLE' || hasMath(container) ? container : null;
+		const block = el.closest(BLOCK_SELECTOR);
+		return block && hasMath(block) ? block : null;
 	}
 
 	// 只画肉眼看得到的东西。除了 display:none / visibility:hidden，还要排除"无障碍专用、
