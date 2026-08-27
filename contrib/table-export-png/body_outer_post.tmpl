@@ -1,24 +1,74 @@
-{{/* Markdown 渲染结果里的表格 —— 悬停时在右上角显示一个按钮，点击把该表格导出成 PNG 图片。
-     纯自定义模板方案：不改 Gitea 源码、不重新编译前端资源，也不引入任何外部依赖。 */}}
+{{/* Markdown 渲染结果里的表格，以及含数学公式的段落/列表项/引用块等 ——
+     悬停时在右上角显示一个按钮，点击把这一块导出成 PNG 图片。
+     纯自定义模板方案：不改 Gitea 源码、不重新编译前端资源，也不引入任何外部依赖。
+
+     页面加载时不扫描 DOM、不改 DOM、不装 MutationObserver：只建一个浮动按钮和几个
+     事件监听，开销与文档长度无关；「这一块能不能导出」推迟到鼠标悬停时才判断。 */}}
 <script>
 (() => {
 	'use strict';
 
 	// ------------------------------ 可调参数 ------------------------------
 	const EXPORT_SCALE = 2;              // 导出倍率（1 = 与屏幕等大，2 = 两倍分辨率，文字更清晰）
-	const PADDING = 8;                   // 表格四周留白（CSS 像素）
-	const MAX_CANVAS_SIDE = 8192;        // canvas 单边上限，超大表格会自动降低倍率
+	const PADDING = 8;                   // 导出内容四周的留白（CSS 像素）
+	const MAX_CANVAS_SIDE = 8192;        // canvas 单边上限，超大内容会自动降低倍率
+	// 表格总是可以导出；下面这些块级元素只有在包含数学公式（KaTeX）时才给按钮，
+	// 否则每个段落上都冒出一个按钮太吵。
 	const TABLE_SELECTOR = '.markup table';
+	const BLOCK_SELECTOR = ['p', 'li', 'blockquote', 'dd', 'dt', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']
+		.map((tag) => `.markup ${tag}`).join(', ');
+	const MATH_SELECTOR = '.katex';
 
 	// ------------------------------ 小工具 ------------------------------
 	const isTransparent = (color) => !color || color === 'transparent' ||
 		/^rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0\s*\)$/.test(color);
 
+	// getComputedStyle 返回的是活对象，缓存起来跨次导出复用也不会读到过期值
+	const styleCache = new WeakMap();
+	function styleOf(el) {
+		let style = styleCache.get(el);
+		if (!style) {
+			style = getComputedStyle(el);
+			styleCache.set(el, style);
+		}
+		return style;
+	}
+
+	function hasBorder(style) {
+		for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
+			const lineStyle = style[`border${side}Style`];
+			if (lineStyle === 'none' || lineStyle === 'hidden') continue;
+			if ((parseFloat(style[`border${side}Width`]) || 0) > 0 && !isTransparent(style[`border${side}Color`])) return true;
+		}
+		return false;
+	}
+
+	// 悬停时才判断：表格整张导出；其它块级元素含公式才导出。含公式的结果可以缓存，
+	// 不含的不缓存 —— KaTeX 是异步渲染的，晚一点公式才出现。
+	const hasMathCache = new WeakSet();
+	function hasMath(el) {
+		if (hasMathCache.has(el)) return true;
+		if (!el.querySelector(MATH_SELECTOR)) return false;
+		hasMathCache.add(el);
+		return true;
+	}
+
+	function exportTarget(el) {
+		const table = el.closest(TABLE_SELECTOR);
+		if (table) return table;                       // 表格里的段落等，仍然整张表导出
+		let block = el.closest(BLOCK_SELECTOR);
+		if (!block) return null;
+		// 引用块里的段落，连同左边的竖线整块导出
+		const quote = block.closest('.markup blockquote');
+		if (quote) block = quote;
+		return hasMath(block) ? block : null;
+	}
+
 	// 只画肉眼看得到的东西。除了 display:none / visibility:hidden，还要排除"无障碍专用、
 	// 视觉上被裁掉"的元素：KaTeX 每个公式都会同时输出一份 MathML（用 clip-path 裁成 1px
 	// 只给读屏软件）和一份可见的 HTML，不排除掉前者，导出的公式就会重影。
 	function isVisible(el) {
-		const style = getComputedStyle(el);
+		const style = styleOf(el);
 		if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
 		if (/inset\(\s*50%/.test(style.clipPath || '')) return false; // clip-path: inset(50%)
 		if (style.clip && style.clip !== 'auto') {                    // 旧写法 clip: rect(1px, 1px, 1px, 1px)
@@ -49,7 +99,7 @@
 	// 往上找第一个不透明的背景色，作为导出图的底色（深色主题下导出的图也不会是透明底）
 	function effectiveBackground(el) {
 		for (let node = el; node; node = node.parentElement) {
-			const bg = getComputedStyle(node).backgroundColor;
+			const bg = styleOf(node).backgroundColor;
 			if (!isTransparent(bg)) return bg;
 		}
 		return '#ffffff';
@@ -68,7 +118,7 @@
 	function paintBox(ctx, el) {
 		const rect = el.getBoundingClientRect();
 		if (rect.width <= 0 || rect.height <= 0) return;
-		const style = getComputedStyle(el);
+		const style = styleOf(el);
 
 		if (!isTransparent(style.backgroundColor)) {
 			ctx.fillStyle = style.backgroundColor;
@@ -94,7 +144,7 @@
 	function paintCheckbox(ctx, el) {
 		const rect = el.getBoundingClientRect();
 		if (rect.width <= 0 || rect.height <= 0) return;
-		const color = getComputedStyle(el).color;
+		const color = styleOf(el).color;
 		const size = Math.min(rect.width, rect.height);
 		ctx.save();
 		ctx.strokeStyle = isTransparent(color) ? '#6a7178' : color;
@@ -195,29 +245,101 @@
 		}
 	}
 
-	// ------------------------------ 把一个表格画到 canvas ------------------------------
-	async function tableToCanvas(table) {
-		// .markup table 是 display:block; width:100%; overflow:auto 的滚动容器：
-		// 表格盒子的宽度是容器宽度，而真正的表格内容既可能比它窄（右边一大片空白），
-		// 也可能比它宽（右侧列被滚动条藏起来）。所以取所有行/单元格的并集作为导出范围，
-		// 这样无论当前滚到哪里，导出的都是完整且不带多余留白的表格。
-		const elements = collectVisible(table);
-		const tableRect = table.getBoundingClientRect();
-		let boxes = elements
-			.filter((el) => /^(CAPTION|THEAD|TBODY|TFOOT|TR|TH|TD)$/.test(el.tagName))
-			.map((el) => el.getBoundingClientRect())
-			.filter((r) => r.width > 0 && r.height > 0);
-		if (boxes.length === 0) boxes = [tableRect];
-		const originX = Math.min(...boxes.map((r) => r.left));
-		const originY = Math.min(...boxes.map((r) => r.top));
-		const width = Math.max(...boxes.map((r) => r.right)) - originX + PADDING * 2;
-		const height = Math.max(...boxes.map((r) => r.bottom)) - originY + PADDING * 2;
+	// ------------------------------ 列表项前面的 •/1. ------------------------------
+	// ::marker 由浏览器绘制，DOM 里没有对应节点，也量不到位置，只能按首行位置自己补一个
+	function markerText(li, listStyleType) {
+		const bullets = {disc: '•', circle: '◦', square: '▪'};
+		if (bullets[listStyleType]) return bullets[listStyleType];
+		const parent = li.parentElement;
+		if (!parent) return '•';
+		let n = parseInt(parent.getAttribute('start') || '1', 10) || 1;
+		for (const sibling of parent.children) {
+			if (sibling.tagName !== 'LI') continue;
+			const value = parseInt(sibling.getAttribute('value') || '', 10);
+			if (Number.isFinite(value)) n = value;
+			if (sibling === li) break;
+			n++;
+		}
+		if (parent.tagName !== 'OL') return '•';
+		const letter = (base) => String.fromCharCode(base + (n - 1) % 26) + '.';
+		if (listStyleType === 'lower-alpha' || listStyleType === 'lower-latin') return letter(97);
+		if (listStyleType === 'upper-alpha' || listStyleType === 'upper-latin') return letter(65);
+		return `${n}.`;
+	}
+
+	function listMarkers(elements) {
+		const out = [];
+		for (const el of elements) {
+			if (el.tagName !== 'LI') continue;
+			const style = styleOf(el);
+			if (style.listStyleType === 'none' || style.listStylePosition !== 'outside') continue;
+			const text = markerText(el, style.listStyleType);
+			const rect = el.getBoundingClientRect();
+			const fontSize = parseFloat(style.fontSize) || 14;
+			// 间距按 Chromium 实测：数字/字母 marker 的右边缘距内容框约 0.43em，
+			// 圆点约 0.72em（圆点字形自带右侧留白，所以这里给 0.65em）
+			const gap = /[0-9a-zA-Z]/.test(text) ? 0.45 : 0.65;
+			out.push({
+				text,
+				style,
+				right: rect.left - fontSize * gap,           // marker 右对齐贴着内容框左边
+				top: rect.top + (parseFloat(style.paddingTop) || 0) + (parseFloat(style.borderTopWidth) || 0),
+				height: parseFloat(style.lineHeight) || fontSize * 1.5,
+				approxWidth: fontSize * 0.62 * text.length,  // 只用于估算导出范围，真正绘制时再精确测量
+			});
+		}
+		return out;
+	}
+
+	// ------------------------------ 导出范围 ------------------------------
+	// 取"真正会在画布上留下痕迹"的东西的并集：有背景/边框的盒子、图片、复选框、文字行盒。
+	// 这样表格不会带上 width:100% 造成的右侧空白（滚动出去的列也不会丢），
+	// 段落/列表项也会紧贴文字裁剪，而不是按容器宽度导出一大片空白。
+	function contentBounds(elements, markers) {
+		let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+		const add = (rect) => {
+			if (!rect || (rect.width <= 0 && rect.height <= 0)) return;
+			left = Math.min(left, rect.left);
+			top = Math.min(top, rect.top);
+			right = Math.max(right, rect.right);
+			bottom = Math.max(bottom, rect.bottom);
+		};
+		const range = document.createRange();
+		for (const el of elements) {
+			const style = styleOf(el);
+			const tag = el.tagName.toLowerCase();
+			if (!isTransparent(style.backgroundColor) || hasBorder(style) ||
+				tag === 'img' || tag === 'svg' || (tag === 'input' && el.type === 'checkbox')) {
+				add(el.getBoundingClientRect());
+			}
+			for (const node of el.childNodes) {
+				if (node.nodeType !== Node.TEXT_NODE || !node.nodeValue || !node.nodeValue.trim()) continue;
+				range.selectNodeContents(node);
+				for (const rect of range.getClientRects()) add(rect);
+			}
+		}
+		for (const m of markers) {
+			add(new DOMRect(m.right - m.approxWidth, m.top, m.approxWidth, m.height));
+		}
+		return {left, top, right, bottom};
+	}
+
+	// ------------------------------ 把一块内容画到 canvas ------------------------------
+	async function blockToCanvas(root) {
+		const elements = collectVisible(root);
+		const markers = listMarkers(elements);
+		let bounds = contentBounds(elements, markers);
+		if (!Number.isFinite(bounds.left) || bounds.right <= bounds.left) bounds = root.getBoundingClientRect();
+		const originX = bounds.left;
+		const originY = bounds.top;
+		const width = bounds.right - originX + PADDING * 2;
+		const height = bounds.bottom - originY + PADDING * 2;
 
 		let scale = EXPORT_SCALE;
 		const limit = Math.min(MAX_CANVAS_SIDE / width, MAX_CANVAS_SIDE / height);
 		if (limit < scale) {
 			scale = Math.max(limit, 0.25);
-			console.warn('[table-export-png] 表格过大，导出倍率降到', scale.toFixed(2));
+			console.warn('[table-export-png] 内容过大，导出倍率降到', scale.toFixed(2));
 		}
 
 		const canvas = document.createElement('canvas');
@@ -225,7 +347,7 @@
 		canvas.height = Math.ceil(height * scale);
 		const ctx = canvas.getContext('2d');
 		ctx.scale(scale, scale);
-		ctx.fillStyle = effectiveBackground(table);
+		ctx.fillStyle = effectiveBackground(root);
 		ctx.fillRect(0, 0, width, height);
 		// 之后所有绘制都可以直接使用 getBoundingClientRect() 的视口坐标
 		ctx.translate(PADDING - originX, PADDING - originY);
@@ -260,7 +382,7 @@
 			for (const node of el.childNodes) {
 				if (node.nodeType !== Node.TEXT_NODE || !node.nodeValue || !node.nodeValue.trim()) continue;
 				if (!style) {
-					style = getComputedStyle(el);
+					style = styleOf(el);
 					ctx.fillStyle = style.color;
 					ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
 					if ('letterSpacing' in ctx) {
@@ -269,6 +391,14 @@
 				}
 				for (const line of textLines(node)) paintTextLine(ctx, line.text, line.rect, style);
 			}
+		}
+
+		// 4) 列表项的 •/1.
+		for (const m of markers) {
+			ctx.fillStyle = m.style.color;
+			ctx.font = `${m.style.fontStyle} ${m.style.fontWeight} ${m.style.fontSize} ${m.style.fontFamily}`;
+			const w = ctx.measureText(m.text).width;
+			paintTextLine(ctx, m.text, {left: m.right - w, top: m.top, width: w, height: m.height}, m.style);
 		}
 
 		return canvas;
@@ -307,7 +437,7 @@
 			clone.setAttribute('width', String(rect.width));
 			clone.setAttribute('height', String(rect.height));
 			// SVG 图像里读不到页面的 CSS，把当前颜色内联进去（图标常用 fill: currentColor）
-			const style = getComputedStyle(svg);
+			const style = styleOf(svg);
 			clone.style.color = style.color;
 			if (style.fill && style.fill !== 'none') clone.style.fill = style.fill;
 			const text = new XMLSerializer().serializeToString(clone);
@@ -319,28 +449,40 @@
 	}
 
 	// ------------------------------ 文件名 ------------------------------
-	function fileNameFor(table) {
+	// 标题里如果有公式，textContent 会把 KaTeX 那份只给读屏软件的 MathML 也读进来，去掉它
+	function visibleText(el) {
+		const clone = el.cloneNode(true);
+		for (const hidden of clone.querySelectorAll('.katex-mathml')) hidden.remove();
+		return clone.textContent.trim().replace(/\s+/g, ' ');
+	}
+
+	function fileNameFor(el) {
 		let title = '';
-		for (let node = table; node && !title; node = node.parentElement) {
+		let root = null;
+		for (let node = el; node && !title; node = node.parentElement) {
 			for (let prev = node.previousElementSibling; prev; prev = prev.previousElementSibling) {
 				if (/^H[1-6]$/.test(prev.tagName)) {
-					title = prev.textContent.trim();
+					title = visibleText(prev);
 					break;
 				}
 			}
-			if (node.classList && node.classList.contains('markup')) break;
+			if (node.classList && node.classList.contains('markup')) {
+				root = node;
+				break;
+			}
 		}
-		if (!title) title = (document.title || 'table').split(/[·|]/)[0].trim();
-		const index = [...document.querySelectorAll(TABLE_SELECTOR)].indexOf(table) + 1;
-		const safe = title.replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'table';
-		return `${safe}-table${index}.png`;
+		if (!title) title = (document.title || 'export').split(/[·|]/)[0].trim();
+		const tag = el.tagName.toLowerCase();
+		const index = [...(root || document).querySelectorAll(tag)].indexOf(el) + 1;
+		const safe = title.replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'export';
+		return `${safe}-${tag}-${index}.png`;
 	}
 
 	// ------------------------------ 导出按钮 ------------------------------
 	const button = document.createElement('button');
 	button.type = 'button';
 	button.className = 'ui mini button';
-	button.title = '把这个表格导出为 PNG 图片';
+	button.title = '把这一块内容导出为 PNG 图片';
 	button.textContent = '⤓ PNG';
 	button.style.cssText = [
 		'position:fixed', 'z-index:200', 'display:none', 'padding:4px 8px',
@@ -374,9 +516,9 @@
 	document.addEventListener('pointerover', (e) => {
 		const el = e.target instanceof Element ? e.target : null;
 		if (!el || button.contains(el)) return;
-		const table = el.closest(TABLE_SELECTOR);
-		if (table) {
-			target = table;
+		const block = exportTarget(el);
+		if (block) {
+			target = block;
 			place();
 		} else {
 			hide();
@@ -386,18 +528,18 @@
 	addEventListener('resize', place);
 
 	button.addEventListener('click', async () => {
-		const table = target;
-		if (!table || button.disabled) return;
+		const block = target;
+		if (!block || button.disabled) return;
 		const label = button.textContent;
 		button.disabled = true;
 		button.textContent = '⏳ …';
 		try {
-			const canvas = await tableToCanvas(table);
+			const canvas = await blockToCanvas(block);
 			const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
 			if (!blob) throw new Error('PNG 编码失败');
 			const a = document.createElement('a');
 			a.href = URL.createObjectURL(blob);
-			a.download = fileNameFor(table);
+			a.download = fileNameFor(block);
 			a.click();
 			setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 			button.textContent = '✓ PNG';
