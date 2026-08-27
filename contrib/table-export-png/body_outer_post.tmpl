@@ -14,10 +14,36 @@
 	const isTransparent = (color) => !color || color === 'transparent' ||
 		/^rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*,\s*0\s*\)$/.test(color);
 
+	// 只画肉眼看得到的东西。除了 display:none / visibility:hidden，还要排除"无障碍专用、
+	// 视觉上被裁掉"的元素：KaTeX 每个公式都会同时输出一份 MathML（用 clip-path 裁成 1px
+	// 只给读屏软件）和一份可见的 HTML，不排除掉前者，导出的公式就会重影。
 	function isVisible(el) {
-		if (el.checkVisibility) return el.checkVisibility({visibilityProperty: true});
 		const style = getComputedStyle(el);
-		return style.display !== 'none' && style.visibility !== 'hidden';
+		if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+		if (/inset\(\s*50%/.test(style.clipPath || '')) return false; // clip-path: inset(50%)
+		if (style.clip && style.clip !== 'auto') {                    // 旧写法 clip: rect(1px, 1px, 1px, 1px)
+			const n = (style.clip.match(/-?[\d.]+/g) || []).map(Number);
+			if (n.length === 4 && (n[1] - n[3] <= 1 || n[2] - n[0] <= 1)) return false;
+		}
+		if (style.overflow === 'hidden') {
+			const rect = el.getBoundingClientRect();
+			if (rect.width <= 1 || rect.height <= 1) return false;
+		}
+		return true;
+	}
+
+	// 深度优先收集可见元素，整棵子树被隐藏时直接剪枝：clip-path 这类隐藏方式不会体现在
+	// 子元素的 computed style 上，所以必须按树剪，不能逐个元素单独判断。
+	function collectVisible(root) {
+		const out = [];
+		const visit = (el) => {
+			if (!isVisible(el)) return;
+			out.push(el);
+			if (el.tagName.toLowerCase() === 'svg') return; // <svg> 整体当成一张图片来画
+			for (const child of el.children) visit(child);
+		};
+		visit(root);
+		return out;
 	}
 
 	// 往上找第一个不透明的背景色，作为导出图的底色（深色主题下导出的图也不会是透明底）
@@ -175,9 +201,10 @@
 		// 表格盒子的宽度是容器宽度，而真正的表格内容既可能比它窄（右边一大片空白），
 		// 也可能比它宽（右侧列被滚动条藏起来）。所以取所有行/单元格的并集作为导出范围，
 		// 这样无论当前滚到哪里，导出的都是完整且不带多余留白的表格。
+		const elements = collectVisible(table);
 		const tableRect = table.getBoundingClientRect();
-		let boxes = [...table.querySelectorAll('caption, thead, tbody, tfoot, tr, th, td')]
-			.filter(isVisible)
+		let boxes = elements
+			.filter((el) => /^(CAPTION|THEAD|TBODY|TFOOT|TR|TH|TD)$/.test(el.tagName))
 			.map((el) => el.getBoundingClientRect())
 			.filter((r) => r.width > 0 && r.height > 0);
 		if (boxes.length === 0) boxes = [tableRect];
@@ -203,9 +230,6 @@
 		// 之后所有绘制都可以直接使用 getBoundingClientRect() 的视口坐标
 		ctx.translate(PADDING - originX, PADDING - originY);
 
-		const elements = [table, ...table.querySelectorAll('*')]
-			.filter((el) => !el.ownerSVGElement && isVisible(el)); // <svg> 内部整体当图片画，不逐个元素画
-
 		// 1) 背景与边框
 		for (const el of elements) paintBox(ctx, el);
 
@@ -230,19 +254,21 @@
 			}
 		}
 
-		// 3) 文本
-		const walker = document.createTreeWalker(table, NodeFilter.SHOW_TEXT);
-		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-			if (!node.nodeValue || !node.nodeValue.trim()) continue;
-			const parent = node.parentElement;
-			if (!parent || parent.ownerSVGElement || !isVisible(parent)) continue;
-			const style = getComputedStyle(parent);
-			ctx.fillStyle = style.color;
-			ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
-			if ('letterSpacing' in ctx) {
-				ctx.letterSpacing = style.letterSpacing === 'normal' ? '0px' : style.letterSpacing;
+		// 3) 文本（只遍历可见元素的直接子文本节点，被剪掉的子树自然不会被画）
+		for (const el of elements) {
+			let style = null;
+			for (const node of el.childNodes) {
+				if (node.nodeType !== Node.TEXT_NODE || !node.nodeValue || !node.nodeValue.trim()) continue;
+				if (!style) {
+					style = getComputedStyle(el);
+					ctx.fillStyle = style.color;
+					ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+					if ('letterSpacing' in ctx) {
+						ctx.letterSpacing = style.letterSpacing === 'normal' ? '0px' : style.letterSpacing;
+					}
+				}
+				for (const line of textLines(node)) paintTextLine(ctx, line.text, line.rect, style);
 			}
-			for (const line of textLines(node)) paintTextLine(ctx, line.text, line.rect, style);
 		}
 
 		return canvas;
