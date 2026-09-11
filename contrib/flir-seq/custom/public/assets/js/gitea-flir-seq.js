@@ -76,6 +76,9 @@
       scaleMin: 'Min',
       scaleMax: 'Max',
       extremes: 'Hot/cold spot',
+      filterHigh: 'Upper limit of the displayed temperature window',
+      filterLow: 'Lower limit of the displayed temperature window',
+      filterReset: 'Show all',
       zoomIn: 'Zoom in',
       zoomOut: 'Zoom out',
       zoomFit: 'Fit to window',
@@ -166,6 +169,9 @@
       scaleMin: '下限',
       scaleMax: '上限',
       extremes: '最高/最低点',
+      filterHigh: '显示温区上限',
+      filterLow: '显示温区下限',
+      filterReset: '显示全部',
       zoomIn: '放大',
       zoomOut: '缩小',
       zoomFit: '适应窗口',
@@ -256,6 +262,9 @@
       scaleMin: 'Alaraja',
       scaleMax: 'Yläraja',
       extremes: 'Kuumin/kylmin piste',
+      filterHigh: 'Näytettävän lämpötila-alueen yläraja',
+      filterLow: 'Näytettävän lämpötila-alueen alaraja',
+      filterReset: 'Näytä kaikki',
       zoomIn: 'Lähennä',
       zoomOut: 'Loitonna',
       zoomFit: 'Sovita ikkunaan',
@@ -894,6 +903,10 @@
     this.playing = false;
     this.sequenceRawRange = null;
     this.showExtremes = true;
+    // {lo, hi} in whatever unit value() returns, or null for "show everything".
+    // Kept in absolute terms, not as a fraction of the colour bar, so that a
+    // window stays put while stepping through a sequence that rescales.
+    this.filter = null;
     this.pixelCache = {index: -1, pixels: null, stats: null};
   }
 
@@ -1051,11 +1064,19 @@
       self.paintView();
     });
 
+    this.filterReset = el('button',
+      {class: 'flir-seq-btn flir-seq-filter-reset', type: 'button', text: t('filterReset'), disabled: true});
+    this.filterReset.addEventListener('click', () => {
+      self.filter = null;
+      self.paint();
+    });
+
     this.toolbar = el('div', {class: 'flir-seq-toolbar'}, [
       labelled(t('palette'), this.paletteSelect),
       labelled(t('scale'), this.rangeSelect),
       this.manualFields,
       labelled(t('extremes'), this.extremesToggle),
+      this.filterReset,
       el('span', {class: 'flir-seq-spacer'}),
       el('span', {class: 'flir-seq-zoom'}, [zoomOut, zoomIn, zoomReset]),
     ]);
@@ -1064,7 +1085,13 @@
     this.canvasWrap = el('div', {class: 'flir-seq-canvas-wrap'}, [this.viewCanvas]);
     this.barHi = el('span', {class: 'flir-seq-colorbar-label'});
     this.barLo = el('span', {class: 'flir-seq-colorbar-label'});
-    this.colorbar = el('div', {class: 'flir-seq-colorbar'}, [this.barHi, this.barCanvas, this.barLo]);
+    this.barMaskHi = el('div', {class: 'flir-seq-colorbar-mask'});
+    this.barMaskLo = el('div', {class: 'flir-seq-colorbar-mask'});
+    this.handleHi = this.buildHandle('hi');
+    this.handleLo = this.buildHandle('lo');
+    this.barTrack = el('div', {class: 'flir-seq-colorbar-track'},
+      [this.barCanvas, this.barMaskHi, this.barMaskLo, this.handleHi.root, this.handleLo.root]);
+    this.colorbar = el('div', {class: 'flir-seq-colorbar'}, [this.barHi, this.barTrack, this.barLo]);
     this.stage = el('div', {class: 'flir-seq-stage'}, [this.canvasWrap, this.colorbar]);
 
     // --- readout -------------------------------------------------
@@ -1223,6 +1250,129 @@
       : this.t(this.converter.reason);
   };
 
+  /**
+   * One draggable limit on the colour bar. It is a real slider as far as the
+   * browser is concerned -- focusable, arrow-key operable and announced with
+   * its temperature -- because the pointer alone makes it unusable without a
+   * mouse and impossible to set precisely.
+   */
+  Viewer.prototype.buildHandle = function (edge) {
+    const self = this;
+    const label = el('span', {class: 'flir-seq-colorbar-handle-label'});
+    const root = el('div', {
+      class: 'flir-seq-colorbar-handle flir-seq-colorbar-handle-' + edge,
+      role: 'slider', tabindex: 0,
+      'aria-label': this.t(edge === 'hi' ? 'filterHigh' : 'filterLow'),
+    }, [label]);
+    const handle = {root, label, edge};
+
+    const valueAt = (clientY) => {
+      const rect = self.barTrack.getBoundingClientRect();
+      if (!rect.height) return null;
+      const t = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
+      return self.rangeHi - t * (self.rangeHi - self.rangeLo); // the bar runs hot to cold
+    };
+
+    let dragging = false;
+    root.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault();
+      dragging = true;
+      root.setPointerCapture(ev.pointerId);
+      root.focus();
+    });
+    root.addEventListener('pointermove', (ev) => {
+      if (!dragging) return;
+      const v = valueAt(ev.clientY);
+      if (v !== null) self.moveFilterEdge(edge, v);
+    });
+    const stop = (ev) => {
+      dragging = false;
+      try {
+        root.releasePointerCapture(ev.pointerId);
+      } catch (e) {
+        // already released
+      }
+    };
+    root.addEventListener('pointerup', stop);
+    root.addEventListener('pointercancel', stop);
+
+    root.addEventListener('keydown', (ev) => {
+      const span = self.rangeHi - self.rangeLo;
+      const step = (ev.shiftKey ? 0.1 : 0.01) * span;
+      const filter = self.filterBounds();
+      let next = null;
+      if (ev.key === 'ArrowUp' || ev.key === 'ArrowRight') next = filter[edge] + step;
+      else if (ev.key === 'ArrowDown' || ev.key === 'ArrowLeft') next = filter[edge] - step;
+      else if (ev.key === 'Home') next = self.rangeHi;
+      else if (ev.key === 'End') next = self.rangeLo;
+      else if (ev.key === 'Escape') {
+        self.filter = null;
+        self.paint();
+        ev.preventDefault();
+        return;
+      }
+      if (next === null) return;
+      ev.preventDefault();
+      self.moveFilterEdge(edge, next);
+    });
+
+    return handle;
+  };
+
+  /** The window in effect, falling back to the whole colour bar. */
+  Viewer.prototype.filterBounds = function () {
+    return this.filter || {lo: this.rangeLo, hi: this.rangeHi};
+  };
+
+  Viewer.prototype.moveFilterEdge = function (edge, value) {
+    const bounds = this.filterBounds();
+    const lo = Math.min(this.rangeLo, bounds.lo);
+    const hi = Math.max(this.rangeHi, bounds.hi);
+    const clamped = Math.min(hi, Math.max(lo, value));
+    const next = edge === 'hi'
+      ? {lo: Math.min(bounds.lo, clamped), hi: clamped}
+      : {lo: clamped, hi: Math.max(bounds.hi, clamped)};
+    // dragged back out to both ends: that is how the filter is switched off
+    this.filter = next.lo <= this.rangeLo && next.hi >= this.rangeHi ? null : next;
+    this.scheduleRepaint();
+  };
+
+  /** Coalesce repaints so a drag does not queue one per pointer event. */
+  Viewer.prototype.scheduleRepaint = function () {
+    if (this.repaintPending) return;
+    this.repaintPending = true;
+    const run = () => {
+      this.repaintPending = false;
+      this.paint();
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+    else run();
+  };
+
+  Viewer.prototype.updateFilterUI = function () {
+    const span = this.rangeHi - this.rangeLo;
+    const bounds = this.filterBounds();
+    const position = (v) => Math.min(100, Math.max(0, (1 - (v - this.rangeLo) / span) * 100));
+    const topHi = position(bounds.hi);
+    const topLo = position(bounds.lo);
+
+    this.handleHi.root.style.top = topHi + '%';
+    this.handleLo.root.style.top = topLo + '%';
+    this.handleHi.label.textContent = this.formatScale(bounds.hi);
+    this.handleLo.label.textContent = this.formatScale(bounds.lo);
+    this.barMaskHi.style.height = topHi + '%';
+    this.barMaskLo.style.height = (100 - topLo) + '%';
+
+    for (const handle of [this.handleHi, this.handleLo]) {
+      handle.root.setAttribute('aria-valuemin', this.rangeLo.toFixed(this.cfg.decimals));
+      handle.root.setAttribute('aria-valuemax', this.rangeHi.toFixed(this.cfg.decimals));
+      handle.root.setAttribute('aria-valuenow', bounds[handle.edge].toFixed(this.cfg.decimals));
+      handle.root.setAttribute('aria-valuetext', this.formatScale(bounds[handle.edge]));
+    }
+    this.colorbar.classList.toggle('flir-seq-colorbar-filtered', Boolean(this.filter));
+    this.filterReset.disabled = !this.filter;
+  };
+
   Viewer.prototype.syncRangeInputs = function () {
     this.manualFields.hidden = this.rangeMode !== 'manual';
   };
@@ -1356,17 +1506,23 @@
     this.rangeLo = range.lo;
     this.rangeHi = range.hi;
 
-    // raw count -> palette index, rebuilt whenever the range or parameters change
+    // raw count -> palette index and opacity, rebuilt whenever the range, the
+    // parameters or the limit handles change. Temperature is monotonic in the
+    // raw count, so a window on temperature is exact as a window on raw here.
     const idx = new Uint8Array(65536);
+    const alpha = new Uint8Array(65536);
     const span = range.hi - range.lo;
+    const filter = this.filter;
     for (let raw = 0; raw < 65536; raw++) {
       const v = this.value(raw);
       if (!isFinite(v)) {
         idx[raw] = 0;
+        alpha[raw] = 0;
         continue;
       }
       const k = Math.round((v - range.lo) / span * 255);
       idx[raw] = k < 0 ? 0 : (k > 255 ? 255 : k);
+      alpha[raw] = !filter || (v >= filter.lo && v <= filter.hi) ? 255 : 0;
     }
 
     const {width, height} = frame.raw;
@@ -1377,17 +1533,34 @@
     const data = image.data;
     const pal = this.palette;
     const pixels = cache.pixels;
+    // the extremes markers must point at pixels that are actually drawn, so
+    // they are tracked over what survives the filter rather than the frame
+    let visMin = 0xffff, visMax = -1, visMinAt = 0, visMaxAt = 0;
     for (let i = 0, o = 0; i < pixels.length; i++, o += 4) {
-      const c = idx[pixels[i]] * 3;
+      const raw = pixels[i];
+      const a = alpha[raw];
+      data[o + 3] = a;
+      if (!a) continue; // left fully transparent: the background shows through
+      const c = idx[raw] * 3;
       data[o] = pal[c];
       data[o + 1] = pal[c + 1];
       data[o + 2] = pal[c + 2];
-      data[o + 3] = 255;
+      if (raw < visMin) {
+        visMin = raw;
+        visMinAt = i;
+      }
+      if (raw > visMax) {
+        visMax = raw;
+        visMaxAt = i;
+      }
     }
     ctx.putImageData(image, 0, 0);
+    this.visibleStats = visMax < 0 ? null
+      : {min: visMin, max: visMax, minAt: visMinAt, maxAt: visMaxAt};
 
     this.layout();
     this.paintColorbar();
+    this.updateFilterUI();
     this.paintView();
     this.refreshSpots();
   };
@@ -1416,9 +1589,12 @@
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, 16, 256);
     ctx.drawImage(tmp, 0, 0, 16, 256);
-    const fmt = (v) => (this.converter.ok ? v.toFixed(this.cfg.decimals) + '°C' : String(Math.round(v)));
-    this.barHi.textContent = fmt(this.rangeHi);
-    this.barLo.textContent = fmt(this.rangeLo);
+    this.barHi.textContent = this.formatScale(this.rangeHi);
+    this.barLo.textContent = this.formatScale(this.rangeLo);
+  };
+
+  Viewer.prototype.formatScale = function (v) {
+    return this.converter.ok ? v.toFixed(this.cfg.decimals) + '°C' : String(Math.round(v));
   };
 
   Viewer.prototype.layout = function () {
@@ -1509,20 +1685,7 @@
     ctx.drawImage(this.imgCanvas, this.view.tx, this.view.ty,
       frame.raw.width * this.view.scale, frame.raw.height * this.view.scale);
 
-    if (this.showExtremes && this.pixelCache.stats) {
-      const {min, max, minAt, maxAt} = this.pixelCache.stats;
-      const w = frame.raw.width;
-      this.drawMarker(ctx, (maxAt % w) + 0.5, Math.floor(maxAt / w) + 0.5, '#ff2d2d',
-        this.t('hottest', [this.formatValue(max)]));
-      this.drawMarker(ctx, (minAt % w) + 0.5, Math.floor(minAt / w) + 0.5, '#3da5ff',
-        this.t('coldest', [this.formatValue(min)]));
-    }
-
-    this.spots.forEach((spot, i) => {
-      const raw = this.rawAt(spot.x, spot.y);
-      this.drawMarker(ctx, spot.x + 0.5, spot.y + 0.5, '#ffffff',
-        '#' + (i + 1) + ' ' + (raw === null ? '—' : this.formatValue(raw)));
-    });
+    this.drawMarkers(ctx, frame);
 
     if (this.hover) {
       const p = this.toView(this.hover.x + 0.5, this.hover.y + 0.5);
@@ -1537,6 +1700,23 @@
       ctx.stroke();
       ctx.restore();
     }
+  };
+
+  /** The extremes and the spot meters, in image coordinates. */
+  Viewer.prototype.drawMarkers = function (ctx, frame) {
+    const stats = this.visibleStats;
+    if (this.showExtremes && stats) {
+      const w = frame.raw.width;
+      this.drawMarker(ctx, (stats.maxAt % w) + 0.5, Math.floor(stats.maxAt / w) + 0.5, '#ff2d2d',
+        this.t('hottest', [this.formatValue(stats.max)]));
+      this.drawMarker(ctx, (stats.minAt % w) + 0.5, Math.floor(stats.minAt / w) + 0.5, '#3da5ff',
+        this.t('coldest', [this.formatValue(stats.min)]));
+    }
+    this.spots.forEach((spot, i) => {
+      const raw = this.rawAt(spot.x, spot.y);
+      this.drawMarker(ctx, spot.x + 0.5, spot.y + 0.5, '#ffffff',
+        '#' + (i + 1) + ' ' + (raw === null ? '—' : this.formatValue(raw)));
+    });
   };
 
   Viewer.prototype.drawMarker = function (ctx, ix, iy, colour, label) {
@@ -1761,25 +1941,14 @@
     const ctx = out.getContext('2d');
     ctx.drawImage(this.imgCanvas, 0, 0);
 
-    // markers are drawn through the same helper, at scale 1 and no pan
+    // markers go through the same helper, at scale 1 and no pan, so the export
+    // and the screen cannot drift apart
     const saved = this.view;
     const savedW = this.viewW, savedH = this.viewH;
     this.view = {scale: 1, tx: 0, ty: 0, fit: 1};
     this.viewW = out.width;
     this.viewH = out.height;
-    if (this.showExtremes && this.pixelCache.stats) {
-      const {min, max, minAt, maxAt} = this.pixelCache.stats;
-      const w = frame.raw.width;
-      this.drawMarker(ctx, (maxAt % w) + 0.5, Math.floor(maxAt / w) + 0.5, '#ff2d2d',
-        this.t('hottest', [this.formatValue(max)]));
-      this.drawMarker(ctx, (minAt % w) + 0.5, Math.floor(minAt / w) + 0.5, '#3da5ff',
-        this.t('coldest', [this.formatValue(min)]));
-    }
-    this.spots.forEach((spot, i) => {
-      const raw = this.rawAt(spot.x, spot.y);
-      this.drawMarker(ctx, spot.x + 0.5, spot.y + 0.5, '#ffffff',
-        '#' + (i + 1) + ' ' + (raw === null ? '—' : this.formatValue(raw)));
-    });
+    this.drawMarkers(ctx, frame);
     this.view = saved;
     this.viewW = savedW;
     this.viewH = savedH;
