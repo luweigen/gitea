@@ -151,6 +151,16 @@
   color: var(--color-text-light-2);
 }
 
+/* "show all" caps the column's width, so a long translation cannot squeeze
+   the image; the labels below it are narrower than this anyway. */
+.flir-seq-colorbar .flir-seq-filter-reset {
+  flex: 0 0 auto;
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* The bar is a slider track: the canvas fills it and the two limit handles are
    positioned on top by percentage, so the gradient and the handles cannot get
    out of step whatever the height works out to be. */

@@ -1110,8 +1110,12 @@
       self.paintView();
     });
 
-    this.filterReset = el('button',
-      {class: 'flir-seq-btn flir-seq-filter-reset', type: 'button', text: t('filterReset'), disabled: true});
+    // sits above the colour bar, with the limit handles it clears -- next to the
+    // extremes checkbox it read as if it controlled that instead
+    this.filterReset = el('button', {
+      class: 'flir-seq-btn flir-seq-btn-mini flir-seq-filter-reset',
+      type: 'button', text: t('filterReset'), disabled: true,
+    });
     this.filterReset.addEventListener('click', () => {
       self.filter = null;
       self.paint();
@@ -1122,7 +1126,6 @@
       labelled(t('scale'), this.rangeSelect),
       this.manualFields,
       labelled(t('extremes'), this.extremesToggle),
-      this.filterReset,
       el('span', {class: 'flir-seq-spacer'}),
       el('span', {class: 'flir-seq-zoom'}, [zoomOut, zoomIn, zoomReset]),
     ]);
@@ -1137,7 +1140,8 @@
     this.handleLo = this.buildHandle('lo');
     this.barTrack = el('div', {class: 'flir-seq-colorbar-track'},
       [this.barCanvas, this.barMaskHi, this.barMaskLo, this.handleHi.root, this.handleLo.root]);
-    this.colorbar = el('div', {class: 'flir-seq-colorbar'}, [this.barHi, this.barTrack, this.barLo]);
+    this.colorbar = el('div', {class: 'flir-seq-colorbar'},
+      [this.filterReset, this.barHi, this.barTrack, this.barLo]);
     this.stage = el('div', {class: 'flir-seq-stage'}, [this.canvasWrap, this.colorbar]);
 
     // --- readout -------------------------------------------------
@@ -1203,7 +1207,9 @@
     exportCsv.addEventListener('click', () => self.exportCsv());
     this.actions = el('div', {class: 'flir-seq-actions'}, [exportPng, exportCsv]);
 
-    this.root.append(this.toolbar, this.stage, this.readout, this.frameBar,
+    // The readout sits after the frame controls, next to the spot meter panel it
+    // belongs to. Directly under the image it read as a caption for the picture.
+    this.root.append(this.toolbar, this.stage, this.frameBar, this.readout,
       el('div', {class: 'flir-seq-panels'}, [this.spotPanel, this.paramPanel, this.metaPanel]), this.actions);
 
     this.bindCanvas();

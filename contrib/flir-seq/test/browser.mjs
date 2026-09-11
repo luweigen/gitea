@@ -278,6 +278,26 @@ try {
     }
     return {opaque, transparent, violations, filter: bounds};
   });
+  // where these two sit is a deliberate choice, so it is asserted rather than
+  // left to drift back: the reset belongs with the handles it clears, and the
+  // hover hint with the spot meters it explains
+  check('"show all" sits on the colour bar, not in the toolbar',
+    (await page.locator('.flir-seq-colorbar > .flir-seq-filter-reset').count()) === 1 &&
+    (await page.locator('.flir-seq-toolbar .flir-seq-filter-reset').count()) === 0);
+  check('"show all" is above the scale',
+    await page.evaluate(() => {
+      const bar = document.querySelector('.flir-seq-colorbar');
+      return bar.firstElementChild.classList.contains('flir-seq-filter-reset');
+    }));
+  check('the hover hint follows the frame controls',
+    await page.evaluate(() => {
+      const kids = Array.from(document.querySelector('.flir-seq').children);
+      return kids.indexOf(document.querySelector('.flir-seq-readout')) >
+        kids.indexOf(document.querySelector('.flir-seq-frames')) &&
+        kids.indexOf(document.querySelector('.flir-seq-readout')) <
+        kids.indexOf(document.querySelector('.flir-seq-panels'));
+    }));
+
   check('nothing is hidden before a handle is moved',
     audit.filter === null && audit.transparent === 0 && audit.violations === 0,
     JSON.stringify(audit));
@@ -402,6 +422,13 @@ try {
       const missing = expected.filter((key) => !text.includes(tl(key)));
       check(lang + ': every panel is translated', missing.length === 0,
         missing.map((key) => key + '=' + tl(key)).join(' | '));
+      // the colour bar column is narrow, so a long translation must still fit
+      const resetFits = await localised.evaluate(() => {
+        const b = document.querySelector('.flir-seq-filter-reset');
+        return {clipped: b.scrollWidth > b.clientWidth + 1, width: Math.round(b.getBoundingClientRect().width)};
+      });
+      check(lang + ': "show all" is not truncated', !resetFits.clipped,
+        tl('filterReset') + ' at ' + resetFits.width + 'px');
       const frameLabel = (await localised.locator('.flir-seq-frame-label').textContent()).trim();
       check(lang + ': the frame label is formatted',
         frameLabel.startsWith(tl('frameLabel', [1, geometry.frames])), frameLabel);
