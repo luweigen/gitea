@@ -49,6 +49,22 @@ Chrome/Chromium。
 `run.mjs` 里另有一组翻译完整性检查：每种语言的键集合必须与英语完全一致、`{0}` 这类
 占位符不能丢、不能有空串，解析器与测温代码抛出的每个翻译键都必须存在。
 
+## 与 flirpy 交叉验证
+
+```sh
+pip install flirpy
+node compare-flirpy.mjs                 # 参数网格
+node compare-flirpy.mjs /path/real.seq  # 再逐像素比真实文件
+FLIRPY_PYTHON=/path/to/venv/bin/python node compare-flirpy.mjs
+```
+
+flirpy 是一份独立的 Python 实现，`compare-flirpy.mjs` 把同一组参数同时喂给两边并比较，
+真实文件模式下还会让 flirpy 自己的 FFF 解析器解出整幅温度图逐像素对比——因此连记录偏移
+一起验了，不只是算式。容差 1e-9 K，不达标时退出码非 0。
+
+比对结果与 flirpy 那处 `273.14` 的说明记在 [`../doc/format.md`](../doc/format.md)。
+这个脚本需要 Python 与 flirpy，属于可选，不在 `run.sh` 里。
+
 想留一张截图：
 
 ```sh

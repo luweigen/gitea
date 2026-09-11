@@ -180,6 +180,67 @@ T = B / ln(R1 / (R2 · (raw_obj + O)) + F) − 273.15
 改动发射率时的方向性可以拿来自检：目标比环境**热**时，调低 ε 会把读数**抬高**；
 目标比环境**冷**时则相反。`test/run.mjs` 里就有这两条断言。
 
+## 公式出处
+
+这套换算不是本项目推导的，FLIR 也没有公开规范。实现时直接对照的是 **Thermimage 的
+`R/raw2temp.R`**（Glenn J. Tattersall，<https://github.com/gtatters/Thermimage>），本文
+上面写的每一行都与它逐字核对过：水汽多项式 `(RH/100)*exp(1.5587+0.06939·T−0.00027816·T²+0.00000068455·T³)`、
+`tau1 = ATX·exp(−√(OD/2)·(ATA1+ATB1·√h2o)) + (1−ATX)·exp(…)`，以及五个衰减项的写法完全一致。
+
+Thermimage 与 flirpy 的注释都把公式来源指向两处：
+
+* **Minkina, W. & Dudzik, S., *Infrared Thermography: Errors and Uncertainties*, Wiley, 2009**
+  ——大气与窗口透过率方程的出处。
+* **ExifTool 论坛 “FLIR file format” 讨论串（topic 4898）**——逆普朗克式
+  `T = B/ln(R1/(R2·(raw+O))+F) − 273.15` 与各衰减项的具体形式在此被逆向并公开。
+
+需要说明的是：**我手头没有 Minkina & Dudzik 原书**，也没能从本机访问 ExifTool 论坛
+（出口代理拒绝了 exiftool.org）。所以准确的说法是——本实现与 Thermimage、flirpy 两份
+公开实现在数值上完全一致，而这两份都标注源自上述文献；文献本身没有逐条核对。
+
+大气透过率的**取值优先级**（文件里有值就直接用）另有出处：FLIR SDK 的
+`ObjectParametersReduceObject.h`，见上一节。
+
+## 与 flirpy 的交叉验证
+
+[flirpy](https://github.com/LJMUAstroecology/flirpy)（`flirpy/util/raw.py`，注释写明
+“Roughly ported from ThermImage”）是一份独立的 Python 实现，`contrib/flir-seq/test/compare-flirpy.mjs`
+拿它做对照：
+
+```sh
+pip install flirpy
+node contrib/flir-seq/test/compare-flirpy.mjs                  # 参数网格
+node contrib/flir-seq/test/compare-flirpy.mjs your.seq         # 再逐像素比真实文件
+```
+
+**flirpy 0.6.2 下的结果：**
+
+| 对照内容 | 规模 | 最大偏差 |
+| --- | --- | --- |
+| 参数网格（发射率、反射温度、距离、湿度、气温、红外窗口、另一套标定常数各取极端值） | 14 组参数 × 9 个原始值 | **1.14e-13 K** |
+| 真实 A655sc 文件，双方各自解析出的 τ 与温度 | 2 个文件 / 7 帧 / 每帧 307200 像素 | **1.14e-13 K**（喂同一组参数时） |
+| 同上，但各自用自己解析出的参数 | 同上 | 1.0e-3 … 1.3e-3 K |
+
+前两行是 float64 的舍入量级，即两份实现在数学上等价。落在域外（`log` 的自变量 ≤ 0）的
+原始值，双方也一致地判为无效。
+
+第三行那 ~1.3 mK 的差不是模型分歧，而是 flirpy 的一处不自洽：它的
+`flirpy/io/fff.py:328` 把开尔文转摄氏用的是 `− 273.14`，而同一个包里其余各处（包括
+`raw2temp` 自己）都用 `273.15`。于是 flirpy 解析出来的反射/大气/窗口温度整体偏高 0.01 K，
+传播到最终温度上约 1 mK。本查看器两端都用 273.15。把 flirpy 自己的参数喂给本实现，偏差
+立刻回到 1e-13——这正是比对脚本同时打印两个数字的原因。
+
+**顺带的交叉验证**：flirpy 的 `fff.py` 有它自己的一份 CameraInfo 偏移表，与本文上面那张
+表在 `0x20`–`0x34`、`0x3c`、`0x58`–`0x60`、`0x70`–`0x80`、`0x90`/`0x94`、`0xd4`、`0xf4`、
+`0x170`、`0x1b4`、`0x308`（PlanckO 按 int32）、`0x30c`、`0x384`、`0x45c`、`0x464` 上全部
+一致，是独立于 ExifTool 的第二份佐证。两处不一致：
+
+* flirpy 同样**没有读取** `0x38`（estAtmosphericTransmission）与 `0x50`/`0x54`，所以在相机里
+  手动设过大气透过率的文件上，它也会走估算公式。
+* flirpy 把相机序列号与固件版本读成 `get_string(104, 16)` / `get_string(114, 16)`——十进制
+  写成了十六进制该写的位置，正确的是 `0x104` / `0x114`。实测它在样本上返回的是二进制垃圾，
+  本实现返回 `55007795` / `16.0.0`。
+
 ## 与 ExifTool 对照
 
 手头有 ExifTool 时，可以这样核对本文档里的字段：

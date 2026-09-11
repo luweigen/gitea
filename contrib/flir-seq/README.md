@@ -152,4 +152,14 @@ node run.mjs                 # 解析、测温与翻译完整性，无需任何�
 ./run.sh /path/to/real.seq   # 同时跑一遍真实相机文件
 ```
 
+另有一个可选的交叉验证脚本，把温度换算与独立的 Python 实现 [flirpy](https://github.com/LJMUAstroecology/flirpy)
+对比（需要 `pip install flirpy`）：
+
+```sh
+node contrib/flir-seq/test/compare-flirpy.mjs /path/to/real.seq
+```
+
+实测两者在 14 组参数 × 9 个原始值以及两个真实文件的全部 7 × 307200 个像素上偏差
+≤ 1.14e-13 K。公式出处与完整比对结果见 [`doc/format.md`](doc/format.md)。
+
 详见 [`test/README.md`](test/README.md)。
