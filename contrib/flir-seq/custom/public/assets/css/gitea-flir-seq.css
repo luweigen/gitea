@@ -1,0 +1,296 @@
+/* Copyright 2026 The Gitea Authors. All rights reserved.
+   SPDX-License-Identifier: MIT
+
+   contrib/flir-seq: styles for the FLIR sequence viewer. Everything is scoped
+   under .flir-seq so it cannot reach into the rest of Gitea, and all colours
+   come from Gitea's own CSS variables so the viewer follows the site theme. */
+
+.file-view-render-container.flir-seq-mount {
+  padding: 0;
+}
+
+.flir-seq {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.flir-seq-status {
+  padding: 8px 10px;
+  border-radius: var(--border-radius);
+  background: var(--color-info-bg, var(--color-box-body));
+  color: var(--color-text);
+}
+
+.flir-seq-status[hidden] {
+  display: none;
+}
+
+.flir-seq-status-error {
+  background: var(--color-error-bg);
+  color: var(--color-error-text);
+  border: 1px solid var(--color-error-border);
+}
+
+.flir-seq-status-warn {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  border: 1px solid var(--color-warning-border);
+}
+
+.flir-seq-confirm {
+  padding: 4px 0 8px;
+}
+
+/* --- toolbar ------------------------------------------------------- */
+
+.flir-seq-toolbar,
+.flir-seq-frames,
+.flir-seq-actions,
+.flir-seq-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.flir-seq-spacer {
+  flex: 1 1 auto;
+}
+
+.flir-seq-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  color: var(--color-text-light-2);
+}
+
+.flir-seq-manual[hidden] {
+  display: none;
+}
+
+.flir-seq-manual {
+  display: inline-flex;
+  gap: 10px;
+}
+
+.flir-seq-select,
+.flir-seq-number {
+  padding: 3px 6px;
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--border-radius);
+  background: var(--color-input-background);
+  color: var(--color-input-text);
+  font-size: 13px;
+}
+
+.flir-seq-number {
+  width: 84px;
+}
+
+.flir-seq-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--color-light-border);
+  border-radius: var(--border-radius);
+  background: var(--color-button);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.flir-seq-btn:hover {
+  background: var(--color-hover);
+}
+
+.flir-seq-btn-mini {
+  padding: 0 6px;
+  line-height: 18px;
+  font-size: 12px;
+}
+
+.flir-seq-zoom {
+  display: inline-flex;
+  gap: 4px;
+}
+
+/* --- image --------------------------------------------------------- */
+
+.flir-seq-stage {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.flir-seq-canvas-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--color-code-bg, #000);
+  border: 1px solid var(--color-secondary);
+  border-radius: var(--border-radius);
+  overflow: hidden;
+}
+
+.flir-seq-canvas {
+  display: block;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.flir-seq-colorbar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-light-2);
+}
+
+.flir-seq-colorbar-canvas {
+  flex: 1 1 auto;
+  width: 16px;
+  height: 100%;
+  min-height: 80px;
+  border: 1px solid var(--color-secondary);
+  border-radius: 2px;
+}
+
+.flir-seq-colorbar-label {
+  font-variant-numeric: tabular-nums;
+}
+
+.flir-seq-readout {
+  padding: 6px 10px;
+  border-radius: var(--border-radius);
+  background: var(--color-markup-code-block);
+  font-family: var(--fonts-monospace);
+  font-size: 13px;
+  color: var(--color-text-light-2);
+  min-height: 20px;
+}
+
+.flir-seq-readout-live {
+  color: var(--color-text);
+}
+
+.flir-seq-slider {
+  flex: 1 1 200px;
+  min-width: 140px;
+}
+
+.flir-seq-frame-label {
+  color: var(--color-text-light-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- panels -------------------------------------------------------- */
+
+.flir-seq-panels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.flir-seq-panel {
+  flex: 1 1 260px;
+  min-width: 240px;
+  border: 1px solid var(--color-secondary);
+  border-radius: var(--border-radius);
+  background: var(--color-box-body);
+}
+
+.flir-seq-panel > summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  font-weight: var(--font-weight-medium);
+}
+
+.flir-seq-panel-body {
+  padding: 0 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.flir-seq-hint {
+  margin: 0;
+  color: var(--color-text-light-2);
+  font-size: 12px;
+}
+
+.flir-seq-form {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.flir-seq-form .flir-seq-field {
+  justify-content: space-between;
+  white-space: normal;
+}
+
+.flir-seq-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.flir-seq-table th,
+.flir-seq-table td {
+  padding: 2px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-secondary);
+  font-weight: normal;
+}
+
+.flir-seq-table th {
+  color: var(--color-text-light-2);
+  font-size: 12px;
+}
+
+.flir-seq-temp {
+  font-weight: var(--font-weight-medium);
+}
+
+.flir-seq-empty {
+  color: var(--color-text-light-3);
+}
+
+.flir-seq-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.flir-seq-meta-row {
+  display: flex;
+  gap: 8px;
+}
+
+.flir-seq-meta-key {
+  flex: 0 0 84px;
+  color: var(--color-text-light-2);
+}
+
+.flir-seq-meta-value {
+  flex: 1 1 auto;
+  word-break: break-word;
+}
+
+@media (max-width: 600px) {
+  /* The colour bar stays vertical -- its gradient is painted that way -- but
+     the labels are allowed to get smaller so the image keeps the width. */
+  .flir-seq-colorbar {
+    font-size: 10px;
+  }
+
+  .flir-seq-field {
+    white-space: normal;
+  }
+}

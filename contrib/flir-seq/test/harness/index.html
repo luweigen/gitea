@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<!-- Copyright 2026 The Gitea Authors. All rights reserved.
+     SPDX-License-Identifier: MIT
+
+     Reproduces the part of Gitea's templates/repo/view_file.tmpl that the
+     viewer keys off, so the browser test does not need a running Gitea. The
+     CSS variables below are the handful the viewer's stylesheet reads. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>flir-seq harness</title>
+<style>
+	:root {
+		--border-radius: 4px;
+		--fonts-monospace: ui-monospace, monospace;
+		--font-weight-medium: 500;
+		--color-text: #1f2328;
+		--color-text-light-2: #57606a;
+		--color-text-light-3: #8c959f;
+		--color-body: #fff;
+		--color-box-body: #fff;
+		--color-secondary: #d0d7de;
+		--color-light-border: #d0d7de;
+		--color-button: #f6f8fa;
+		--color-hover: #eaeef2;
+		--color-input-background: #fff;
+		--color-input-border: #d0d7de;
+		--color-input-text: #1f2328;
+		--color-markup-code-block: #f6f8fa;
+		--color-code-bg: #0d1117;
+		--color-error-bg: #ffebe9;
+		--color-error-text: #82071e;
+		--color-error-border: #ff818266;
+		--color-warning-bg: #fff8c5;
+		--color-warning-text: #7d4e00;
+		--color-warning-border: #d4a72c66;
+	}
+
+	body {
+		margin: 0;
+		padding: 16px;
+		font-family: system-ui, sans-serif;
+		background: var(--color-body);
+	}
+</style>
+<link rel="stylesheet" href="/assets/css/gitea-flir-seq.css">
+</head>
+<body>
+<div class="non-diff-file-content" data-global-init="initRepoFileView" data-raw-file-link="/raw/sample.seq">
+	<h4 class="file-header"><div class="file-header-left">sample.seq</div></h4>
+	<div class="ui bottom attached table unstackable segment">
+		<div class="file-view">
+			<div class="view-raw">
+				<div class="file-view-render-container">
+					<div class="file-view-raw-prompt tw-p-4"><a href="/raw/sample.seq" rel="nofollow">View raw</a></div>
+				</div>
+			</div>
+		</div>
+	</div>
+</div>
+<script src="/assets/js/gitea-flir-seq.js"></script>
+</body>
+</html>
