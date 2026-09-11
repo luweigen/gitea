@@ -1,11 +1,25 @@
 // Copyright 2026 The Gitea Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import {readFileSync} from 'node:fs';
+import {readFileSync, readdirSync, existsSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {dirname, join} from 'node:path';
 
-export const assetDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'custom', 'public', 'assets');
+const testDir = dirname(fileURLToPath(import.meta.url));
+export const assetDir = join(testDir, '..', 'custom', 'public', 'assets');
+export const sampleDir = join(testDir, 'samples');
+
+/**
+ * The recordings bundled in ./samples, so that the checks against FLIR Thermal
+ * Studio in truth.mjs run without anything having to be fetched. Paths given on
+ * the command line win, which is how another recording gets tried.
+ */
+export function samplePaths(fromArgv) {
+  if (fromArgv && fromArgv.length) return fromArgv;
+  if (!existsSync(sampleDir)) return [];
+  return readdirSync(sampleDir).filter((f) => f.toLowerCase().endsWith('.seq')).sort()
+    .map((f) => join(sampleDir, f));
+}
 export const scriptPath = join(assetDir, 'js', 'gitea-flir-seq.js');
 
 /**

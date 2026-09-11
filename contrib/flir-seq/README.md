@@ -168,15 +168,15 @@ Gitea 自带 29 种界面语言（`options/locale/`，其中包含 `zh-CN` 与 `
 
 ```sh
 cd contrib/flir-seq/test
-node run.mjs                 # 解析、测温与翻译完整性，无需任何依赖
-./setup.sh && ./run.sh       # 再加上真实浏览器里的端到端测试（三种语言都跑）
-./run.sh /path/to/real.seq   # 同时跑一遍真实相机文件
+node run.mjs                 # 解析、测温、翻译完整性 + 三段真实录像的真值断言，零依赖
+./setup.sh && ./run.sh       # 再加上真实浏览器里的端到端测试（三种语言、每段录像都跑）
+./run.sh /path/to/other.seq  # 换成你自己的录像
 ```
 
-测温结果已用 **FLIR Thermal Studio 2.0.84** 核验过：两段 A655sc 录像共 7 帧、每帧
-max/min/avg 合计 21 个统计量，**全部落在 Thermal Studio 显示精度（±0.05 °C）之内**，
-平均偏差 +0.001 °C。真值表在 [`test/truth.mjs`](test/truth.mjs)，把对应录像传给
-`test/run.mjs` 就会逐帧断言。
+测温结果已用 **FLIR Thermal Studio 2.0.84** 核验过：三段 A655sc 录像共 13 帧、每帧
+max/min/avg 合计 39 个统计量，**四舍五入到一位小数后与 Thermal Studio 显示的数字逐个
+相同**。录像本身就在 [`test/samples/`](test/samples/)、真值表在
+[`test/truth.mjs`](test/truth.mjs)，`node test/run.mjs` 开箱即跑，不需要准备任何外部数据。
 
 另有一个可选的交叉验证脚本，与独立的 Python 实现
 [flirpy](https://github.com/LJMUAstroecology/flirpy) 比对容器解析（需要 `pip install flirpy`）：

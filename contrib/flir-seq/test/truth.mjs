@@ -11,12 +11,19 @@
 // twice -- what Thermimage does, and flirpy after it -- reads about 0.1 K too
 // cold; see ../doc/format.md.
 //
-// The recordings are not in this repository: a few megabytes of thermal data do
-// not belong in Gitea's tree. run.mjs applies these expectations when it is
-// handed a file whose name matches a key below, and says so when it is not.
+// The recordings themselves are in ./samples, so these expectations run without
+// anything having to be fetched. run.mjs applies them to any file whose name
+// matches a key below, and says so when it is handed one that does not.
 
-/** Thermal Studio prints one decimal, so anything closer than this agrees. */
-export const DISPLAY_ROUNDING = 0.05;
+/**
+ * Thermal Studio prints one decimal, so the most agreement its display can
+ * demonstrate is that both numbers round to the same digit. Comparing that way
+ * rather than with a 0.05 tolerance matters: the tightest of these figures
+ * clears 0.05 by 0.0004 K, close enough for the last bit of a float to decide.
+ */
+export function displaysTheSame(ours, theirs) {
+  return ours.toFixed(1) === theirs.toFixed(1);
+}
 
 /**
  * The colour scale Thermal Studio opens both recordings on, as [low, high].
@@ -36,6 +43,18 @@ export const TRUTH = {
       [9.7, -31.4, -7.8],
       [6.8, -26.8, -7.4],
       [11.3, -20.8, -7.3],
+    ],
+  },
+  '184315890': {
+    camera: 'FLIR A655sc',
+    file: 'joensuu2023-10-21T184315890.seq',
+    frames: [
+      [16.5, -40.2, -8.7],
+      [14.3, -38.5, -8.7],
+      [11.8, -39.1, -8.1],
+      [13.1, -36.8, -7.7],
+      [13.4, -30.3, -7.3],
+      [12.9, -25.2, -6.9],
     ],
   },
   '190131749': {

@@ -17,8 +17,9 @@
 // gap between the two conventions is reported below rather than asserted away.
 //
 //   pip install flirpy
-//   node compare-flirpy.mjs                    parameter grid
-//   node compare-flirpy.mjs real.seq           also every pixel of a real file
+//   node compare-flirpy.mjs                    parameter grid, then every pixel
+//                                              of every recording in ./samples
+//   node compare-flirpy.mjs real.seq           that recording instead
 //   FLIRPY_PYTHON=/path/to/venv/bin/python node compare-flirpy.mjs
 //
 // flirpy has no equivalent of estAtmosphericTransmission, so every case here
@@ -30,7 +31,7 @@ import {mkdtempSync, writeFileSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {loadFlirSeq, thermimageTemp, referenceTemp} from './load.mjs';
+import {loadFlirSeq, thermimageTemp, referenceTemp, samplePaths} from './load.mjs';
 import {toArrayBuffer} from './fixture.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -164,7 +165,7 @@ console.log((modeMismatch ? 'DISAGREES' : 'agrees') +
 //
 // This puts flirpy's own FFF reader against ours, so the record offsets are
 // compared as well as the arithmetic.
-for (const path of process.argv.slice(2)) {
+for (const path of samplePaths(process.argv.slice(2))) {
   console.log('\n' + path);
   const dir = mkdtempSync(join(tmpdir(), 'flir-seq-flirpy-'));
   let decoded;

@@ -1,18 +1,25 @@
 # contrib/flir-seq 的测试
 
-两层：解析与测温的纯逻辑测试（零依赖），以及真实浏览器里的端到端测试。
+两层：解析与测温的纯逻辑测试（零依赖），以及真实浏览器里的端到端测试。三段真实的
+FLIR A655sc 录像就放在 [`samples/`](samples/)，所以**不需要准备任何外部数据**：
+`node run.mjs` 与 `./run.sh` 默认就跑它们，并拿 `truth.mjs` 里 FLIR Thermal Studio
+的读数逐帧断言。
 
 ## 解析与测温
 
 ```sh
-node run.mjs                 # 只跑合成样本
-node run.mjs /path/to/a.seq  # 另外打印真实文件每一帧的温度摘要
+node run.mjs                 # 合成样本 + samples/ 下的三段真实录像
+node run.mjs /path/to/a.seq  # 换成你自己的录像
 ```
 
-传真实录像给 `run.mjs` 时，若文件名与 [`truth.mjs`](truth.mjs) 里的某条对得上，它会拿
-**FLIR Thermal Studio 2.0.84** 的读数逐帧断言 max/min/avg（容差取 TS 的显示精度
-±0.05 °C）；对不上则只打印摘要并说明没有对应真值。这是全套测试里唯一不源自同一次逆向的
-参照，也是它定下了大气透过率该怎么算——详见 [`../doc/format.md`](../doc/format.md)。
+录像的文件名若与 [`truth.mjs`](truth.mjs) 里的某条对得上（`samples/` 下三段都对得上），
+`run.mjs` 会拿 **FLIR Thermal Studio 2.0.84** 的读数逐帧断言 max/min/avg，判据是
+**四舍五入到一位小数后与 TS 显示的数字相同**——TS 只显示一位小数，这就是它的显示能证明的
+全部。不写成「差值 ≤ 0.05」是因为这些数里最紧的一条只比 0.05 宽 0.0004 K，够浮点数的
+最后一位左右结果了。对不上的文件则只打印摘要并说明没有对应真值。
+
+这是全套测试里唯一不源自同一次逆向的参照，也是它定下了大气透过率该怎么算——详见
+[`../doc/format.md`](../doc/format.md)。
 
 `run.mjs` 不需要 `npm install`：它把 `gitea-flir-seq.js` 当作浏览器里的普通脚本
 用 `new Function` 求值（Gitea 的 `package.json` 把 `.js` 标成 ESM，所以不能直接
@@ -30,8 +37,8 @@ Thermimage/flirpy 那套「半程 τ 乘两次」的约定，只给 `compare-fli
 
 ```sh
 ./setup.sh     # 安装 playwright-core（一次即可）
-./run.sh       # 解析测试 + 浏览器测试
-./run.sh /path/to/real.seq
+./run.sh       # 解析测试，然后浏览器测试：合成样本 + samples/ 下每一段录像
+./run.sh /path/to/real.seq   # 换成你自己的录像
 ```
 
 `setup.sh` 只装 `playwright-core`，不下载浏览器。`browser.mjs` 会依次尝试
@@ -65,8 +72,8 @@ Chrome/Chromium。
 
 ```sh
 pip install flirpy
-node compare-flirpy.mjs                 # 参数网格
-node compare-flirpy.mjs /path/real.seq  # 再逐像素比真实文件
+node compare-flirpy.mjs                 # 参数网格 + samples/ 下每段录像逐像素比对
+node compare-flirpy.mjs /path/real.seq  # 换成你自己的录像
 FLIRPY_PYTHON=/path/to/venv/bin/python node compare-flirpy.mjs
 ```
 

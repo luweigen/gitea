@@ -1,0 +1,2 @@
+# camera output: never touch the bytes, and keep it out of textual diffs
+*.seq binary
