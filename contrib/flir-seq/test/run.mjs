@@ -8,11 +8,14 @@
 //
 // Usage:
 //   node run.mjs                 -- synthetic fixture only
-//   node run.mjs a.seq b.seq     -- also dump a summary of real sequences
+//   node run.mjs a.seq b.seq     -- also dump a summary of real sequences, and
+//                                   check them against FLIR Thermal Studio for
+//                                   the files truth.mjs knows
 
 import {basename} from 'node:path';
 import {readFileSync} from 'node:fs';
-import {loadFlirSeq, referenceTemp} from './load.mjs';
+import {loadFlirSeq, referenceTemp, thermimageTemp} from './load.mjs';
+import {truthFor, DISPLAY_ROUNDING} from './truth.mjs';
 import {FIXTURE, buildFixture, toArrayBuffer, rawAt} from './fixture.mjs';
 
 const flir = loadFlirSeq();
@@ -62,11 +65,37 @@ check('Planck O read as signed', params.planckO === FIXTURE.planckO, params.plan
 
 const conv = flir.makeConverter(params);
 check('converter usable', conv.ok, conv.reason);
+check('the FLIR convention is the default', conv.model === flir.MODEL_FLIR, conv.model);
+const probes = [6000, 8000, 9000, 9891, 12000, 20000];
 let worst = 0;
-for (const raw of [6000, 8000, 9000, 9891, 12000, 20000]) {
+for (const raw of probes) {
   worst = Math.max(worst, Math.abs(conv.toTemp(raw) - referenceTemp(raw, params)));
 }
 check('matches the reference model', worst < 1e-6, 'max deviation ' + worst.toExponential(2) + ' K');
+
+// The Thermimage convention is kept selectable, and has to reproduce the
+// implementation it is named after -- transcribed separately in load.mjs.
+const thermimage = flir.makeConverter(params, flir.MODEL_THERMIMAGE);
+check('the Thermimage convention is selectable', thermimage.ok && thermimage.model === flir.MODEL_THERMIMAGE,
+  thermimage.model);
+let worstThermimage = 0;
+for (const raw of probes) {
+  worstThermimage = Math.max(worstThermimage, Math.abs(thermimage.toTemp(raw) - thermimageTemp(raw, params)));
+}
+check('the Thermimage convention matches Thermimage', worstThermimage < 1e-6,
+  'max deviation ' + worstThermimage.toExponential(2) + ' K');
+check('the two conventions really differ', Math.abs(thermimage.toTemp(9891) - conv.toTemp(9891)) > 0.01,
+  thermimage.toTemp(9891).toFixed(3) + ' vs ' + conv.toTemp(9891).toFixed(3));
+check('Thermimage reads colder', thermimage.toTemp(9891) < conv.toTemp(9891));
+check('its transmission spans half the distance',
+  Math.abs(thermimage.tau - flir.makeConverter(
+    Object.assign({}, params, {objectDistance: params.objectDistance / 2})).tau) < 1e-12,
+  thermimage.tau.toFixed(6));
+check('an unknown model falls back to FLIR',
+  flir.makeConverter(params, 'nonsense').model === flir.MODEL_FLIR);
+check('a supplied transmission is used by both conventions',
+  flir.makeConverter(Object.assign({}, params, {atmTransmission: 0.8})).tau === 0.8 &&
+  flir.makeConverter(Object.assign({}, params, {atmTransmission: 0.8}), flir.MODEL_THERMIMAGE).tau === 0.8);
 check('lut agrees with toTemp', close(conv.lut[9891], conv.toTemp(9891), 1e-3), conv.lut[9891]);
 check('toRaw inverts toTemp', close(conv.toRaw(conv.toTemp(9891)), 9891, 1e-3), conv.toRaw(conv.toTemp(9891)));
 check('monotonic in raw', conv.toTemp(9000) < conv.toTemp(9100) && conv.toTemp(9100) < conv.toTemp(9200));
@@ -123,6 +152,15 @@ check('garbage input yields no frames', flir.parseSeq(toArrayBuffer(Buffer.alloc
 // zero, and only a zero means "estimate from humidity, distance and air temp".
 check('a file without a transmission estimates one', !conv.tauFromFile && conv.tau > 0 && conv.tau < 1,
   conv.tau.toFixed(4));
+
+// The transmission must be the one for the whole object distance, applied once.
+// Evaluating it at half the distance and squaring -- Thermimage's convention,
+// inherited by flirpy -- is a different number and reads too cold; ../doc/format.md.
+const halfDistance = flir.makeConverter(Object.assign({}, params, {objectDistance: params.objectDistance / 2}));
+check('the transmission spans the whole distance, not half of it',
+  Math.abs(conv.tau - halfDistance.tau * halfDistance.tau) > 1e-6 &&
+  conv.tau < halfDistance.tau,
+  'tau(d)=' + conv.tau.toFixed(6) + '  tau(d/2)^2=' + (halfDistance.tau * halfDistance.tau).toFixed(6));
 check('estAtmTransmission is read', frame.info.estAtmTransmission === 0, frame.info.estAtmTransmission);
 
 const supplied = flir.parseSeq(toArrayBuffer(buildFixture({width: 4, height: 2, frames: 1, estAtmTransmission: 0.75})));
@@ -210,8 +248,10 @@ check('translator ignores extra arguments', flir.makeTranslator('en')('loadAnywa
 
 // --- real files -----------------------------------------------------------
 
+let thermimageOff = 0, thermimageTotal = 0, thermimageWorst = 0;
 for (const path of process.argv.slice(2)) {
   console.log('\n' + basename(path));
+  const truth = truthFor(path);
   const buf = readFileSync(path);
   const ab = toArrayBuffer(buf);
   const seq = flir.parseSeq(ab);
@@ -227,23 +267,56 @@ for (const path of process.argv.slice(2)) {
   console.log('  tau=' + c.tau.toFixed(4) + (c.tauFromFile ? ' (from the file)' : ' (estimated)') +
     '  pixel values ' + f0.info.pixelValueType + '/' + f0.info.pixelValueUnit +
     (seq.warnings.length ? '  warnings: ' + seq.warnings.map((w) => w.key).join(', ') : ''));
+  if (!truth) {
+    console.log('  (no Thermal Studio figures on file for this recording, printing a summary only)');
+  }
   for (const frame of seq.frames) {
     const px = flir.readFramePixels(ab, frame);
-    let min = 0xffff, max = 0;
+    let min = 0xffff, max = 0, sum = 0;
+    const hist = new Float64Array(65536);
     for (let i = 0; i < px.length; i++) {
       if (px[i] < min) min = px[i];
       if (px[i] > max) max = px[i];
+      sum += c.lut[px[i]];
+      hist[px[i]]++;
     }
-    const centre = px[(frame.raw.height >> 1) * frame.raw.width + (frame.raw.width >> 1)];
+    const mine = [c.toTemp(max), c.toTemp(min), sum / px.length];
     console.log('  frame ' + (frame.index + 1) + ' @' + frame.offset +
       '  ' + frame.info.dateTime.toISOString() +
-      '  min ' + c.toTemp(min).toFixed(2) + 'C  max ' + c.toTemp(max).toFixed(2) +
-      'C  centre ' + c.toTemp(centre).toFixed(2) + 'C');
-    const deviation = Math.abs(c.toTemp(centre) - referenceTemp(centre, p));
+      '  max ' + mine[0].toFixed(2) + '  min ' + mine[1].toFixed(2) +
+      '  avg ' + mine[2].toFixed(2) + ' C');
+    const deviation = Math.abs(c.toTemp(max) - referenceTemp(max, p));
     if (deviation > 1e-6) {
       check('frame ' + (frame.index + 1) + ' matches the reference model', false, deviation);
     }
+    const expected = truth && truth.frames[frame.index];
+    if (!expected) continue;
+    // Thermal Studio prints one decimal, so landing inside half a digit is the
+    // most agreement that can be demonstrated from its display.
+    const labels = ['max', 'min', 'avg'];
+    for (let i = 0; i < 3; i++) {
+      const d = mine[i] - expected[i];
+      check('frame ' + (frame.index + 1) + ' ' + labels[i] + ' matches Thermal Studio',
+        Math.abs(d) <= DISPLAY_ROUNDING,
+        mine[i].toFixed(2) + ' vs ' + expected[i].toFixed(1) + ' (' + (d >= 0 ? '+' : '') + d.toFixed(2) + ')');
+    }
+    // and the other convention has to be measurably worse, or the default
+    // would be an arbitrary preference rather than a finding
+    const tc = flir.makeConverter(p, flir.MODEL_THERMIMAGE);
+    let tsum = 0;
+    for (let raw = 0; raw < 65536; raw++) if (hist[raw]) tsum += tc.lut[raw] * hist[raw];
+    const theirs = [tc.toTemp(max), tc.toTemp(min), tsum / px.length];
+    thermimageOff += theirs.filter((v, i) => Math.abs(v - expected[i]) > DISPLAY_ROUNDING).length;
+    thermimageTotal += 3;
+    thermimageWorst = Math.max(thermimageWorst, ...theirs.map((v, i) => Math.abs(v - expected[i])));
   }
+}
+
+if (thermimageTotal) {
+  check('the Thermimage convention would miss Thermal Studio on most of them',
+    thermimageOff > thermimageTotal / 2,
+    thermimageOff + ' of ' + thermimageTotal + ' outside the rounding, worst ' +
+    thermimageWorst.toFixed(3) + ' K');
 }
 
 console.log(failures ? '\n' + failures + ' check(s) failed' : '\nall checks passed');

@@ -138,9 +138,25 @@ try {
   check('spot shows the same temperature', row.includes(probeTemp + ' °C'), row);
   check('spot shows its coordinates', row.includes(String(probe.x)) && row.includes(String(probe.y)), row);
 
+  // the measurement panel has to be populated before anything is touched
+  await page.locator('details.flir-seq-panel').nth(1).evaluate((d) => (d.open = true));
+  const initialFields = await page.locator('.flir-seq-form input').evaluateAll(
+    (els) => els.map((e) => e.value));
+  const paramCount = await page.evaluate(() =>
+    Object.keys(document.querySelector('.flir-seq-mount').giteaFlirSeqViewer.paramInputs).length);
+  check('every parameter field is filled on load',
+    initialFields.length === paramCount && initialFields.every((v) => v !== ''),
+    initialFields.length + ' of ' + paramCount + ': ' + JSON.stringify(initialFields));
+  check('the parameter fields hold the camera settings',
+    Math.abs(parseFloat(initialFields[0]) - params.emissivity) < 0.005 &&
+    Math.abs(parseFloat(initialFields[2]) - params.objectDistance) < 0.005,
+    initialFields.slice(0, 3).join(', '));
+  check('the Planck constants are shown on load',
+    (await page.locator('.flir-seq-planck-note').textContent()).includes(String(params.planckO)),
+    await page.locator('.flir-seq-planck-note').textContent());
+
   // lowering the emissivity must move a reading hotter than ambient upwards
   const before = parseFloat((await page.locator('.flir-seq-temp').first().textContent()));
-  await page.locator('details.flir-seq-panel').nth(1).evaluate((d) => (d.open = true));
   const emissivity = page.locator('.flir-seq-form input').first();
   await emissivity.fill('0.5');
   await emissivity.dispatchEvent('change');
@@ -150,9 +166,47 @@ try {
   await emissivity.fill(String(params.emissivity));
   await emissivity.dispatchEvent('change');
 
+  // the radiometric model is selectable, and the default is the one that
+  // reproduces FLIR Thermal Studio
+  const modelSelect = page.locator('.flir-seq-form select');
+  check('the model picker defaults to FLIR', (await modelSelect.inputValue()) === flir.MODEL_FLIR,
+    await modelSelect.inputValue());
+  // The two conventions can differ by less than the one decimal the spot table
+  // shows, so the reading is taken from the converter the page is actually
+  // using rather than from the rounded label.
+  const reading = (raw) => page.evaluate((r) => {
+    const viewer = document.querySelector('.flir-seq-mount').giteaFlirSeqViewer;
+    return {model: viewer.converter.model, tau: viewer.converter.tau, temp: viewer.converter.toTemp(r)};
+  }, raw);
+  const asFlir = await reading(probeRaw);
+  check('the default is the FLIR convention', asFlir.model === flir.MODEL_FLIR, asFlir.model);
+  check('it matches the converter computed here',
+    Math.abs(asFlir.temp - converter.toTemp(probeRaw)) < 1e-9);
+
+  await modelSelect.selectOption(flir.MODEL_THERMIMAGE);
+  const asThermimage = await reading(probeRaw);
+  const expected = flir.makeConverter(params, flir.MODEL_THERMIMAGE);
+  check('switching the picker switches the convention', asThermimage.model === flir.MODEL_THERMIMAGE,
+    asThermimage.model);
+  check('the Thermimage convention is reproduced exactly',
+    Math.abs(asThermimage.temp - expected.toTemp(probeRaw)) < 1e-9 &&
+    Math.abs(asThermimage.tau - expected.tau) < 1e-12,
+    asThermimage.temp.toFixed(4) + ' vs ' + expected.toTemp(probeRaw).toFixed(4));
+  check('it reads colder than the FLIR convention', asThermimage.temp < asFlir.temp,
+    asThermimage.temp.toFixed(4) + ' < ' + asFlir.temp.toFixed(4));
+  check('the spot table follows the model',
+    (await page.locator('.flir-seq-temp').first().textContent()).trim() ===
+      expected.toTemp(probeRaw).toFixed(1) + ' °C',
+    await page.locator('.flir-seq-temp').first().textContent());
+
+  await modelSelect.selectOption(flir.MODEL_FLIR);
+  const backToFlir = await reading(probeRaw);
+  check('switching back restores the FLIR reading',
+    backToFlir.model === flir.MODEL_FLIR && Math.abs(backToFlir.temp - asFlir.temp) < 1e-12);
+
   // the transmission note must say where the value in use came from, and a
   // hand-entered transmission must actually replace the estimate
-  const tauNote = () => page.locator('.flir-seq-panel-body .flir-seq-hint').nth(1).textContent();
+  const tauNote = () => page.locator('.flir-seq-tau-note').textContent();
   check('the transmission is reported as estimated',
     (await tauNote()) === t('tauNote', [converter.tau.toFixed(4), t('tauEstimated')]), await tauNote());
   const transmission = page.locator('.flir-seq-form input').nth(4);
@@ -224,6 +278,26 @@ try {
     }
     return {opaque, transparent, violations, filter: bounds};
   });
+  // where these two sit is a deliberate choice, so it is asserted rather than
+  // left to drift back: the reset belongs with the handles it clears, and the
+  // hover hint with the spot meters it explains
+  check('"show all" sits on the colour bar, not in the toolbar',
+    (await page.locator('.flir-seq-colorbar > .flir-seq-filter-reset').count()) === 1 &&
+    (await page.locator('.flir-seq-toolbar .flir-seq-filter-reset').count()) === 0);
+  check('"show all" is above the scale',
+    await page.evaluate(() => {
+      const bar = document.querySelector('.flir-seq-colorbar');
+      return bar.firstElementChild.classList.contains('flir-seq-filter-reset');
+    }));
+  check('the hover hint follows the frame controls',
+    await page.evaluate(() => {
+      const kids = Array.from(document.querySelector('.flir-seq').children);
+      return kids.indexOf(document.querySelector('.flir-seq-readout')) >
+        kids.indexOf(document.querySelector('.flir-seq-frames')) &&
+        kids.indexOf(document.querySelector('.flir-seq-readout')) <
+        kids.indexOf(document.querySelector('.flir-seq-panels'));
+    }));
+
   check('nothing is hidden before a handle is moved',
     audit.filter === null && audit.transparent === 0 && audit.violations === 0,
     JSON.stringify(audit));
@@ -343,10 +417,22 @@ try {
       // one string from each area of the UI, so a key missed in one panel shows
       const expected = ['palette', 'scale', 'extremes', 'spots', 'spotsHint', 'noSpots',
         'colRaw', 'colTemp', 'clearAll', 'params', 'atmTransmission', 'fileInfo',
-        'exportPng', 'exportCsv', 'readoutHint', 'play', 'filterReset'];
+        'exportPng', 'exportCsv', 'readoutHint', 'play',
+        'model', 'modelFlir', 'modelNote'];
       const missing = expected.filter((key) => !text.includes(tl(key)));
       check(lang + ': every panel is translated', missing.length === 0,
         missing.map((key) => key + '=' + tl(key)).join(' | '));
+      // "show all" is a glyph, so its words live on the tooltip and the
+      // accessible name; both still have to be in the right language
+      const reset = await localised.evaluate(() => {
+        const b = document.querySelector('.flir-seq-filter-reset');
+        return {title: b.title, label: b.getAttribute('aria-label'),
+          width: Math.round(b.getBoundingClientRect().width)};
+      });
+      check(lang + ': "show all" is named in this language',
+        reset.title === tl('filterReset') && reset.label === tl('filterReset'),
+        reset.title + ' / ' + reset.label);
+      check(lang + ': "show all" stays narrow', reset.width <= 32, reset.width + 'px');
       const frameLabel = (await localised.locator('.flir-seq-frame-label').textContent()).trim();
       check(lang + ': the frame label is formatted',
         frameLabel.startsWith(tl('frameLabel', [1, geometry.frames])), frameLabel);

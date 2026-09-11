@@ -151,6 +151,15 @@
   color: var(--color-text-light-2);
 }
 
+/* "show all" carries a glyph rather than words, so the column stays as narrow
+   as its temperature labels no matter the translation. */
+.flir-seq-colorbar .flir-seq-filter-reset {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  font-size: 13px;
+  line-height: 18px;
+}
+
 /* The bar is a slider track: the canvas fills it and the two limit handles are
    positioned on top by percentage, so the gradient and the handles cannot get
    out of step whatever the height works out to be. */
