@@ -35,8 +35,9 @@
     defaultPalette: 'iron',
     // 'flir' (matches FLIR Thermal Studio) | 'thermimage' (Thermimage/flirpy)
     defaultModel: 'flir',
-    // 'frame' (auto-scale each frame) | 'sequence' | 'manual'
-    defaultRangeMode: 'frame',
+    // 'camera' (the scale recorded in the file, which is what FLIR Thermal
+    // Studio opens on) | 'frame' (auto-scale each frame) | 'sequence' | 'manual'
+    defaultRangeMode: 'camera',
     // playback speed for multi-frame sequences
     playbackFps: 6,
     // digits after the decimal point in every temperature readout
@@ -79,6 +80,10 @@
       scaleMax: 'Max',
       extremes: 'Hot/cold spot',
       filterHigh: 'Upper limit of the displayed temperature window',
+      scaleHigh: 'Top of the colour scale',
+      scaleLow: 'Bottom of the colour scale',
+      scaleCamera: 'From the file',
+      metaCameraScale: 'Scale in the file',
       filterLow: 'Lower limit of the displayed temperature window',
       filterReset: 'Show all',
       zoomIn: 'Zoom in',
@@ -176,6 +181,10 @@
       scaleMax: '上限',
       extremes: '最高/最低点',
       filterHigh: '显示温区上限',
+      scaleHigh: '色标上限',
+      scaleLow: '色标下限',
+      scaleCamera: '文件记录',
+      metaCameraScale: '文件记录温标',
       filterLow: '显示温区下限',
       filterReset: '显示全部',
       zoomIn: '放大',
@@ -273,6 +282,10 @@
       scaleMax: 'Yläraja',
       extremes: 'Kuumin/kylmin piste',
       filterHigh: 'Näytettävän lämpötila-alueen yläraja',
+      scaleHigh: 'Väriasteikon yläraja',
+      scaleLow: 'Väriasteikon alaraja',
+      scaleCamera: 'Tiedostosta',
+      metaCameraScale: 'Tiedoston asteikko',
       filterLow: 'Näytettävän lämpötila-alueen alaraja',
       filterReset: 'Näytä kaikki',
       zoomIn: 'Lähennä',
@@ -818,6 +831,21 @@
       tauFromFile: hasAtmTransmission(p)};
   }
 
+  /**
+   * The display scale a camera recorded in a frame, as {lo, hi} in degrees, or
+   * null when the file carries none. FLIR Thermal Studio opens a recording on
+   * exactly this window: RawValueMedian +/- RawValueRange/2, converted with the
+   * current object parameters. See doc/format.md.
+   */
+  function cameraScale(info, converter) {
+    if (!info || !(info.rawValueRange > 0) || !(info.rawValueMedian > 0)) return null;
+    const half = info.rawValueRange / 2;
+    const value = (raw) => (converter && converter.ok ? converter.toTemp(raw) : raw);
+    const lo = value(info.rawValueMedian - half);
+    const hi = value(info.rawValueMedian + half);
+    return isFinite(lo) && isFinite(hi) && hi > lo ? {lo, hi} : null;
+  }
+
   // ------------------------------------------------------------------
   // palettes
   // ------------------------------------------------------------------
@@ -1036,6 +1064,8 @@
     this.originalParams = Object.assign({}, this.params);
     this.converter = makeConverter(this.params, this.model);
 
+    if (this.rangeMode === 'camera' && !this.cameraScale()) this.rangeMode = 'frame';
+
     this.buildUI();
     this.selectFrame(0, true);
   };
@@ -1050,6 +1080,7 @@
     this.imgCanvas = document.createElement('canvas');
     this.viewCanvas = el('canvas', {class: 'flir-seq-canvas'});
     this.barCanvas = el('canvas', {class: 'flir-seq-colorbar-canvas', width: 16, height: 256});
+    this.scaleCanvas = el('canvas', {class: 'flir-seq-colorbar-canvas', width: 16, height: 256});
 
     // --- toolbar -------------------------------------------------
     this.paletteSelect = el('select', {class: 'flir-seq-select'},
@@ -1061,6 +1092,7 @@
     });
 
     this.rangeSelect = el('select', {class: 'flir-seq-select'}, [
+      option('camera', t('scaleCamera'), this.rangeMode === 'camera'),
       option('frame', t('scaleFrame'), this.rangeMode === 'frame'),
       option('sequence', t('scaleSequence'), this.rangeMode === 'sequence'),
       option('manual', t('scaleManual'), this.rangeMode === 'manual'),
@@ -1140,13 +1172,25 @@
     this.barLo = el('span', {class: 'flir-seq-colorbar-label'});
     this.barMaskHi = el('div', {class: 'flir-seq-colorbar-mask'});
     this.barMaskLo = el('div', {class: 'flir-seq-colorbar-mask'});
-    this.handleHi = this.buildHandle('hi');
-    this.handleLo = this.buildHandle('lo');
+    this.handleHi = this.buildHandle('hi', 'filter');
+    this.handleLo = this.buildHandle('lo', 'filter');
+    this.scaleHandleHi = this.buildHandle('hi', 'scale');
+    this.scaleHandleLo = this.buildHandle('lo', 'scale');
     this.barTrack = el('div', {class: 'flir-seq-colorbar-track'},
       [this.barCanvas, this.barMaskHi, this.barMaskLo, this.handleHi.root, this.handleLo.root]);
-    this.colorbar = el('div', {class: 'flir-seq-colorbar'},
+    this.colorbar = el('div', {class: 'flir-seq-colorbar flir-seq-filterbar'},
       [this.filterReset, this.barHi, this.barTrack, this.barLo]);
-    this.stage = el('div', {class: 'flir-seq-stage'}, [this.canvasWrap, this.colorbar]);
+
+    // The left-hand bar paints the frame's own data through the colour scale,
+    // so the flat bands at its ends are exactly the pixels the scale saturates.
+    // Its handles set where the palette starts and stops.
+    this.scaleTopLabel = el('span', {class: 'flir-seq-colorbar-label'});
+    this.scaleBottomLabel = el('span', {class: 'flir-seq-colorbar-label'});
+    this.scaleTrack = el('div', {class: 'flir-seq-colorbar-track'},
+      [this.scaleCanvas, this.scaleHandleHi.root, this.scaleHandleLo.root]);
+    this.scalebar = el('div', {class: 'flir-seq-colorbar flir-seq-scalebar'},
+      [this.scaleTopLabel, this.scaleTrack, this.scaleBottomLabel]);
+    this.stage = el('div', {class: 'flir-seq-stage'}, [this.scalebar, this.canvasWrap, this.colorbar]);
 
     // --- readout -------------------------------------------------
     this.readout = el('div', {class: 'flir-seq-readout'});
@@ -1324,22 +1368,26 @@
    * its temperature -- because the pointer alone makes it unusable without a
    * mouse and impossible to set precisely.
    */
-  Viewer.prototype.buildHandle = function (edge) {
+  Viewer.prototype.buildHandle = function (edge, kind) {
     const self = this;
+    const scale = kind === 'scale';
     const label = el('span', {class: 'flir-seq-colorbar-handle-label'});
     const root = el('div', {
-      class: 'flir-seq-colorbar-handle flir-seq-colorbar-handle-' + edge,
+      class: 'flir-seq-colorbar-handle flir-seq-' + kind + '-handle-' + edge,
       role: 'slider', tabindex: 0,
-      'aria-label': this.t(edge === 'hi' ? 'filterHigh' : 'filterLow'),
+      'aria-label': this.t((scale ? 'scale' : 'filter') + (edge === 'hi' ? 'High' : 'Low')),
     }, [label]);
-    const handle = {root, label, edge};
+    const handle = {root, label, edge, kind};
 
+    const trackDomain = () => (scale ? self.scaleDomain() : {lo: self.rangeLo, hi: self.rangeHi});
     const valueAt = (clientY) => {
-      const rect = self.barTrack.getBoundingClientRect();
+      const rect = (scale ? self.scaleTrack : self.barTrack).getBoundingClientRect();
       if (!rect.height) return null;
+      const domain = trackDomain();
       const t = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
-      return self.rangeHi - t * (self.rangeHi - self.rangeLo); // the bar runs hot to cold
+      return domain.hi - t * (domain.hi - domain.lo); // the bars run hot to cold
     };
+    const move = (v) => (scale ? self.moveScaleEdge(edge, v) : self.moveFilterEdge(edge, v));
 
     let dragging = false;
     root.addEventListener('pointerdown', (ev) => {
@@ -1351,7 +1399,7 @@
     root.addEventListener('pointermove', (ev) => {
       if (!dragging) return;
       const v = valueAt(ev.clientY);
-      if (v !== null) self.moveFilterEdge(edge, v);
+      if (v !== null) move(v);
     });
     const stop = (ev) => {
       dragging = false;
@@ -1365,15 +1413,15 @@
     root.addEventListener('pointercancel', stop);
 
     root.addEventListener('keydown', (ev) => {
-      const span = self.rangeHi - self.rangeLo;
-      const step = (ev.shiftKey ? 0.1 : 0.01) * span;
-      const filter = self.filterBounds();
+      const domain = trackDomain();
+      const step = (ev.shiftKey ? 0.1 : 0.01) * (domain.hi - domain.lo);
+      const from = scale ? {lo: self.rangeLo, hi: self.rangeHi} : self.filterBounds();
       let next = null;
-      if (ev.key === 'ArrowUp' || ev.key === 'ArrowRight') next = filter[edge] + step;
-      else if (ev.key === 'ArrowDown' || ev.key === 'ArrowLeft') next = filter[edge] - step;
-      else if (ev.key === 'Home') next = self.rangeHi;
-      else if (ev.key === 'End') next = self.rangeLo;
-      else if (ev.key === 'Escape') {
+      if (ev.key === 'ArrowUp' || ev.key === 'ArrowRight') next = from[edge] + step;
+      else if (ev.key === 'ArrowDown' || ev.key === 'ArrowLeft') next = from[edge] - step;
+      else if (ev.key === 'Home') next = domain.hi;
+      else if (ev.key === 'End') next = domain.lo;
+      else if (ev.key === 'Escape' && !scale) {
         self.filter = null;
         self.paint();
         ev.preventDefault();
@@ -1381,10 +1429,49 @@
       }
       if (next === null) return;
       ev.preventDefault();
-      self.moveFilterEdge(edge, next);
+      move(next);
     });
 
     return handle;
+  };
+
+  /**
+   * What the left-hand bar spans: the frame's own data, widened to keep the
+   * scale handles reachable when the scale is set outside it, plus a little
+   * headroom so neither handle is pinned against an end.
+   */
+  Viewer.prototype.scaleDomain = function () {
+    const stats = this.pixelCache.stats;
+    let lo = this.rangeLo, hi = this.rangeHi;
+    if (stats) {
+      lo = Math.min(lo, this.value(stats.min));
+      hi = Math.max(hi, this.value(stats.max));
+    }
+    if (!isFinite(lo) || !isFinite(hi) || !(hi > lo)) return {lo: 0, hi: 1};
+    const pad = (hi - lo) * 0.02;
+    return {lo: lo - pad, hi: hi + pad};
+  };
+
+  /** The scale recorded by the camera, or null when the file carries none. */
+  Viewer.prototype.cameraScale = function () {
+    return cameraScale(this.frames[0].info, this.converter);
+  };
+
+  Viewer.prototype.moveScaleEdge = function (edge, value) {
+    const domain = this.scaleDomain();
+    const v = Math.min(domain.hi, Math.max(domain.lo, value));
+    const least = (domain.hi - domain.lo) * 0.01; // never collapse the scale
+    let lo = this.rangeLo, hi = this.rangeHi;
+    if (edge === 'hi') hi = Math.max(v, lo + least);
+    else lo = Math.min(v, hi - least);
+    this.manualLo = lo;
+    this.manualHi = hi;
+    this.rangeMode = 'manual';
+    this.rangeSelect.value = 'manual';
+    this.manualLoInput.value = lo.toFixed(this.cfg.decimals);
+    this.manualHiInput.value = hi.toFixed(this.cfg.decimals);
+    this.syncRangeInputs();
+    this.scheduleRepaint();
   };
 
   /** The window in effect, falling back to the whole colour bar. */
@@ -1439,6 +1526,18 @@
     }
     this.colorbar.classList.toggle('flir-seq-colorbar-filtered', Boolean(this.filter));
     this.filterReset.disabled = !this.filter;
+
+    const domain = this.scaleDomain();
+    const scalePos = (v) => Math.min(100, Math.max(0,
+      (1 - (v - domain.lo) / (domain.hi - domain.lo)) * 100));
+    for (const [handle, v] of [[this.scaleHandleHi, this.rangeHi], [this.scaleHandleLo, this.rangeLo]]) {
+      handle.root.style.top = scalePos(v) + '%';
+      handle.label.textContent = this.formatScale(v);
+      handle.root.setAttribute('aria-valuemin', domain.lo.toFixed(this.cfg.decimals));
+      handle.root.setAttribute('aria-valuemax', domain.hi.toFixed(this.cfg.decimals));
+      handle.root.setAttribute('aria-valuenow', v.toFixed(this.cfg.decimals));
+      handle.root.setAttribute('aria-valuetext', this.formatScale(v));
+    }
   };
 
   Viewer.prototype.syncRangeInputs = function () {
@@ -1538,6 +1637,10 @@
     if (this.rangeMode === 'manual' && this.manualLo !== null) {
       lo = this.manualLo;
       hi = this.manualHi;
+    } else if (this.rangeMode === 'camera') {
+      const camera = this.cameraScale();
+      lo = camera ? camera.lo : this.value(stats.min);
+      hi = camera ? camera.hi : this.value(stats.max);
     } else if (this.rangeMode === 'sequence') {
       const r = this.sequenceRange();
       lo = this.value(r.min);
@@ -1659,6 +1762,38 @@
     ctx.drawImage(tmp, 0, 0, 16, 256);
     this.barHi.textContent = this.formatScale(this.rangeHi);
     this.barLo.textContent = this.formatScale(this.rangeLo);
+    this.paintScalebar();
+  };
+
+  /**
+   * The left bar: the frame's data range run through the colour scale, so the
+   * saturated bands at top and bottom show what the scale is clipping.
+   */
+  Viewer.prototype.paintScalebar = function () {
+    const domain = this.scaleDomain();
+    const span = this.rangeHi - this.rangeLo;
+    const image = document.createElement('canvas');
+    image.width = 1;
+    image.height = 256;
+    const src = image.getContext('2d');
+    const data = src.createImageData(1, 256);
+    for (let y = 0; y < 256; y++) {
+      const t = domain.hi - (y / 255) * (domain.hi - domain.lo);
+      const k = Math.round((t - this.rangeLo) / span * 255);
+      const c = (k < 0 ? 0 : (k > 255 ? 255 : k)) * 3;
+      const o = y * 4;
+      data.data[o] = this.palette[c];
+      data.data[o + 1] = this.palette[c + 1];
+      data.data[o + 2] = this.palette[c + 2];
+      data.data[o + 3] = 255;
+    }
+    src.putImageData(data, 0, 0);
+    const ctx = this.scaleCanvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, 16, 256);
+    ctx.drawImage(image, 0, 0, 16, 256);
+    this.scaleTopLabel.textContent = this.formatScale(domain.hi);
+    this.scaleBottomLabel.textContent = this.formatScale(domain.lo);
   };
 
   Viewer.prototype.formatScale = function (v) {
@@ -1967,6 +2102,11 @@
         ? (info.cameraTempRangeMinK - K0).toFixed(1) + ' … ' + (info.cameraTempRangeMaxK - K0).toFixed(1) + ' °C' : ''],
       [t('metaContainer'), frame.format],
     ];
+    const camera = this.cameraScale();
+    if (camera) {
+      rows.splice(rows.length - 1, 0,
+        [t('metaCameraScale'), this.formatScale(camera.lo) + ' … ' + this.formatScale(camera.hi)]);
+    }
     if (info.pixelValueType !== undefined &&
         (info.pixelValueType !== VERIFIED_PIXEL_VALUE_TYPE || info.pixelValueUnit)) {
       rows.push([t('metaPixelValues'), info.pixelValueType + ' / ' + info.pixelValueUnit]);
@@ -2124,6 +2264,7 @@
     atmosphericTransmission,
     buildPalette,
     hasAtmTransmission,
+    cameraScale,
     MODELS,
     MODEL_FLIR,
     MODEL_THERMIMAGE,

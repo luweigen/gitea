@@ -20,7 +20,13 @@
 * **测温模型可选**：下拉框在 **FLIR**（默认，与 FLIR Thermal Studio 读数一致）与
   **Thermimage / flirpy** 两种约定之间切换，切换后整幅图与所有测温点立即重算。想跟已有的
   Thermimage/flirpy 流水线对表时选后者。
-* **温标模式**：本帧自动 / 全序列自动 / 手动上下限。
+* **色标控制**：图像左侧一条竖条，把整帧数据经当前色标映射后画出来——上下两端的纯色带
+  就是被色标**钳位**的那部分像素（白热调色板下即纯白与纯黑），中间是被压缩到选定区间的
+  渐变。两个可拖拽滑块直接设定色标上下限，拖动即切到「手动」；与右侧的温区限定滑块操作
+  方式一致（方向键微调、Shift 粗调、Home/End 到端点）。
+* **温标模式**：**文件记录（默认）** / 本帧自动 / 全序列自动 / 手动上下限。「文件记录」
+  取相机写在文件里的 `RawValueMedian ± RawValueRange/2`，**与 FLIR Thermal Studio 打开
+  录像时的默认区间一致**（实测两段样本都是 −9.1 … −4.2 °C）；文件没记录时回落到本帧自动。
 * **温区限定**：色条上有两个可拖拽的限位滑块，各自带温度标签，图像**只绘制落在这个
   温区内的像素**，其余留空透明，用来把某一温度带（渗漏、管线、积水面）从背景里单独
   拎出来。滑块可用键盘操作（方向键微调、按住 Shift 粗调、Home/End 到端点、Esc 复位），
@@ -92,7 +98,7 @@ gitea manager reload-templates        # 或直接重启 Gitea
 | `maxAutoLoadBytes` | 64 MiB | 超过此大小先询问再下载——整个文件要读进内存 |
 | `maxLoadBytes` | 1 GiB | 硬上限，超过则拒绝加载 |
 | `defaultPalette` | `'iron'` | `iron` / `rainbow` / `white-hot` / `black-hot` / `arctic` |
-| `defaultRangeMode` | `'frame'` | `frame` 本帧自动 / `sequence` 全序列自动 / `manual` 手动 |
+| `defaultRangeMode` | `'camera'` | `camera` 文件记录 / `frame` 本帧自动 / `sequence` 全序列自动 / `manual` 手动 |
 | `defaultModel` | `'flir'` | `flir` 与 Thermal Studio 一致 / `thermimage` 跟随 Thermimage/flirpy |
 | `playbackFps` | `6` | 播放帧率 |
 | `decimals` | `1` | 温度显示的小数位数 |

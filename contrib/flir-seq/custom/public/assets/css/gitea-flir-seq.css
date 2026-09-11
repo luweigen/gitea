@@ -221,6 +221,13 @@
   outline-offset: 3px;
 }
 
+/* the left bar mirrors the right one; only the label side flips, so that both
+   sets of labels point into the image instead of off the edge of the viewer */
+.flir-seq-scalebar .flir-seq-colorbar-handle-label {
+  right: auto;
+  left: calc(100% + 6px);
+}
+
 .flir-seq-colorbar-handle-label {
   position: absolute;
   right: calc(100% + 6px);

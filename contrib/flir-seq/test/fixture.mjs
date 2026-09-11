@@ -17,6 +17,9 @@ export const FIXTURE = {
   estAtmTransmission: 0, // 0 means "estimate it", which is what real files hold
   pixelValueType: 1, // sensor counts, the only kind verified against real files
   pixelValueUnit: 0,
+  // the display scale the camera recorded: median +/- range/2 in raw counts
+  rawValueMedian: 9734,
+  rawValueRange: 524,
   planckR1: 14772.65,
   planckR2: 0.0137111,
   planckB: 1393.8,
@@ -52,7 +55,9 @@ export function rawAt(x, y, width, height, frame) {
 export function buildFixture({width = 8, height = 4, frames = 3, tz = 0,
   estAtmTransmission = FIXTURE.estAtmTransmission,
   pixelValueType = FIXTURE.pixelValueType,
-  pixelValueUnit = FIXTURE.pixelValueUnit} = {}) {
+  pixelValueUnit = FIXTURE.pixelValueUnit,
+  rawValueMedian = FIXTURE.rawValueMedian,
+  rawValueRange = FIXTURE.rawValueRange} = {}) {
   const infoSize = 0x470;
   const pixelCount = width * height;
   const rawSize = 32 + pixelCount * 2;
@@ -109,6 +114,8 @@ export function buildFixture({width = 8, height = 4, frames = 3, tz = 0,
     buf.write(FIXTURE.software, i + 0x114, 'latin1');
     buf.write(FIXTURE.lens, i + 0x170, 'latin1');
     buf.writeFloatLE(FIXTURE.fieldOfView, i + 0x1b4);
+    buf.writeInt32LE(rawValueMedian, i + 0x338);
+    buf.writeInt32LE(rawValueRange, i + 0x33c);
     buf.writeInt32LE(FIXTURE.planckO, i + 0x308);
     buf.writeFloatLE(FIXTURE.planckR2, i + 0x30c);
     buf.writeUInt32LE(FIXTURE.seconds + f, i + 0x384);

@@ -83,7 +83,7 @@
 | `0x1b4` | float | 视场角 |
 | `0x308` | int32 | PlanckO（**有符号**，实测为负） |
 | `0x30c` | float | PlanckR2 |
-| `0x338` / `0x33c` | int32 | RawValueMedian / RawValueRange |
+| `0x338` / `0x33c` | int32 | RawValueMedian / RawValueRange，即文件记录的显示温标，见下节 |
 | `0x384` | uint32 | 采集时间，Unix 秒 |
 | `0x388` | uint32 | 低 16 位为毫秒 |
 | `0x38c` | int16 | 时区偏移，分钟 |
@@ -114,6 +114,28 @@ calculated, user must supply it”。
 在相机里手动设过大气透过率的文件，若一律走估算公式，算出的温度会与 FLIR 官方工具不一致。
 查看器按此实现，并且只接受落在 (0, 1] 区间的值——透过率不可能在这个区间之外，这样即使某台
 相机在这个偏移放了别的东西也不会被误用。手里两个 A655sc 样本该字段都是 0.0，正是“未设定”。
+
+### 文件记录的显示温标
+
+`0x338` / `0x33c` 的 RawValueMedian 与 RawValueRange 不是统计量，而是**相机记下的显示
+温标**。**FLIR Thermal Studio 2.0.84 打开录像时用的正是这个窗口**：
+
+```
+rawLo = RawValueMedian − RawValueRange / 2
+rawHi = RawValueMedian + RawValueRange / 2
+```
+
+再用当前的目标参数换算成温度。手头两段录像的这两个字段完全相同（`9734 ± 262`），所以
+Thermal Studio 在两段里都开在同一个区间——这正是发现它的线索：像素统计量不可能在两段
+不同的录像里给出同一个默认值。
+
+核验：`9734 ± 262` → raw [9472, 9996] → **−9.10 … −4.25 °C**，与 Thermal Studio 显示的
+−9.1 … −4.2 在 0.1 °C 舍入内一致。反过来把 −4.2 / −9.1 反解成原始计数得到 [9471.8,
+10001.2]，中点 9736.5、跨度 529.4，同样落在 9734 ± 262 的舍入范围内。
+
+查看器据此把「文件记录」设为默认温标（配置项 `defaultRangeMode: "camera"`）；文件里没有
+这两个字段时回落到「本帧自动」。`test/truth.mjs` 的 `CAMERA_SCALE` 记着 Thermal Studio
+的这个区间，`test/run.mjs` 对每个能匹配上的录像逐一断言。
 
 ### 像素值类型
 

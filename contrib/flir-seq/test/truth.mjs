@@ -18,6 +18,14 @@
 /** Thermal Studio prints one decimal, so anything closer than this agrees. */
 export const DISPLAY_ROUNDING = 0.05;
 
+/**
+ * The colour scale Thermal Studio opens both recordings on, as [low, high].
+ * It is identical for the two because it comes out of the file rather than the
+ * pixels: RawValueMedian +/- RawValueRange/2, which both recordings carry as
+ * 9734 +/- 262.
+ */
+export const CAMERA_SCALE = [-9.1, -4.2];
+
 export const TRUTH = {
   // key: the distinctive part of the file name, matched as a substring
   '185820659': {

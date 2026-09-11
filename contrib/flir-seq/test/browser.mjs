@@ -91,6 +91,18 @@ try {
     (await page.locator('.flir-seq-meta').textContent()).includes(parsed.frames[0].info.cameraModel),
     parsed.frames[0].info.cameraModel);
 
+  // the viewer opens on the scale the camera recorded, the way Thermal Studio does
+  const opening = await page.evaluate(() => {
+    const v = document.querySelector('.flir-seq-mount').giteaFlirSeqViewer;
+    return {mode: v.rangeMode, select: v.rangeSelect.value, camera: v.cameraScale(),
+      lo: v.rangeLo, hi: v.rangeHi};
+  });
+  const expectedCamera = flir.cameraScale(parsed.frames[0].info, converter);
+  check('it opens on the scale recorded in the file',
+    opening.mode === 'camera' && opening.select === 'camera' &&
+    Math.abs(opening.lo - expectedCamera.lo) < 1e-9 && Math.abs(opening.hi - expectedCamera.hi) < 1e-9,
+    opening.mode + ' ' + opening.lo.toFixed(2) + ' .. ' + opening.hi.toFixed(2));
+
   // the canvas must actually have colour in it, not stay blank
   const painted = await page.evaluate(() => {
     const canvas = document.querySelector('.flir-seq-canvas');
@@ -111,7 +123,8 @@ try {
     }
     return {lo: converter.toTemp(min).toFixed(1), hi: converter.toTemp(max).toFixed(1)};
   })();
-  const colorbarLabels = async () => (await page.locator('.flir-seq-colorbar-label').allTextContents()).join(' / ');
+  const colorbarLabels = async () => (await page.locator('.flir-seq-filterbar .flir-seq-colorbar-label').allTextContents()).join(' / ');
+  await page.locator('.flir-seq-toolbar select').nth(1).selectOption('frame');
   check('colour bar spans the frame extremes',
     (await colorbarLabels()) === frameTemps.hi + '°C / ' + frameTemps.lo + '°C',
     await colorbarLabels());
@@ -278,15 +291,99 @@ try {
     }
     return {opaque, transparent, violations, filter: bounds};
   });
+  // --- the left-hand scale bar ------------------------------------------
+  //
+  // It sets where the palette starts and stops; everything outside is painted
+  // with the end colours, which is the contract asserted below.
+  check('the scale bar is to the left of the image',
+    await page.evaluate(() => {
+      const kids = Array.from(document.querySelector('.flir-seq-stage').children);
+      return kids.indexOf(document.querySelector('.flir-seq-scalebar')) <
+        kids.indexOf(document.querySelector('.flir-seq-canvas-wrap')) &&
+        kids.indexOf(document.querySelector('.flir-seq-canvas-wrap')) <
+        kids.indexOf(document.querySelector('.flir-seq-filterbar'));
+    }));
+  // rangeLo/rangeHi are only updated by the repaint, which is coalesced into an
+  // animation frame, so state has to be read after one has run
+  const nextFrame = () => page.evaluate(() => new Promise(requestAnimationFrame));
+  const scaleState = () => page.evaluate(() => {
+    const v = document.querySelector('.flir-seq-mount').giteaFlirSeqViewer;
+    return {mode: v.rangeMode, lo: v.rangeLo, hi: v.rangeHi, domain: v.scaleDomain(),
+      hiLabel: v.scaleHandleHi.label.textContent, loLabel: v.scaleHandleLo.label.textContent};
+  });
+  const scaleStart = await scaleState();
+  check('its handles are labelled with the scale',
+    scaleStart.hiLabel === scaleStart.hi.toFixed(1) + '°C' && scaleStart.loLabel === scaleStart.lo.toFixed(1) + '°C',
+    scaleStart.loLabel + ' .. ' + scaleStart.hiLabel);
+  check('its domain covers the frame', scaleStart.domain.lo < scaleStart.lo + 1e-9 &&
+    scaleStart.domain.hi > scaleStart.hi - 1e-9, JSON.stringify(scaleStart.domain));
+
+  const scaleTrack = await page.locator('.flir-seq-scalebar .flir-seq-colorbar-track').boundingBox();
+  const scaleGrab = await page.locator('.flir-seq-scale-handle-hi').boundingBox();
+  await page.mouse.move(scaleGrab.x + scaleGrab.width / 2, scaleGrab.y + scaleGrab.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(scaleTrack.x + scaleTrack.width / 2, scaleTrack.y + scaleTrack.height * 0.45, {steps: 6});
+  await page.mouse.up();
+  await nextFrame();
+  const scaleMoved = await scaleState();
+  check('dragging the scale switches to manual', scaleMoved.mode === 'manual', scaleMoved.mode);
+  check('the scale top follows the handle', scaleMoved.hi < scaleStart.hi - 0.5,
+    scaleStart.hi.toFixed(2) + ' -> ' + scaleMoved.hi.toFixed(2));
+  check('the scale bottom is untouched', Math.abs(scaleMoved.lo - scaleStart.lo) < 1e-9);
+  check('the manual inputs follow the handle',
+    Math.abs(parseFloat(await page.locator('.flir-seq-manual input').last().inputValue()) - scaleMoved.hi) <= 0.05,
+    await page.locator('.flir-seq-manual input').last().inputValue());
+
+  // everything above the new top has to be painted with the topmost colour
+  const clamped = await page.evaluate((bounds) => {
+    const viewer = document.querySelector('.flir-seq-mount').giteaFlirSeqViewer;
+    const canvas = viewer.imgCanvas;
+    const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    const pixels = viewer.pixelCache.pixels;
+    const top = [viewer.palette[765], viewer.palette[766], viewer.palette[767]];
+    const bottom = [viewer.palette[0], viewer.palette[1], viewer.palette[2]];
+    let above = 0, aboveWrong = 0, below = 0, belowWrong = 0;
+    for (let i = 0; i < pixels.length; i++) {
+      const v = viewer.value(pixels[i]);
+      const rgb = [data[i * 4], data[i * 4 + 1], data[i * 4 + 2]];
+      if (v > bounds.hi) {
+        above++;
+        if (rgb.join() !== top.join()) aboveWrong++;
+      } else if (v < bounds.lo) {
+        below++;
+        if (rgb.join() !== bottom.join()) belowWrong++;
+      }
+    }
+    return {above, aboveWrong, below, belowWrong, top, bottom};
+  }, {lo: scaleMoved.lo, hi: scaleMoved.hi});
+  check('pixels above the scale exist and are all the top colour',
+    clamped.above > 0 && clamped.aboveWrong === 0,
+    clamped.above + ' pixels, ' + clamped.aboveWrong + ' wrong, top = ' + clamped.top.join(','));
+  check('pixels below the scale are all the bottom colour', clamped.belowWrong === 0,
+    clamped.below + ' pixels, ' + clamped.belowWrong + ' wrong');
+
+  // keyboard, and putting the scale back
+  await page.locator('.flir-seq-scale-handle-lo').focus();
+  await page.keyboard.press('ArrowUp');
+  await nextFrame();
+  const keyed = await scaleState();
+  check('arrow keys move the scale bottom', keyed.lo > scaleMoved.lo,
+    scaleMoved.lo.toFixed(2) + ' -> ' + keyed.lo.toFixed(2));
+  await page.locator('.flir-seq-toolbar select').nth(1).selectOption('frame');
+  const restored = await scaleState();
+  check('the scale dropdown takes it back',
+    restored.mode === 'frame' && Math.abs(restored.hi - scaleStart.hi) < 1e-9 &&
+    Math.abs(restored.lo - scaleStart.lo) < 1e-9, JSON.stringify([restored.lo, restored.hi]));
+
   // where these two sit is a deliberate choice, so it is asserted rather than
   // left to drift back: the reset belongs with the handles it clears, and the
   // hover hint with the spot meters it explains
   check('"show all" sits on the colour bar, not in the toolbar',
-    (await page.locator('.flir-seq-colorbar > .flir-seq-filter-reset').count()) === 1 &&
+    (await page.locator('.flir-seq-filterbar > .flir-seq-filter-reset').count()) === 1 &&
     (await page.locator('.flir-seq-toolbar .flir-seq-filter-reset').count()) === 0);
   check('"show all" is above the scale',
     await page.evaluate(() => {
-      const bar = document.querySelector('.flir-seq-colorbar');
+      const bar = document.querySelector('.flir-seq-filterbar');
       return bar.firstElementChild.classList.contains('flir-seq-filter-reset');
     }));
   check('the hover hint follows the frame controls',
@@ -302,18 +399,18 @@ try {
     audit.filter === null && audit.transparent === 0 && audit.violations === 0,
     JSON.stringify(audit));
   const handleLabels = async () => ({
-    hi: (await page.locator('.flir-seq-colorbar-handle-hi .flir-seq-colorbar-handle-label').textContent()).trim(),
-    lo: (await page.locator('.flir-seq-colorbar-handle-lo .flir-seq-colorbar-handle-label').textContent()).trim(),
+    hi: (await page.locator('.flir-seq-filter-handle-hi .flir-seq-colorbar-handle-label').textContent()).trim(),
+    lo: (await page.locator('.flir-seq-filter-handle-lo .flir-seq-colorbar-handle-label').textContent()).trim(),
   });
-  const barLabels = await page.locator('.flir-seq-colorbar-label').allTextContents();
+  const barLabels = await page.locator('.flir-seq-filterbar .flir-seq-colorbar-label').allTextContents();
   const startLabels = await handleLabels();
   check('the handle labels start at the ends of the scale',
     startLabels.hi === barLabels[0].trim() && startLabels.lo === barLabels[1].trim(),
     JSON.stringify(startLabels) + ' vs ' + JSON.stringify(barLabels));
   check('the reset button starts disabled', await page.locator('.flir-seq-filter-reset').isDisabled());
 
-  const track = await page.locator('.flir-seq-colorbar-track').boundingBox();
-  const grab = await page.locator('.flir-seq-colorbar-handle-hi').boundingBox();
+  const track = await page.locator('.flir-seq-filterbar .flir-seq-colorbar-track').boundingBox();
+  const grab = await page.locator('.flir-seq-filter-handle-hi').boundingBox();
   await page.mouse.move(grab.x + grab.width / 2, grab.y + grab.height / 2);
   await page.mouse.down();
   await page.mouse.move(track.x + track.width / 2, track.y + track.height * 0.4, {steps: 6});
@@ -361,7 +458,7 @@ try {
     filtered.hottestShown === null ? 'no visible pixel' : filtered.hottestShown.toFixed(2));
 
   // the handles are real sliders, so the keyboard has to work too
-  await page.locator('.flir-seq-colorbar-handle-lo').focus();
+  await page.locator('.flir-seq-filter-handle-lo').focus();
   await page.keyboard.press('ArrowUp');
   await page.keyboard.press('ArrowUp');
   const afterKeys = await page.evaluate(() =>
