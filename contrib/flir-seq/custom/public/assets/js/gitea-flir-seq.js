@@ -1421,20 +1421,26 @@
   };
 
   /**
-   * What the left-hand bar spans: the frame's own data, widened to keep the
-   * scale handles reachable when the scale is set outside it, plus a little
-   * headroom so neither handle is pinned against an end.
+   * What the bar spans: exactly the coldest and hottest pixel of the frame.
+   * No headroom, and the current scale is deliberately not folded in -- the
+   * ends of the bar are the data, so a handle cannot be put anywhere that is
+   * not a temperature actually present in the image, and the mapping does not
+   * shift underneath a handle being dragged.
    */
   Viewer.prototype.scaleDomain = function () {
     const stats = this.pixelCache.stats;
-    let lo = this.rangeLo, hi = this.rangeHi;
-    if (stats) {
-      lo = Math.min(lo, this.value(stats.min));
-      hi = Math.max(hi, this.value(stats.max));
+    if (!stats) return {lo: this.rangeLo, hi: this.rangeHi};
+    let lo = this.value(stats.min);
+    let hi = this.value(stats.max);
+    if (!isFinite(lo) || !isFinite(hi)) return {lo: 0, hi: 1};
+    if (!(hi > lo)) {
+      // a frame of one single value: give the bar a height so that placing a
+      // handle on it is not a division by zero
+      const eps = Math.max(Math.abs(hi), 1) * 1e-3;
+      lo -= eps;
+      hi += eps;
     }
-    if (!isFinite(lo) || !isFinite(hi) || !(hi > lo)) return {lo: 0, hi: 1};
-    const pad = (hi - lo) * 0.02;
-    return {lo: lo - pad, hi: hi + pad};
+    return {lo, hi};
   };
 
   /** The scale recorded by the camera, or null when the file carries none. */

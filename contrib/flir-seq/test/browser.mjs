@@ -321,8 +321,18 @@ try {
   check('its handles are labelled with the scale',
     scaleStart.hiLabel === scaleStart.hi.toFixed(1) + '°C' && scaleStart.loLabel === scaleStart.lo.toFixed(1) + '°C',
     scaleStart.loLabel + ' .. ' + scaleStart.hiLabel);
-  check('its domain covers the frame', scaleStart.domain.lo < scaleStart.lo + 1e-9 &&
-    scaleStart.domain.hi > scaleStart.hi - 1e-9, JSON.stringify(scaleStart.domain));
+  const frameExtremes = await page.evaluate(() => {
+    const v = document.querySelector('.flir-seq-mount').giteaFlirSeqViewer;
+    return {lo: v.value(v.pixelCache.stats.min), hi: v.value(v.pixelCache.stats.max)};
+  });
+  check('the bar spans exactly the frame, with no headroom',
+    scaleStart.domain.lo === frameExtremes.lo && scaleStart.domain.hi === frameExtremes.hi,
+    JSON.stringify(scaleStart.domain) + ' vs ' + JSON.stringify(frameExtremes));
+  const endLabels = await page.locator('.flir-seq-colorbar-label').allTextContents();
+  check('its end labels are the frame extremes',
+    endLabels[0].trim() === frameExtremes.hi.toFixed(1) + '°C' &&
+    endLabels[1].trim() === frameExtremes.lo.toFixed(1) + '°C',
+    endLabels.join(' / '));
 
   const scaleTrack = await page.locator('.flir-seq-colorbar-track').boundingBox();
   const scaleGrab = await page.locator('.flir-seq-scale-handle-hi').boundingBox();
@@ -348,6 +358,43 @@ try {
     Math.abs(parseFloat(await page.locator('.flir-seq-manual input').last().inputValue()) - scaleMoved.hi) <= 0.05,
     await page.locator('.flir-seq-manual input').last().inputValue());
 
+  // a handle must not be draggable past the hottest or coldest pixel there is
+  const dragTo = async (selector, fraction) => {
+    const box = await page.locator(selector).boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(scaleTrack.x + scaleTrack.width / 2,
+      scaleTrack.y + scaleTrack.height * fraction, {steps: 4});
+    await page.mouse.up();
+    await nextFrame();
+    return scaleState();
+  };
+  const pushedUp = await dragTo('.flir-seq-scale-handle-hi', -0.6); // well above the track
+  check('the top handle stops at the hottest pixel',
+    pushedUp.hi === frameExtremes.hi, pushedUp.hi.toFixed(4) + ' vs ' + frameExtremes.hi.toFixed(4));
+  const pushedDown = await dragTo('.flir-seq-scale-handle-lo', 1.6); // well below it
+  check('the bottom handle stops at the coldest pixel',
+    pushedDown.lo === frameExtremes.lo, pushedDown.lo.toFixed(4) + ' vs ' + frameExtremes.lo.toFixed(4));
+  check('the domain did not grow to follow them',
+    pushedDown.domain.lo === frameExtremes.lo && pushedDown.domain.hi === frameExtremes.hi,
+    JSON.stringify(pushedDown.domain));
+
+  // Home and End are the keyboard way to the same two limits
+  await page.locator('.flir-seq-scale-handle-lo').focus();
+  await page.keyboard.press('Home');
+  await nextFrame();
+  await page.locator('.flir-seq-scale-handle-hi').focus();
+  await page.keyboard.press('End');
+  await nextFrame();
+  const collapsed = await scaleState();
+  check('Home and End cannot push a handle past the data either',
+    collapsed.lo >= frameExtremes.lo - 1e-9 && collapsed.hi <= frameExtremes.hi + 1e-9,
+    collapsed.lo.toFixed(2) + ' .. ' + collapsed.hi.toFixed(2));
+
+  // put the scale back to a window inside the data before auditing the clamping
+  await page.locator('.flir-seq-scale-camera').click();
+  await nextFrame();
+  const audited = await scaleState();
   // everything above the new top has to be painted with the topmost colour
   const clamped = await page.evaluate((bounds) => {
     const viewer = document.querySelector('.flir-seq-mount').giteaFlirSeqViewer;
@@ -369,7 +416,7 @@ try {
       }
     }
     return {above, aboveWrong, below, belowWrong, top, bottom};
-  }, {lo: scaleMoved.lo, hi: scaleMoved.hi});
+  }, {lo: audited.lo, hi: audited.hi});
   check('pixels above the scale exist and are all the top colour',
     clamped.above > 0 && clamped.aboveWrong === 0,
     clamped.above + ' pixels, ' + clamped.aboveWrong + ' wrong, top = ' + clamped.top.join(','));
