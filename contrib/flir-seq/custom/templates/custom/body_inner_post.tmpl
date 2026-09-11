@@ -1,0 +1,38 @@
+{{/* flir-seq:begin -- managed by contrib/flir-seq/install.sh.
+     Everything between this line and the closing marker below is replaced on
+     the next run, so keep any customization of your own outside of it.
+     (Do not repeat the closing marker's text anywhere in here: install.sh
+     deletes the block with a line range and would stop at the first match.)
+
+     contrib/flir-seq: displays FLIR radiometric sequences (.seq/.fff) found in
+     a repository and reads out the temperature of any picked pixel. This file
+     is rendered just before the end of the page container on every page, see
+     templates/base/footer.tmpl.
+
+     body_inner_post was picked because no other contrib/ customization writes
+     to it; the marker block above still lets several of them share the file if
+     that ever changes. The script only touches a file view whose file name
+     matches giteaFlirSeqConfig.extensions, so every other page is untouched.
+
+     The "v" below is the cache buster and install.sh stamps it on every run.
+     Gitea's own {{AssetVersion}} cannot be used here: it only changes when
+     Gitea itself is upgraded, so an updated gitea-flir-seq.js would keep being
+     served from the browser cache for STATIC_CACHE_TIME (6h by default). If
+     you edit the files by hand, change this string by hand too. */}}
+{{$v := "__FLIR_SEQ_VERSION__"}}
+<link rel="stylesheet" href="{{AssetUrlPrefix}}/css/gitea-flir-seq.css?v={{$v}}">
+<script>
+	/* Optional. Delete a line to take its built-in default, see DEFAULTS in
+	   gitea-flir-seq.js. Must be set before the script below runs. */
+	window.giteaFlirSeqConfig = {
+		extensions: [".seq", ".fff"], // file names that get a viewer
+		maxAutoLoadBytes: 64 * 1024 * 1024, // above this, ask before downloading
+		defaultPalette: "iron", // iron | rainbow | white-hot | black-hot | arctic
+		defaultRangeMode: "frame", // frame | sequence | manual
+		playbackFps: 6,
+		decimals: 1,
+		lang: null, // null follows Gitea's own language; "en" / "zh-CN" / "fi-FI" forces one
+	};
+</script>
+<script src="{{AssetUrlPrefix}}/js/gitea-flir-seq.js?v={{$v}}" defer></script>
+{{/* flir-seq:end */}}
