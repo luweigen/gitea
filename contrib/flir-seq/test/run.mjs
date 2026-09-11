@@ -7,15 +7,15 @@
 // that a mistake in the viewer's pre-computed attenuation terms shows up.
 //
 // Usage:
-//   node run.mjs                 -- synthetic fixture only
-//   node run.mjs a.seq b.seq     -- also dump a summary of real sequences, and
-//                                   check them against FLIR Thermal Studio for
-//                                   the files truth.mjs knows
+//   node run.mjs                 -- the synthetic fixture, then every recording
+//                                   in ./samples checked against the FLIR
+//                                   Thermal Studio figures in truth.mjs
+//   node run.mjs a.seq b.seq     -- those recordings instead of the bundled ones
 
 import {basename} from 'node:path';
 import {readFileSync} from 'node:fs';
-import {loadFlirSeq, referenceTemp, thermimageTemp} from './load.mjs';
-import {truthFor, DISPLAY_ROUNDING, CAMERA_SCALE} from './truth.mjs';
+import {loadFlirSeq, referenceTemp, thermimageTemp, samplePaths} from './load.mjs';
+import {truthFor, displaysTheSame, CAMERA_SCALE} from './truth.mjs';
 import {FIXTURE, buildFixture, toArrayBuffer, rawAt} from './fixture.mjs';
 
 const flir = loadFlirSeq();
@@ -268,7 +268,9 @@ check('translator ignores extra arguments', flir.makeTranslator('en')('loadAnywa
 // --- real files -----------------------------------------------------------
 
 let thermimageOff = 0, thermimageTotal = 0, thermimageWorst = 0;
-for (const path of process.argv.slice(2)) {
+const recordings = samplePaths(process.argv.slice(2));
+if (!recordings.length) console.log('\nno recordings to check (nothing in ./samples and none given)');
+for (const path of recordings) {
   console.log('\n' + basename(path));
   const truth = truthFor(path);
   const buf = readFileSync(path);
@@ -315,8 +317,7 @@ for (const path of process.argv.slice(2)) {
         '  (median ' + frame.info.rawValueMedian + ' +/- ' + frame.info.rawValueRange / 2 + ')');
       if (truth) {
         check('the recorded scale matches the one Thermal Studio opens on',
-          Math.abs(scale.lo - CAMERA_SCALE[0]) <= DISPLAY_ROUNDING &&
-          Math.abs(scale.hi - CAMERA_SCALE[1]) <= DISPLAY_ROUNDING,
+          displaysTheSame(scale.lo, CAMERA_SCALE[0]) && displaysTheSame(scale.hi, CAMERA_SCALE[1]),
           scale.lo.toFixed(2) + ' .. ' + scale.hi.toFixed(2) + ' vs ' +
           CAMERA_SCALE[0].toFixed(1) + ' .. ' + CAMERA_SCALE[1].toFixed(1));
       }
@@ -329,7 +330,7 @@ for (const path of process.argv.slice(2)) {
     for (let i = 0; i < 3; i++) {
       const d = mine[i] - expected[i];
       check('frame ' + (frame.index + 1) + ' ' + labels[i] + ' matches Thermal Studio',
-        Math.abs(d) <= DISPLAY_ROUNDING,
+        displaysTheSame(mine[i], expected[i]),
         mine[i].toFixed(2) + ' vs ' + expected[i].toFixed(1) + ' (' + (d >= 0 ? '+' : '') + d.toFixed(2) + ')');
     }
     // and the other convention has to be measurably worse, or the default
@@ -338,7 +339,7 @@ for (const path of process.argv.slice(2)) {
     let tsum = 0;
     for (let raw = 0; raw < 65536; raw++) if (hist[raw]) tsum += tc.lut[raw] * hist[raw];
     const theirs = [tc.toTemp(max), tc.toTemp(min), tsum / px.length];
-    thermimageOff += theirs.filter((v, i) => Math.abs(v - expected[i]) > DISPLAY_ROUNDING).length;
+    thermimageOff += theirs.filter((v, i) => !displaysTheSame(v, expected[i])).length;
     thermimageTotal += 3;
     thermimageWorst = Math.max(thermimageWorst, ...theirs.map((v, i) => Math.abs(v - expected[i])));
   }

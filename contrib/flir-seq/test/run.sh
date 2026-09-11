@@ -4,19 +4,29 @@
 #
 # Runs the flir-seq tests. See ./README.md.
 #
-#   ./run.sh                       parser tests, then the browser test
-#   ./run.sh path/to/real.seq      also run both against a real camera file
+#   ./run.sh                       the synthetic fixture and ./samples
+#   ./run.sh path/to/other.seq     that recording instead of ./samples
+#
+# The recordings in ./samples ship with the repository, so this needs nothing
+# fetched; ./setup.sh installs playwright-core for the browser part.
 
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-echo "== parser and radiometry =="
-node run.mjs "$@"
+recordings=("$@")
+if [ ${#recordings[@]} -eq 0 ]; then
+  while IFS= read -r f; do recordings+=("$f"); done < <(find samples -name '*.seq' | sort)
+fi
+
+echo "== parser, radiometry and translations =="
+node run.mjs "${recordings[@]}"
 
 echo
-echo "== browser =="
-if [ -n "${1:-}" ]; then
-  FLIR_SEQ_SAMPLE="$1" node browser.mjs
-else
-  node browser.mjs
-fi
+echo "== browser: synthetic fixture =="
+node browser.mjs
+
+for f in "${recordings[@]}"; do
+  echo
+  echo "== browser: $(basename "$f") =="
+  FLIR_SEQ_SAMPLE="$f" node browser.mjs
+done
