@@ -41,11 +41,312 @@
     decimals: 1,
     // viewer height cap, as a fraction of the viewport height
     maxHeightVh: 0.72,
+    // 'en' | 'zh-CN' | 'fi-FI', or null to follow Gitea's own language
+    lang: null,
   };
 
   function config() {
     const user = (typeof window !== 'undefined' && window.giteaFlirSeqConfig) || {};
     return Object.assign({}, DEFAULTS, user);
+  }
+
+  // ------------------------------------------------------------------
+  // translations
+  //
+  // Gitea renders the active language into <html lang="...">, so the viewer
+  // follows the site language without any configuration. English is both the
+  // fallback and the reference: every other language must define exactly the
+  // same keys, which contrib/flir-seq/test checks.
+  //
+  // Placeholders are {0}, {1}, ... and are substituted positionally.
+  // ------------------------------------------------------------------
+
+  const LANGUAGES = {
+    'en': {
+      palette: 'Palette',
+      paletteIron: 'Iron',
+      paletteRainbow: 'Rainbow',
+      paletteWhiteHot: 'White hot',
+      paletteBlackHot: 'Black hot',
+      paletteArctic: 'Arctic',
+      scale: 'Scale',
+      scaleFrame: 'Per frame',
+      scaleSequence: 'Whole sequence',
+      scaleManual: 'Manual',
+      scaleMin: 'Min',
+      scaleMax: 'Max',
+      extremes: 'Hot/cold spot',
+      zoomIn: 'Zoom in',
+      zoomOut: 'Zoom out',
+      zoomFit: 'Fit to window',
+      play: 'Play',
+      pause: 'Pause',
+      prevFrame: 'Previous frame',
+      nextFrame: 'Next frame',
+      frameLabel: 'Frame {0} of {1}',
+      singleFrame: 'Single frame',
+      spots: 'Spot meters',
+      spotsHint: 'Click the image to add a spot meter. Drag to pan, scroll to zoom.',
+      colX: 'X',
+      colY: 'Y',
+      colRaw: 'Raw value',
+      colTemp: 'Temperature',
+      delete: 'Delete',
+      clearAll: 'Clear all',
+      noSpots: 'No spot meters yet',
+      params: 'Measurement parameters',
+      emissivity: 'Emissivity ε',
+      reflectedTemp: 'Reflected apparent temperature (°C)',
+      objectDistance: 'Object distance (m)',
+      relativeHumidity: 'Relative humidity (%)',
+      atmosphericTemp: 'Atmospheric temperature (°C)',
+      irWindowTemp: 'IR window temperature (°C)',
+      irWindowTransmission: 'IR window transmission',
+      resetParams: 'Restore camera settings',
+      planckNote: 'Planck constants: R1={0}, R2={1}, B={2}, F={3}, O={4} (from the file, not editable)',
+      fileInfo: 'File information',
+      metaFile: 'File',
+      metaFrames: 'Frames',
+      metaResolution: 'Resolution',
+      metaCamera: 'Camera',
+      metaFirmware: 'Firmware',
+      metaLens: 'Lens',
+      metaFov: 'Field of view',
+      metaCaptured: 'Captured',
+      metaFrameRate: 'Frame rate',
+      metaRange: 'Temperature range',
+      metaContainer: 'Container',
+      unknown: 'unknown',
+      exportPng: 'Export PNG',
+      exportCsv: 'Export temperature CSV',
+      readoutHint: 'Move the pointer over the image to read the temperature at that point.',
+      readout: '({0}, {1}) · {2} · {3}',
+      readoutRaw: 'raw value {0}',
+      hottest: 'Max {0}',
+      coldest: 'Min {0}',
+      rawUnit: '{0} counts',
+      downloading: 'Downloading {0} …',
+      parsing: 'Parsing the FLIR sequence …',
+      downloadFailed: 'Download failed: {0}',
+      parseFailed: 'Parsing failed: {0}',
+      notFlir: 'No FLIR FFF frame was found; this is probably not a FLIR thermal sequence.',
+      tooLarge: 'The file is {0}, which is over the maxLoadBytes limit, so it was not loaded.',
+      confirmLoad: 'This thermal sequence is {0} and has to be read into memory as a whole.',
+      loadAnyway: 'Load anyway',
+      frameUndecodable: 'This frame cannot be decoded',
+      unknownSize: 'unknown size',
+      errNoRawRecord: 'This frame has no RawData record',
+      errRawPng: "This frame's raw data is PNG-compressed, which is not supported",
+      errRawUnsupported: "This frame's RawData record is not uncompressed 16-bit data",
+      warnResync: 'Resynchronised to the next frame at offset {0}',
+      warnFrameHeader: 'The frame header at offset {0} could not be parsed, so parsing stopped there',
+      errNoPlanck: 'The file has no Planck calibration constants (R1/R2/B), so temperatures cannot be computed',
+      errBadEmissivity: 'Emissivity and IR window transmission must both be greater than 0',
+      errBadTau: 'The atmospheric transmission came out invalid; check the distance, humidity and air temperature',
+    },
+
+    'zh-CN': {
+      palette: '调色板',
+      paletteIron: '铁红',
+      paletteRainbow: '彩虹',
+      paletteWhiteHot: '白热',
+      paletteBlackHot: '黑热',
+      paletteArctic: '极地',
+      scale: '温标',
+      scaleFrame: '本帧自动',
+      scaleSequence: '全序列自动',
+      scaleManual: '手动',
+      scaleMin: '下限',
+      scaleMax: '上限',
+      extremes: '最高/最低点',
+      zoomIn: '放大',
+      zoomOut: '缩小',
+      zoomFit: '适应窗口',
+      play: '播放',
+      pause: '暂停',
+      prevFrame: '上一帧',
+      nextFrame: '下一帧',
+      frameLabel: '第 {0} / {1} 帧',
+      singleFrame: '单帧',
+      spots: '测温点',
+      spotsHint: '在图像上单击可添加测温点，拖动可平移，滚轮可缩放。',
+      colX: 'X',
+      colY: 'Y',
+      colRaw: '原始值',
+      colTemp: '温度',
+      delete: '删除',
+      clearAll: '清除全部',
+      noSpots: '还没有测温点',
+      params: '测温参数',
+      emissivity: '发射率 ε',
+      reflectedTemp: '反射表观温度 (°C)',
+      objectDistance: '目标距离 (m)',
+      relativeHumidity: '相对湿度 (%)',
+      atmosphericTemp: '大气温度 (°C)',
+      irWindowTemp: '红外窗口温度 (°C)',
+      irWindowTransmission: '窗口透过率',
+      resetParams: '恢复相机设定',
+      planckNote: 'Planck 常数：R1={0}，R2={1}，B={2}，F={3}，O={4}（来自文件，不可编辑）',
+      fileInfo: '文件信息',
+      metaFile: '文件',
+      metaFrames: '帧数',
+      metaResolution: '分辨率',
+      metaCamera: '相机',
+      metaFirmware: '固件',
+      metaLens: '镜头',
+      metaFov: '视场角',
+      metaCaptured: '采集时间',
+      metaFrameRate: '帧率',
+      metaRange: '量程',
+      metaContainer: '容器格式',
+      unknown: '未知',
+      exportPng: '导出 PNG',
+      exportCsv: '导出温度 CSV',
+      readoutHint: '把鼠标移到图像上即可读取该点温度。',
+      readout: '({0}, {1})　{2}　{3}',
+      readoutRaw: '原始值 {0}',
+      hottest: '最高 {0}',
+      coldest: '最低 {0}',
+      rawUnit: '{0} 计数',
+      downloading: '正在下载 {0} …',
+      parsing: '正在解析 FLIR 序列 …',
+      downloadFailed: '下载失败：{0}',
+      parseFailed: '解析失败：{0}',
+      notFlir: '文件中没有找到 FLIR FFF 帧，可能不是 FLIR 热成像序列。',
+      tooLarge: '文件过大（{0}），超过 maxLoadBytes 限制，不予加载。',
+      confirmLoad: '这是一个 {0} 的热成像序列，需要整体读入内存。',
+      loadAnyway: '仍然加载',
+      frameUndecodable: '该帧无法解码',
+      unknownSize: '未知大小',
+      errNoRawRecord: '该帧没有 RawData 记录',
+      errRawPng: '该帧的原始数据是 PNG 压缩格式，暂不支持',
+      errRawUnsupported: '该帧的 RawData 记录不是未压缩的 16 位数据',
+      warnResync: '在偏移 {0} 处重新同步到下一帧',
+      warnFrameHeader: '偏移 {0} 处的帧头无法解析，已停止',
+      errNoPlanck: '该文件缺少 Planck 标定常数（R1/R2/B），无法换算温度',
+      errBadEmissivity: '发射率与红外窗口透过率必须大于 0',
+      errBadTau: '大气透过率计算结果无效，请检查距离/湿度/大气温度',
+    },
+
+    'fi-FI': {
+      palette: 'Väripaletti',
+      paletteIron: 'Rauta',
+      paletteRainbow: 'Sateenkaari',
+      paletteWhiteHot: 'Valkoinen kuuma',
+      paletteBlackHot: 'Musta kuuma',
+      paletteArctic: 'Arktinen',
+      scale: 'Asteikko',
+      scaleFrame: 'Ruudun mukaan',
+      scaleSequence: 'Koko sarjan mukaan',
+      scaleManual: 'Käsin',
+      scaleMin: 'Alaraja',
+      scaleMax: 'Yläraja',
+      extremes: 'Kuumin/kylmin piste',
+      zoomIn: 'Lähennä',
+      zoomOut: 'Loitonna',
+      zoomFit: 'Sovita ikkunaan',
+      play: 'Toista',
+      pause: 'Keskeytä',
+      prevFrame: 'Edellinen ruutu',
+      nextFrame: 'Seuraava ruutu',
+      frameLabel: 'Ruutu {0} / {1}',
+      singleFrame: 'Yksi ruutu',
+      spots: 'Mittapisteet',
+      spotsHint: 'Lisää mittapiste napsauttamalla kuvaa. Raahaa siirtääksesi kuvaa, vieritä zoomataksesi.',
+      colX: 'X',
+      colY: 'Y',
+      colRaw: 'Raaka-arvo',
+      colTemp: 'Lämpötila',
+      delete: 'Poista',
+      clearAll: 'Tyhjennä kaikki',
+      noSpots: 'Ei vielä mittapisteitä',
+      params: 'Mittausparametrit',
+      emissivity: 'Emissiivisyys ε',
+      reflectedTemp: 'Heijastunut näennäislämpötila (°C)',
+      objectDistance: 'Etäisyys kohteeseen (m)',
+      relativeHumidity: 'Suhteellinen kosteus (%)',
+      atmosphericTemp: 'Ilman lämpötila (°C)',
+      irWindowTemp: 'IR-ikkunan lämpötila (°C)',
+      irWindowTransmission: 'IR-ikkunan läpäisy',
+      resetParams: 'Palauta kameran asetukset',
+      planckNote: 'Planckin vakiot: R1={0}, R2={1}, B={2}, F={3}, O={4} (tiedostosta, ei muokattavissa)',
+      fileInfo: 'Tiedoston tiedot',
+      metaFile: 'Tiedosto',
+      metaFrames: 'Ruutuja',
+      metaResolution: 'Tarkkuus',
+      metaCamera: 'Kamera',
+      metaFirmware: 'Laiteohjelmisto',
+      metaLens: 'Objektiivi',
+      metaFov: 'Kuvakulma',
+      metaCaptured: 'Kuvausaika',
+      metaFrameRate: 'Kuvataajuus',
+      metaRange: 'Mittausalue',
+      metaContainer: 'Säiliömuoto',
+      unknown: 'tuntematon',
+      exportPng: 'Vie PNG',
+      exportCsv: 'Vie lämpötilat CSV:nä',
+      readoutHint: 'Vie osoitin kuvan päälle lukeaksesi kyseisen pisteen lämpötilan.',
+      readout: '({0}, {1}) · {2} · {3}',
+      readoutRaw: 'raaka-arvo {0}',
+      hottest: 'Kuumin {0}',
+      coldest: 'Kylmin {0}',
+      rawUnit: '{0} yksikköä',
+      downloading: 'Ladataan {0} …',
+      parsing: 'Jäsennetään FLIR-sarjaa …',
+      downloadFailed: 'Lataus epäonnistui: {0}',
+      parseFailed: 'Jäsennys epäonnistui: {0}',
+      notFlir: 'Tiedostosta ei löytynyt FLIR FFF -ruutuja; se ei ilmeisesti ole FLIR-lämpökuvasarja.',
+      tooLarge: 'Tiedosto on {0} ja ylittää maxLoadBytes-rajan, joten sitä ei ladattu.',
+      confirmLoad: 'Tämä lämpökuvasarja on {0}, ja se on luettava kokonaan muistiin.',
+      loadAnyway: 'Lataa silti',
+      frameUndecodable: 'Tätä ruutua ei voi purkaa',
+      unknownSize: 'tuntematon koko',
+      errNoRawRecord: 'Ruudussa ei ole RawData-tietuetta',
+      errRawPng: 'Ruudun raakadata on PNG-pakattua, mitä ei tueta',
+      errRawUnsupported: 'Ruudun RawData-tietue ei ole pakkaamatonta 16-bittistä dataa',
+      warnResync: 'Synkronoitiin uudelleen seuraavaan ruutuun kohdassa {0}',
+      warnFrameHeader: 'Ruudun otsaketta kohdassa {0} ei voitu jäsentää, joten jäsennys päättyi siihen',
+      errNoPlanck: 'Tiedostosta puuttuvat Planckin kalibrointivakiot (R1/R2/B), joten lämpötilaa ei voi laskea',
+      errBadEmissivity: 'Emissiivisyyden ja IR-ikkunan läpäisyn on oltava suurempia kuin 0',
+      errBadTau: 'Ilmakehän läpäisyn laskenta antoi virheellisen tuloksen; tarkista etäisyys, kosteus ja ilman lämpötila',
+    },
+  };
+
+  const FALLBACK_LANG = 'en';
+
+  /** Pick a translation for a BCP 47 tag: exact match first, then its primary
+   *  subtag (so zh-TW lands on zh-CN and fi lands on fi-FI). */
+  function matchLanguage(tag) {
+    if (!tag) return null;
+    const wanted = String(tag).toLowerCase();
+    const keys = Object.keys(LANGUAGES);
+    const exact = keys.find((k) => k.toLowerCase() === wanted);
+    if (exact) return exact;
+    const primary = wanted.split('-')[0];
+    return keys.find((k) => k.toLowerCase().split('-')[0] === primary) || null;
+  }
+
+  /**
+   * Resolve the language to use: the configured one, else what Gitea put in
+   * <html lang="...">, else English.
+   */
+  function resolveLang(preferred) {
+    const documentLang = typeof document === 'undefined' ? null : document.documentElement.lang;
+    return matchLanguage(preferred) || matchLanguage(documentLang) || FALLBACK_LANG;
+  }
+
+  /** t(key, [a, b, ...]) -- substitutes {0}, {1}, ... positionally. */
+  function makeTranslator(preferred) {
+    const lang = resolveLang(preferred);
+    const strings = LANGUAGES[lang];
+    const t = function (key, args) {
+      const text = (key in strings ? strings[key] : LANGUAGES[FALLBACK_LANG][key]);
+      if (text === undefined) return key; // a typo in a key must be visible, not silent
+      if (!args || !args.length) return text;
+      return text.replace(/\{(\d+)\}/g, (match, i) => (args[i] === undefined ? match : String(args[i])));
+    };
+    t.lang = lang;
+    return t;
   }
 
   // ------------------------------------------------------------------
@@ -231,6 +532,8 @@
    * gigabyte sequence costs no more than the buffer itself.
    */
   function parseSeq(buffer) {
+    // Warnings and errors are reported as {key, args} so that the parser stays
+    // free of user-visible text; the viewer runs them through its translator.
     const bytes = new Uint8Array(buffer);
     const dv = new DataView(buffer);
     const frames = [];
@@ -243,14 +546,14 @@
         // of giving up on the rest of the file.
         const next = findMagic(bytes, off + 1);
         if (next < 0) break;
-        if (frames.length) warnings.push('在偏移 ' + off + ' 处重新同步到下一帧');
+        if (frames.length) warnings.push({key: 'warnResync', args: [off]});
         off = next;
         continue;
       }
 
       const head = parseFrameHeader(dv, bytes, off);
       if (!head) {
-        warnings.push('偏移 ' + off + ' 处的帧头无法解析，已停止');
+        warnings.push({key: 'warnFrameHeader', args: [off]});
         break;
       }
 
@@ -267,14 +570,12 @@
       };
 
       if (!rawRec) {
-        frame.error = '该帧没有 RawData 记录';
+        frame.error = {key: 'errNoRawRecord'};
       } else {
         const raw = parseRawHeader(dv, off + rawRec.offset, rawRec.length);
         if (!raw) {
           const magic = dv.getUint32(off + rawRec.offset + RAW_HEADER_SIZE, false);
-          frame.error = magic === 0x89504e47
-            ? '该帧的原始数据是 PNG 压缩格式，暂不支持'
-            : '该帧的 RawData 记录不是未压缩的 16 位数据';
+          frame.error = {key: magic === 0x89504e47 ? 'errRawPng' : 'errRawUnsupported'};
         } else {
           frame.raw = raw;
         }
@@ -361,8 +662,9 @@
 
   /**
    * Build the raw-count -> degrees Celsius conversion for one parameter set.
-   * Returns {ok, reason, toTemp(raw), toRaw(tempC), lut}. The lookup table
-   * covers the whole uint16 domain so per-pixel conversion is a single index.
+   * Returns {ok, reason, toTemp(raw), toRaw(tempC), lut}, where "reason" is a
+   * translation key rather than a sentence. The lookup table covers the whole
+   * uint16 domain so per-pixel conversion is a single index.
    */
   function makeConverter(p) {
     const invalid = (reason) => ({
@@ -372,15 +674,13 @@
       lut: null,
     });
 
-    if (!(p.planckR1 > 0) || !(p.planckR2 > 0) || !(p.planckB > 0)) {
-      return invalid('该文件缺少 Planck 标定常数（R1/R2/B），无法换算温度');
-    }
+    if (!(p.planckR1 > 0) || !(p.planckR2 > 0) || !(p.planckB > 0)) return invalid('errNoPlanck');
     const e = p.emissivity;
     const irt = p.irWindowTransmission;
-    if (!(e > 0) || !(irt > 0)) return invalid('发射率与红外窗口透过率必须大于 0');
+    if (!(e > 0) || !(irt > 0)) return invalid('errBadEmissivity');
 
     const tau = atmosphericTransmission(p);
-    if (!(tau > 0)) return invalid('大气透过率计算结果无效，请检查距离/湿度/大气温度');
+    if (!(tau > 0)) return invalid('errBadTau');
 
     const emissWindow = 1 - irt;
     const rawRefl = planckRaw(p, p.reflectedTemp);
@@ -427,12 +727,12 @@
       [0.85, 255, 190, 60], [1, 255, 90, 0]],
   };
 
-  const PALETTE_LABELS = {
-    'iron': '铁红 Iron',
-    'rainbow': '彩虹 Rainbow',
-    'white-hot': '白热 White hot',
-    'black-hot': '黑热 Black hot',
-    'arctic': '极地 Arctic',
+  const PALETTE_LABEL_KEYS = {
+    'iron': 'paletteIron',
+    'rainbow': 'paletteRainbow',
+    'white-hot': 'paletteWhiteHot',
+    'black-hot': 'paletteBlackHot',
+    'arctic': 'paletteArctic',
   };
 
   function buildPalette(name) {
@@ -487,8 +787,8 @@
     return el('label', {class: 'flir-seq-field'}, [el('span', {text}), control]);
   }
 
-  function formatBytes(n) {
-    if (!(n > 0)) return '未知大小';
+  function formatBytes(t, n) {
+    if (!(n > 0)) return t('unknownSize');
     const units = ['B', 'KiB', 'MiB', 'GiB'];
     let i = 0, v = n;
     while (v >= 1024 && i < units.length - 1) {
@@ -525,6 +825,7 @@
 
   function Viewer(mount, rawLink, fileName) {
     this.cfg = config();
+    this.t = makeTranslator(this.cfg.lang);
     this.mount = mount;
     this.rawLink = rawLink;
     this.fileName = fileName;
@@ -568,7 +869,7 @@
     }
 
     if (size > this.cfg.maxLoadBytes) {
-      this.setStatus('文件过大（' + formatBytes(size) + '），超过 maxLoadBytes 限制，不予加载。', 'error');
+      this.setStatus(this.t('tooLarge', [formatBytes(this.t, size)]), 'error');
       return;
     }
     if (size > this.cfg.maxAutoLoadBytes) {
@@ -580,8 +881,8 @@
 
   Viewer.prototype.confirmLoad = function (size) {
     return new Promise((resolve) => {
-      const button = el('button', {class: 'ui tiny primary button', type: 'button', text: '仍然加载'});
-      this.setStatus('这是一个 ' + formatBytes(size) + ' 的热成像序列，需要整体读入内存。');
+      const button = el('button', {class: 'ui tiny primary button', type: 'button', text: this.t('loadAnyway')});
+      this.setStatus(this.t('confirmLoad', [formatBytes(this.t, size)]));
       this.root.append(el('div', {class: 'flir-seq-confirm'}, [button]));
       button.addEventListener('click', async () => {
         button.parentElement.remove();
@@ -592,27 +893,27 @@
   };
 
   Viewer.prototype.fetchAndRender = async function () {
-    this.setStatus('正在下载 ' + this.fileName + ' …');
+    this.setStatus(this.t('downloading', [this.fileName]));
     let buffer;
     try {
       const resp = await fetch(this.rawLink, {credentials: 'same-origin'});
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       buffer = await resp.arrayBuffer();
     } catch (e) {
-      this.setStatus('下载失败：' + e.message, 'error');
+      this.setStatus(this.t('downloadFailed', [e.message]), 'error');
       return;
     }
 
-    this.setStatus('正在解析 FLIR 序列 …');
+    this.setStatus(this.t('parsing'));
     let parsed;
     try {
       parsed = parseSeq(buffer);
     } catch (e) {
-      this.setStatus('解析失败：' + e.message, 'error');
+      this.setStatus(this.t('parseFailed', [e.message]), 'error');
       return;
     }
     if (!parsed.frames.length) {
-      this.setStatus('文件中没有找到 FLIR FFF 帧，可能不是 FLIR 热成像序列。', 'error');
+      this.setStatus(this.t('notFlir'), 'error');
       return;
     }
 
@@ -632,6 +933,7 @@
 
   Viewer.prototype.buildUI = function () {
     const self = this;
+    const t = this.t;
     const multi = this.frames.length > 1;
 
     this.imgCanvas = document.createElement('canvas');
@@ -640,7 +942,7 @@
 
     // --- toolbar -------------------------------------------------
     this.paletteSelect = el('select', {class: 'flir-seq-select'},
-      Object.keys(PALETTE_STOPS).map((k) => option(k, PALETTE_LABELS[k], k === this.paletteName)));
+      Object.keys(PALETTE_STOPS).map((k) => option(k, t(PALETTE_LABEL_KEYS[k]), k === this.paletteName)));
     this.paletteSelect.addEventListener('change', () => {
       self.paletteName = self.paletteSelect.value;
       self.palette = buildPalette(self.paletteName);
@@ -648,9 +950,9 @@
     });
 
     this.rangeSelect = el('select', {class: 'flir-seq-select'}, [
-      option('frame', '本帧自动', this.rangeMode === 'frame'),
-      option('sequence', '全序列自动', this.rangeMode === 'sequence'),
-      option('manual', '手动', this.rangeMode === 'manual'),
+      option('frame', t('scaleFrame'), this.rangeMode === 'frame'),
+      option('sequence', t('scaleSequence'), this.rangeMode === 'sequence'),
+      option('manual', t('scaleManual'), this.rangeMode === 'manual'),
     ]);
     this.rangeSelect.addEventListener('change', () => {
       self.rangeMode = self.rangeSelect.value;
@@ -678,7 +980,7 @@
     this.manualLoInput.addEventListener('change', onManual);
     this.manualHiInput.addEventListener('change', onManual);
     this.manualFields = el('span', {class: 'flir-seq-manual'}, [
-      labelled('下限', this.manualLoInput), labelled('上限', this.manualHiInput),
+      labelled(t('scaleMin'), this.manualLoInput), labelled(t('scaleMax'), this.manualHiInput),
     ]);
 
     this.extremesToggle = el('input', {type: 'checkbox', checked: this.showExtremes ? true : null});
@@ -687,9 +989,9 @@
       self.paintView();
     });
 
-    const zoomOut = el('button', {class: 'flir-seq-btn', type: 'button', title: '缩小', text: '−'});
-    const zoomIn = el('button', {class: 'flir-seq-btn', type: 'button', title: '放大', text: '+'});
-    const zoomReset = el('button', {class: 'flir-seq-btn', type: 'button', title: '适应窗口', text: '⤢'});
+    const zoomOut = el('button', {class: 'flir-seq-btn', type: 'button', title: t('zoomOut'), text: '−'});
+    const zoomIn = el('button', {class: 'flir-seq-btn', type: 'button', title: t('zoomIn'), text: '+'});
+    const zoomReset = el('button', {class: 'flir-seq-btn', type: 'button', title: t('zoomFit'), text: '⤢'});
     zoomOut.addEventListener('click', () => self.zoomBy(1 / 1.4));
     zoomIn.addEventListener('click', () => self.zoomBy(1.4));
     zoomReset.addEventListener('click', () => {
@@ -698,10 +1000,10 @@
     });
 
     this.toolbar = el('div', {class: 'flir-seq-toolbar'}, [
-      labelled('调色板', this.paletteSelect),
-      labelled('温标', this.rangeSelect),
+      labelled(t('palette'), this.paletteSelect),
+      labelled(t('scale'), this.rangeSelect),
       this.manualFields,
-      labelled('最高/最低点', this.extremesToggle),
+      labelled(t('extremes'), this.extremesToggle),
       el('span', {class: 'flir-seq-spacer'}),
       el('span', {class: 'flir-seq-zoom'}, [zoomOut, zoomIn, zoomReset]),
     ]);
@@ -724,10 +1026,10 @@
       self.stop();
       self.selectFrame(parseInt(self.frameSlider.value, 10));
     });
-    this.playButton = el('button', {class: 'flir-seq-btn', type: 'button', text: '▶ 播放'});
+    this.playButton = el('button', {class: 'flir-seq-btn', type: 'button', text: '▶ ' + t('play')});
     this.playButton.addEventListener('click', () => (self.playing ? self.stop() : self.play()));
-    const prev = el('button', {class: 'flir-seq-btn', type: 'button', text: '◀'});
-    const next = el('button', {class: 'flir-seq-btn', type: 'button', text: '▶'});
+    const prev = el('button', {class: 'flir-seq-btn', type: 'button', title: t('prevFrame'), text: '◀'});
+    const next = el('button', {class: 'flir-seq-btn', type: 'button', title: t('nextFrame'), text: '▶'});
     prev.addEventListener('click', () => {
       self.stop();
       self.selectFrame(self.frameIndex - 1);
@@ -743,20 +1045,20 @@
 
     // --- panels ---------------------------------------------------
     this.spotBody = el('tbody');
-    const clearSpots = el('button', {class: 'flir-seq-btn', type: 'button', text: '清除全部'});
+    const clearSpots = el('button', {class: 'flir-seq-btn', type: 'button', text: t('clearAll')});
     clearSpots.addEventListener('click', () => {
       self.spots = [];
       self.refreshSpots();
       self.paintView();
     });
     this.spotPanel = el('details', {class: 'flir-seq-panel', open: true}, [
-      el('summary', {text: '测温点'}),
+      el('summary', {text: t('spots')}),
       el('div', {class: 'flir-seq-panel-body'}, [
-        el('p', {class: 'flir-seq-hint', text: '在图像上单击可添加测温点，拖动可平移，滚轮可缩放。'}),
+        el('p', {class: 'flir-seq-hint', text: t('spotsHint')}),
         el('table', {class: 'flir-seq-table'}, [
           el('thead', null, el('tr', null, [
-            el('th', {text: '#'}), el('th', {text: 'X'}), el('th', {text: 'Y'}),
-            el('th', {text: '原始值'}), el('th', {text: '温度'}), el('th', {text: ''}),
+            el('th', {text: '#'}), el('th', {text: t('colX')}), el('th', {text: t('colY')}),
+            el('th', {text: t('colRaw')}), el('th', {text: t('colTemp')}), el('th', {text: ''}),
           ])),
           this.spotBody,
         ]),
@@ -766,12 +1068,12 @@
 
     this.paramPanel = this.buildParamPanel();
     this.metaPanel = el('details', {class: 'flir-seq-panel'}, [
-      el('summary', {text: '文件信息'}),
+      el('summary', {text: t('fileInfo')}),
       el('div', {class: 'flir-seq-panel-body'}, [(this.metaBody = el('div', {class: 'flir-seq-meta'}))]),
     ]);
 
-    const exportPng = el('button', {class: 'flir-seq-btn', type: 'button', text: '导出 PNG'});
-    const exportCsv = el('button', {class: 'flir-seq-btn', type: 'button', text: '导出温度 CSV'});
+    const exportPng = el('button', {class: 'flir-seq-btn', type: 'button', text: t('exportPng')});
+    const exportCsv = el('button', {class: 'flir-seq-btn', type: 'button', text: t('exportCsv')});
     exportPng.addEventListener('click', () => self.exportPng());
     exportCsv.addEventListener('click', () => self.exportCsv());
     this.actions = el('div', {class: 'flir-seq-actions'}, [exportPng, exportCsv]);
@@ -789,20 +1091,22 @@
 
   Viewer.prototype.buildParamPanel = function () {
     const self = this;
+    const t = this.t;
+    // [parameter, input step, min, max] -- the label key is the parameter name
     const fields = [
-      ['emissivity', '发射率 ε', 0.01, 0.01, 1],
-      ['reflectedTemp', '反射表观温度 (°C)', 0.1],
-      ['objectDistance', '目标距离 (m)', 0.1, 0],
-      ['relativeHumidity', '相对湿度 (%)', 1, 0, 100],
-      ['atmosphericTemp', '大气温度 (°C)', 0.1],
-      ['irWindowTemp', '红外窗口温度 (°C)', 0.1],
-      ['irWindowTransmission', '窗口透过率', 0.01, 0.01, 1],
+      ['emissivity', 0.01, 0.01, 1],
+      ['reflectedTemp', 0.1],
+      ['objectDistance', 0.1, 0],
+      ['relativeHumidity', 1, 0, 100],
+      ['atmosphericTemp', 0.1],
+      ['irWindowTemp', 0.1],
+      ['irWindowTransmission', 0.01, 0.01, 1],
     ];
     this.paramInputs = {};
     const controls = fields.map((f) => {
       const input = el('input', {
-        class: 'flir-seq-number', type: 'number', step: f[2],
-        min: f[3] === undefined ? null : f[3], max: f[4] === undefined ? null : f[4],
+        class: 'flir-seq-number', type: 'number', step: f[1],
+        min: f[2] === undefined ? null : f[2], max: f[3] === undefined ? null : f[3],
       });
       input.addEventListener('change', () => {
         const v = parseFloat(input.value);
@@ -814,10 +1118,10 @@
         self.applyParams();
       });
       this.paramInputs[f[0]] = input;
-      return labelled(f[1], input);
+      return labelled(t(f[0]), input);
     });
 
-    const reset = el('button', {class: 'flir-seq-btn', type: 'button', text: '恢复相机设定'});
+    const reset = el('button', {class: 'flir-seq-btn', type: 'button', text: t('resetParams')});
     reset.addEventListener('click', () => {
       self.params = Object.assign({}, self.originalParams);
       self.applyParams();
@@ -825,7 +1129,7 @@
 
     this.paramNote = el('p', {class: 'flir-seq-hint'});
     return el('details', {class: 'flir-seq-panel'}, [
-      el('summary', {text: '测温参数'}),
+      el('summary', {text: t('params')}),
       el('div', {class: 'flir-seq-panel-body'}, [
         el('div', {class: 'flir-seq-form'}, controls),
         this.paramNote,
@@ -848,10 +1152,11 @@
       this.paramInputs[key].value = Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
     }
     this.paramNote.textContent = this.converter.ok
-      ? 'Planck 常数：R1=' + this.params.planckR1.toFixed(2) + '，R2=' + this.params.planckR2.toPrecision(6) +
-        '，B=' + this.params.planckB.toFixed(2) + '，F=' + this.params.planckF + '，O=' + this.params.planckO +
-        '（来自文件，不可编辑）'
-      : this.converter.reason;
+      ? this.t('planckNote', [
+        this.params.planckR1.toFixed(2), this.params.planckR2.toPrecision(6),
+        this.params.planckB.toFixed(2), this.params.planckF, this.params.planckO,
+      ])
+      : this.t(this.converter.reason);
   };
 
   Viewer.prototype.syncRangeInputs = function () {
@@ -871,7 +1176,7 @@
   Viewer.prototype.play = function () {
     if (this.frames.length < 2) return;
     this.playing = true;
-    this.playButton.textContent = '⏸ 暂停';
+    this.playButton.textContent = '⏸ ' + this.t('pause');
     const period = 1000 / Math.max(1, this.cfg.playbackFps);
     this.timer = setInterval(() => {
       this.selectFrame((this.frameIndex + 1) % this.frames.length, true);
@@ -882,7 +1187,7 @@
     this.playing = false;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    if (this.playButton) this.playButton.textContent = '▶ 播放';
+    if (this.playButton) this.playButton.textContent = '▶ ' + this.t('play');
   };
 
   Viewer.prototype.currentFrame = function () {
@@ -941,7 +1246,7 @@
   Viewer.prototype.formatValue = function (raw) {
     const v = this.value(raw);
     if (!isFinite(v)) return '—';
-    return this.converter.ok ? v.toFixed(this.cfg.decimals) + ' °C' : String(v) + ' 计数';
+    return this.converter.ok ? v.toFixed(this.cfg.decimals) + ' °C' : this.t('rawUnit', [v]);
   };
 
   Viewer.prototype.computeRange = function () {
@@ -971,16 +1276,16 @@
     const frame = this.currentFrame();
     const cache = this.decode();
 
-    this.frameLabel.textContent = this.frames.length > 1
-      ? '第 ' + (this.frameIndex + 1) + ' / ' + this.frames.length + ' 帧' + this.frameTime(frame)
-      : '单帧' + this.frameTime(frame);
+    this.frameLabel.textContent = (this.frames.length > 1
+      ? this.t('frameLabel', [this.frameIndex + 1, this.frames.length])
+      : this.t('singleFrame')) + this.frameTime(frame);
 
     if (!cache.pixels) {
-      this.setStatus(frame.error || '该帧无法解码', 'error');
+      this.setStatus(frame.error ? this.t(frame.error.key, frame.error.args) : this.t('frameUndecodable'), 'error');
       return;
     }
     // clears an error left behind by a broken frame the user has moved off
-    this.setStatus(this.warnings.length ? this.warnings.join('；') : '',
+    this.setStatus(this.warnings.map((w) => this.t(w.key, w.args)).join(' · '),
       this.warnings.length ? 'warn' : '');
 
     const range = this.computeRange();
@@ -1144,9 +1449,9 @@
       const {min, max, minAt, maxAt} = this.pixelCache.stats;
       const w = frame.raw.width;
       this.drawMarker(ctx, (maxAt % w) + 0.5, Math.floor(maxAt / w) + 0.5, '#ff2d2d',
-        '最高 ' + this.formatValue(max));
+        this.t('hottest', [this.formatValue(max)]));
       this.drawMarker(ctx, (minAt % w) + 0.5, Math.floor(minAt / w) + 0.5, '#3da5ff',
-        '最低 ' + this.formatValue(min));
+        this.t('coldest', [this.formatValue(min)]));
     }
 
     this.spots.forEach((spot, i) => {
@@ -1297,25 +1602,25 @@
 
   Viewer.prototype.updateReadout = function (hit) {
     if (!hit) {
-      this.readout.textContent = '把鼠标移到图像上即可读取该点温度。';
+      this.readout.textContent = this.t('readoutHint');
       this.readout.classList.remove('flir-seq-readout-live');
       return;
     }
     this.readout.classList.add('flir-seq-readout-live');
-    this.readout.textContent = '(' + hit.x + ', ' + hit.y + ')　' + this.formatValue(hit.raw) +
-      '　原始值 ' + hit.raw;
+    this.readout.textContent = this.t('readout',
+      [hit.x, hit.y, this.formatValue(hit.raw), this.t('readoutRaw', [hit.raw])]);
   };
 
   Viewer.prototype.refreshSpots = function () {
     const self = this;
     this.spotBody.replaceChildren();
     if (!this.spots.length) {
-      this.spotBody.append(el('tr', null, el('td', {colspan: 6, class: 'flir-seq-empty', text: '还没有测温点'})));
+      this.spotBody.append(el('tr', null, el('td', {colspan: 6, class: 'flir-seq-empty', text: this.t('noSpots')})));
       return;
     }
     this.spots.forEach((spot, i) => {
       const raw = this.rawAt(spot.x, spot.y);
-      const remove = el('button', {class: 'flir-seq-btn flir-seq-btn-mini', type: 'button', text: '删除'});
+      const remove = el('button', {class: 'flir-seq-btn flir-seq-btn-mini', type: 'button', text: this.t('delete')});
       remove.addEventListener('click', () => {
         self.spots.splice(i, 1);
         self.refreshSpots();
@@ -1335,19 +1640,20 @@
   Viewer.prototype.fillMeta = function () {
     const info = this.frames[0].info || {};
     const frame = this.frames[0];
+    const t = this.t;
     const rows = [
-      ['文件', this.fileName],
-      ['帧数', String(this.frames.length)],
-      ['分辨率', frame.raw ? frame.raw.width + ' × ' + frame.raw.height : '未知'],
-      ['相机', [info.cameraModel, info.cameraPartNumber, info.cameraSerialNumber].filter(Boolean).join(' / ')],
-      ['固件', info.cameraSoftware],
-      ['镜头', [info.lensModel, info.lensPartNumber].filter(Boolean).join(' / ')],
-      ['视场角', isFinite(info.fieldOfView) ? info.fieldOfView.toFixed(2) + '°' : ''],
-      ['采集时间', formatDate(info.dateTime, info.dateTimeOffsetMinutes)],
-      ['帧率', info.frameRate ? info.frameRate + ' Hz' : ''],
-      ['量程', isFinite(info.cameraTempRangeMinK) && isFinite(info.cameraTempRangeMaxK)
+      [t('metaFile'), this.fileName],
+      [t('metaFrames'), String(this.frames.length)],
+      [t('metaResolution'), frame.raw ? frame.raw.width + ' × ' + frame.raw.height : t('unknown')],
+      [t('metaCamera'), [info.cameraModel, info.cameraPartNumber, info.cameraSerialNumber].filter(Boolean).join(' / ')],
+      [t('metaFirmware'), info.cameraSoftware],
+      [t('metaLens'), [info.lensModel, info.lensPartNumber].filter(Boolean).join(' / ')],
+      [t('metaFov'), isFinite(info.fieldOfView) ? info.fieldOfView.toFixed(2) + '°' : ''],
+      [t('metaCaptured'), formatDate(info.dateTime, info.dateTimeOffsetMinutes)],
+      [t('metaFrameRate'), info.frameRate ? info.frameRate + ' Hz' : ''],
+      [t('metaRange'), isFinite(info.cameraTempRangeMinK) && isFinite(info.cameraTempRangeMaxK)
         ? (info.cameraTempRangeMinK - K0).toFixed(1) + ' … ' + (info.cameraTempRangeMaxK - K0).toFixed(1) + ' °C' : ''],
-      ['容器格式', frame.format],
+      [t('metaContainer'), frame.format],
     ];
     this.metaBody.replaceChildren();
     for (const [k, v] of rows) {
@@ -1396,8 +1702,10 @@
     if (this.showExtremes && this.pixelCache.stats) {
       const {min, max, minAt, maxAt} = this.pixelCache.stats;
       const w = frame.raw.width;
-      this.drawMarker(ctx, (maxAt % w) + 0.5, Math.floor(maxAt / w) + 0.5, '#ff2d2d', '最高 ' + this.formatValue(max));
-      this.drawMarker(ctx, (minAt % w) + 0.5, Math.floor(minAt / w) + 0.5, '#3da5ff', '最低 ' + this.formatValue(min));
+      this.drawMarker(ctx, (maxAt % w) + 0.5, Math.floor(maxAt / w) + 0.5, '#ff2d2d',
+        this.t('hottest', [this.formatValue(max)]));
+      this.drawMarker(ctx, (minAt % w) + 0.5, Math.floor(minAt / w) + 0.5, '#3da5ff',
+        this.t('coldest', [this.formatValue(min)]));
     }
     this.spots.forEach((spot, i) => {
       const raw = this.rawAt(spot.x, spot.y);
@@ -1510,6 +1818,10 @@
     planckRaw,
     atmosphericTransmission,
     buildPalette,
+    makeTranslator,
+    resolveLang,
+    LANGUAGES,
+    FALLBACK_LANG,
     DEFAULTS,
   };
 });

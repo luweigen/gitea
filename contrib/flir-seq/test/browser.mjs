@@ -9,6 +9,8 @@
 //   FLIR_SEQ_SCREENSHOT=/tmp/shot.png node browser.mjs   -- keep a screenshot
 //   CHROMIUM=/path/to/chrome node browser.mjs             -- use a browser that
 //       playwright-core did not download itself
+//   FLIR_SEQ_LANG=fi-FI node browser.mjs                  -- run the interaction
+//       suite in another language (every language is checked either way)
 
 import {chromium} from 'playwright-core';
 import {existsSync, readdirSync} from 'node:fs';
@@ -19,6 +21,12 @@ import {loadFlirSeq, referenceTemp} from './load.mjs';
 import {toArrayBuffer} from './fixture.mjs';
 
 const flir = loadFlirSeq();
+
+// The harness turns ?lang= into <html lang="...">, the way Gitea renders
+// ctx.Locale.Lang. The interaction suite runs in English; every shipped
+// language is then checked for the strings it actually puts on screen.
+const SUITE_LANG = process.env.FLIR_SEQ_LANG || 'en';
+const t = flir.makeTranslator(SUITE_LANG);
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -75,7 +83,7 @@ page.on('pageerror', (e) => errors.push(String(e)));
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
 
 try {
-  await page.goto(url, {waitUntil: 'load'});
+  await page.goto(url + '?lang=' + SUITE_LANG, {waitUntil: 'load'});
   await page.waitForSelector('.flir-seq-canvas', {timeout: 15000});
   check('viewer replaced the raw-file prompt', await page.locator('.file-view-raw-prompt').count() === 0);
   check('status line is quiet', (await page.locator('.flir-seq-status').textContent()).trim() === '');
@@ -152,7 +160,8 @@ try {
       el.dispatchEvent(new Event('input', {bubbles: true}));
     }, geometry.frames - 1);
     const label = await page.locator('.flir-seq-frame-label').textContent();
-    check('frame slider moves to the last frame', label.includes(String(geometry.frames) + ' 帧'), label.trim());
+    check('frame slider moves to the last frame',
+      label.includes(t('frameLabel', [geometry.frames, geometry.frames])), label.trim());
     await page.locator('.flir-seq-slider').evaluate((el) => {
       el.value = '0';
       el.dispatchEvent(new Event('input', {bubbles: true}));
@@ -180,7 +189,7 @@ try {
   check('fit button restores the fit scale', Math.abs(scaleReset - scaleBefore) < 1e-6);
 
   // exports
-  for (const [label, selector, suffix] of [['PNG', 'text=导出 PNG', '.png'], ['CSV', 'text=导出温度 CSV', '.csv']]) {
+  for (const [label, selector, suffix] of [['PNG', 'text=' + t('exportPng'), '.png'], ['CSV', 'text=' + t('exportCsv'), '.csv']]) {
     const [download] = await Promise.all([
       page.waitForEvent('download', {timeout: 15000}),
       page.locator(selector).click(),
@@ -195,6 +204,44 @@ try {
   }
 
   check('no page errors', errors.length === 0, errors.join(' | '));
+
+  // --- every shipped language must reach the screen ----------------------
+  for (const lang of Object.keys(flir.LANGUAGES)) {
+    const tl = flir.makeTranslator(lang);
+    const localised = await browser.newPage({viewport: {width: 1100, height: 900}});
+    const localisedErrors = [];
+    localised.on('pageerror', (e) => localisedErrors.push(String(e)));
+    try {
+      await localised.goto(url + '?lang=' + lang, {waitUntil: 'load'});
+      await localised.waitForSelector('.flir-seq-canvas', {timeout: 15000});
+      const text = await localised.locator('.flir-seq').innerText();
+      // one string from each area of the UI, so a key missed in one panel shows
+      const expected = ['palette', 'scale', 'extremes', 'spots', 'spotsHint', 'noSpots',
+        'colRaw', 'colTemp', 'clearAll', 'params', 'fileInfo', 'exportPng', 'exportCsv',
+        'readoutHint', 'play'];
+      const missing = expected.filter((key) => !text.includes(tl(key)));
+      check(lang + ': every panel is translated', missing.length === 0,
+        missing.map((key) => key + '=' + tl(key)).join(' | '));
+      const frameLabel = (await localised.locator('.flir-seq-frame-label').textContent()).trim();
+      check(lang + ': the frame label is formatted',
+        frameLabel.startsWith(tl('frameLabel', [1, geometry.frames])), frameLabel);
+      // the readout is assembled from three separate keys, so check it live
+      const point = await localised.evaluate((p) => {
+        const viewer = document.querySelector('.flir-seq-mount').giteaFlirSeqViewer;
+        const v = viewer.toView(p.x + 0.5, p.y + 0.5);
+        const rect = document.querySelector('.flir-seq-canvas').getBoundingClientRect();
+        return {x: rect.left + v.x, y: rect.top + v.y};
+      }, probe);
+      await localised.mouse.move(point.x, point.y);
+      const readout = (await localised.locator('.flir-seq-readout').textContent()).trim();
+      check(lang + ': the readout is translated',
+        readout === tl('readout', [probe.x, probe.y, probeTemp + ' °C', tl('readoutRaw', [probeRaw])]),
+        readout);
+      check(lang + ': no page errors', localisedErrors.length === 0, localisedErrors.join(' | '));
+    } finally {
+      await localised.close();
+    }
+  }
 } finally {
   await browser.close();
   server.close();

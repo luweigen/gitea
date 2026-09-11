@@ -58,6 +58,11 @@
 		</div>
 	</div>
 </div>
+<script>
+	// Gitea renders <html lang="{{ctx.Locale.Lang}}">; ?lang= stands in for it
+	// here. Must run before the viewer script, which reads it on construction.
+	document.documentElement.lang = new URLSearchParams(location.search).get('lang') || 'en';
+</script>
 <script src="/assets/js/gitea-flir-seq.js"></script>
 </body>
 </html>

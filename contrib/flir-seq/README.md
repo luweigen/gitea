@@ -19,6 +19,7 @@
 * **温标模式**：本帧自动 / 全序列自动 / 手动上下限。
 * **导出**：当前帧导出 PNG（含测温点标注），或导出整帧温度矩阵 CSV。
 * **跟随 Gitea 主题**：颜色全部取自 Gitea 的 CSS 变量，明暗主题都正常。
+* **多语言界面**：英语 / 简体中文 / 芬兰语，自动跟随 Gitea 当前语言。
 
 全部代码自包含，**零依赖、零 CDN、零外网访问**——脚本只会去取它要显示的那个
 原始文件，因此内网、离线部署同样可用。
@@ -87,6 +88,25 @@ gitea manager reload-templates        # 或直接重启 Gitea
 | `playbackFps` | `6` | 播放帧率 |
 | `decimals` | `1` | 温度显示的小数位数 |
 | `maxHeightVh` | `0.72` | 图像区域最大高度占视口高度的比例 |
+| `lang` | `null` | `null` 跟随 Gitea 语言；也可强制 `'en'` / `'zh-CN'` / `'fi-FI'` |
+
+## 界面语言
+
+Gitea 自带 29 种界面语言（`options/locale/`，其中包含 `zh-CN` 与 `fi-FI`），并把当前
+语言渲染进 `<html lang="{{ctx.Locale.Lang}}">`。本扩展据此自动切换，用户在 Gitea 的
+语言设置里选什么，查看器就显示什么，**不需要另外配置**。
+
+目前内置三种：**英语（`en`）、简体中文（`zh-CN`）、芬兰语（`fi-FI`）**。匹配规则是
+先精确匹配语言标签（不分大小写），再退到主语言子标签，最后退到英语——所以 Gitea 设
+成 `fi-FI` 得到芬兰语，`zh-TW` 会落到简体中文（比退回英语更接近），`de-DE` 等其余
+语言则显示英语。
+
+要加一种语言，在 `gitea-flir-seq.js` 顶部的 `LANGUAGES` 里照抄 `en` 那一份改写即可；
+`test/run.mjs` 会检查每种语言的键集合与英语完全一致、占位符 `{0}` 未丢失、没有空串，
+`test/browser.mjs` 会在真实浏览器里逐语言核对界面上确实出现了这些文案。
+
+解析器与测温代码本身不含任何面向用户的句子：它们抛出的是翻译键（例如
+`warnResync`、`errNoPlanck`），由查看器统一翻译。
 
 ## 原理
 
@@ -122,8 +142,8 @@ gitea manager reload-templates        # 或直接重启 Gitea
 
 ```sh
 cd contrib/flir-seq/test
-node run.mjs                 # 解析与测温，无需任何依赖
-./setup.sh && ./run.sh       # 再加上真实浏览器里的端到端测试
+node run.mjs                 # 解析、测温与翻译完整性，无需任何依赖
+./setup.sh && ./run.sh       # 再加上真实浏览器里的端到端测试（三种语言都跑）
 ./run.sh /path/to/real.seq   # 同时跑一遍真实相机文件
 ```
 

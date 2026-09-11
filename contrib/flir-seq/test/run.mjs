@@ -33,7 +33,7 @@ const geometry = {width: 8, height: 4, frames: 3};
 const fixture = toArrayBuffer(buildFixture(geometry));
 const parsed = flir.parseSeq(fixture);
 check('three frames found', parsed.frames.length === 3, parsed.frames.length);
-check('no warnings', parsed.warnings.length === 0, parsed.warnings.join('; '));
+check('no warnings', parsed.warnings.length === 0, parsed.warnings.map((w) => w.key).join('; '));
 
 const frame = parsed.frames[0];
 check('geometry', frame.raw.width === geometry.width && frame.raw.height === geometry.height,
@@ -85,7 +85,8 @@ check('lower emissivity lowers a reading below ambient', lowE.toTemp(coldRaw) < 
 check('round trip through toRaw keeps 40 C', close(conv.toTemp(conv.toRaw(40)), 40, 1e-3));
 
 const broken = flir.makeConverter(Object.assign({}, params, {planckR2: 0}));
-check('missing calibration is reported, not crashed', !broken.ok && isNaN(broken.toTemp(9000)), broken.reason);
+check('missing calibration is reported, not crashed',
+  !broken.ok && broken.reason === 'errNoPlanck' && isNaN(broken.toTemp(9000)), broken.reason);
 
 // a recorded time zone shifts the timestamp and is reported with the opposite
 // sign, the way ExifTool renders this field
@@ -102,7 +103,9 @@ const frameStride = damaged.length / 3;
 damaged.write('XXXX', frameStride, 'latin1');
 const recovered = flir.parseSeq(toArrayBuffer(damaged));
 check('parser resynchronises past a damaged frame', recovered.frames.length === 2, recovered.frames.length);
-check('resynchronisation is reported', recovered.warnings.length === 1, recovered.warnings.join('; '));
+check('resynchronisation is reported',
+  recovered.warnings.length === 1 && recovered.warnings[0].key === 'warnResync',
+  JSON.stringify(recovered.warnings));
 check('the frame after the damage is intact',
   flir.readFramePixels(toArrayBuffer(damaged), recovered.frames[1])[0] === rawAt(0, 0, 4, 2, 2));
 
@@ -113,6 +116,48 @@ check('unknown palette falls back', flir.buildPalette('nope').length === 768);
 
 // a file that is not a FLIR sequence must come back empty instead of throwing
 check('garbage input yields no frames', flir.parseSeq(toArrayBuffer(Buffer.alloc(4096, 0x42))).frames.length === 0);
+
+// --- translations ---------------------------------------------------------
+
+console.log('\ntranslations');
+const languages = Object.keys(flir.LANGUAGES);
+check('three languages are shipped', languages.length === 3, languages.join(', '));
+
+const englishKeys = Object.keys(flir.LANGUAGES[flir.FALLBACK_LANG]).sort();
+const placeholders = (text) => (text.match(/\{\d+\}/g) || []).sort().join('');
+for (const lang of languages) {
+  const keys = Object.keys(flir.LANGUAGES[lang]).sort();
+  check(lang + ' defines exactly the English key set', keys.join() === englishKeys.join(),
+    keys.length === englishKeys.length
+      ? ''
+      : 'missing: ' + englishKeys.filter((k) => !keys.includes(k)).join(' ') +
+        ' extra: ' + keys.filter((k) => !englishKeys.includes(k)).join(' '));
+  const mismatched = englishKeys.filter((k) =>
+    placeholders(flir.LANGUAGES[lang][k]) !== placeholders(flir.LANGUAGES[flir.FALLBACK_LANG][k]));
+  check(lang + ' keeps every placeholder', mismatched.length === 0, mismatched.join(' '));
+  const empty = englishKeys.filter((k) => !String(flir.LANGUAGES[lang][k]).trim());
+  check(lang + ' has no empty string', empty.length === 0, empty.join(' '));
+}
+
+// every user-visible key must be reachable: the keys the parser and the
+// converter emit are the ones most easily forgotten
+for (const key of ['warnResync', 'warnFrameHeader', 'errNoRawRecord', 'errRawPng',
+  'errRawUnsupported', 'errNoPlanck', 'errBadEmissivity', 'errBadTau']) {
+  check('key ' + key + ' is translated', englishKeys.includes(key));
+}
+
+check('resolveLang takes an exact tag', flir.resolveLang('fi-FI') === 'fi-FI');
+check('resolveLang is case insensitive', flir.resolveLang('ZH-cn') === 'zh-CN');
+check('resolveLang falls back to the primary subtag', flir.resolveLang('fi') === 'fi-FI');
+check('resolveLang maps zh-TW onto the Chinese translation', flir.resolveLang('zh-TW') === 'zh-CN');
+check('resolveLang falls back to English', flir.resolveLang('de-DE') === 'en');
+check('resolveLang handles a missing tag', flir.resolveLang(null) === 'en');
+
+const tFi = flir.makeTranslator('fi-FI');
+check('translator reports its language', tFi.lang === 'fi-FI');
+check('translator substitutes positionally', tFi('frameLabel', [2, 7]) === 'Ruutu 2 / 7', tFi('frameLabel', [2, 7]));
+check('translator leaves an unknown key visible', flir.makeTranslator('en')('no-such-key') === 'no-such-key');
+check('translator ignores extra arguments', flir.makeTranslator('en')('loadAnyway', [1, 2]) === 'Load anyway');
 
 // --- real files -----------------------------------------------------------
 
