@@ -417,18 +417,22 @@ try {
       // one string from each area of the UI, so a key missed in one panel shows
       const expected = ['palette', 'scale', 'extremes', 'spots', 'spotsHint', 'noSpots',
         'colRaw', 'colTemp', 'clearAll', 'params', 'atmTransmission', 'fileInfo',
-        'exportPng', 'exportCsv', 'readoutHint', 'play', 'filterReset',
+        'exportPng', 'exportCsv', 'readoutHint', 'play',
         'model', 'modelFlir', 'modelNote'];
       const missing = expected.filter((key) => !text.includes(tl(key)));
       check(lang + ': every panel is translated', missing.length === 0,
         missing.map((key) => key + '=' + tl(key)).join(' | '));
-      // the colour bar column is narrow, so a long translation must still fit
-      const resetFits = await localised.evaluate(() => {
+      // "show all" is a glyph, so its words live on the tooltip and the
+      // accessible name; both still have to be in the right language
+      const reset = await localised.evaluate(() => {
         const b = document.querySelector('.flir-seq-filter-reset');
-        return {clipped: b.scrollWidth > b.clientWidth + 1, width: Math.round(b.getBoundingClientRect().width)};
+        return {title: b.title, label: b.getAttribute('aria-label'),
+          width: Math.round(b.getBoundingClientRect().width)};
       });
-      check(lang + ': "show all" is not truncated', !resetFits.clipped,
-        tl('filterReset') + ' at ' + resetFits.width + 'px');
+      check(lang + ': "show all" is named in this language',
+        reset.title === tl('filterReset') && reset.label === tl('filterReset'),
+        reset.title + ' / ' + reset.label);
+      check(lang + ': "show all" stays narrow', reset.width <= 32, reset.width + 'px');
       const frameLabel = (await localised.locator('.flir-seq-frame-label').textContent()).trim();
       check(lang + ': the frame label is formatted',
         frameLabel.startsWith(tl('frameLabel', [1, geometry.frames])), frameLabel);

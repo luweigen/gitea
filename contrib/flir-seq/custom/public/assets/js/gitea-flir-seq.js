@@ -1110,11 +1110,15 @@
       self.paintView();
     });
 
-    // sits above the colour bar, with the limit handles it clears -- next to the
-    // extremes checkbox it read as if it controlled that instead
+    // Sits above the colour bar, with the limit handles it clears -- next to the
+    // extremes checkbox it read as if it controlled that instead. The label is a
+    // glyph so the column stays narrow whatever the translation is; the words go
+    // on the tooltip and the accessible name, which is what a screen reader and
+    // a hovering user get.
     this.filterReset = el('button', {
       class: 'flir-seq-btn flir-seq-btn-mini flir-seq-filter-reset',
-      type: 'button', text: t('filterReset'), disabled: true,
+      type: 'button', text: '↕', title: t('filterReset'), 'aria-label': t('filterReset'),
+      disabled: true,
     });
     this.filterReset.addEventListener('click', () => {
       self.filter = null;
