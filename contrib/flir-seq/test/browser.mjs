@@ -128,12 +128,33 @@ try {
     readout + ' (expected ' + probeTemp + ' °C)');
   check('hover reports the raw count', readout.includes(String(probeRaw)));
 
+  // the crosshair and the spot markers are green, which is checked on the canvas
+  // rather than by reading the constant back: what matters is what is drawn
+  const pixelAt = (cssX, cssY) => page.evaluate(([x, y]) => {
+    const canvas = document.querySelector('.flir-seq-canvas');
+    const rect = canvas.getBoundingClientRect();
+    const dpr = canvas.width / rect.width;
+    const d = canvas.getContext('2d').getImageData(
+      Math.round((x - rect.left) * dpr), Math.round((y - rect.top) * dpr), 1, 1).data;
+    return [d[0], d[1], d[2]];
+  }, [cssX, cssY]);
+  const greenish = (rgb) => rgb[1] > rgb[0] + 40 && rgb[1] > rgb[2] + 40;
+  check('the hover crosshair is green', greenish(await pixelAt(point.x, point.y)),
+    (await pixelAt(point.x, point.y)).join(','));
+
   // clicking the same place must record a spot with the same temperature
   await page.mouse.click(point.x, point.y);
   const row = (await page.locator('.flir-seq-table tbody tr').first().textContent()).replace(/\s+/g, ' ');
   check('click adds a spot', (await page.locator('.flir-seq-table tbody tr').count()) === 1, row);
   check('spot shows the same temperature', row.includes(probeTemp + ' °C'), row);
   check('spot shows its coordinates', row.includes(String(probe.x)) && row.includes(String(probe.y)), row);
+  // move the pointer off, so only the spot marker is left where it was placed
+  await page.mouse.move(point.x + 120, point.y + 90);
+  check('the spot marker is green', greenish(await pixelAt(point.x, point.y)),
+    (await pixelAt(point.x, point.y)).join(','));
+  check('the hot marker is still red', await page.evaluate(
+    (c) => document.querySelector('.flir-seq-mount').giteaFlirSeqViewer &&
+      window.GiteaFlirSeq.MARKER_COLOUR.hottest === c, '#ff2d2d'));
 
   // the measurement panel has to be populated before anything is touched
   await page.locator('details.flir-seq-panel').nth(1).evaluate((d) => (d.open = true));

@@ -852,6 +852,17 @@
       [0.85, 255, 190, 60], [1, 255, 90, 0]],
   };
 
+  // Marker colours, kept together so the overlay reads as one set. Green for
+  // what the user placed or is pointing at, red and blue for the frame's own
+  // extremes; all three are saturated enough to hold up over both ends of every
+  // palette, which is why the spots are not simply white.
+  const MARKER_COLOUR = {
+    spot: '#2ee05a',
+    crosshair: 'rgba(46, 224, 90, 0.85)',
+    hottest: '#ff2d2d',
+    coldest: '#3da5ff',
+  };
+
   const PALETTE_LABEL_KEYS = {
     'iron': 'paletteIron',
     'rainbow': 'paletteRainbow',
@@ -1788,7 +1799,7 @@
     if (this.hover) {
       const p = this.toView(this.hover.x + 0.5, this.hover.y + 0.5);
       ctx.save();
-      ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+      ctx.strokeStyle = MARKER_COLOUR.crosshair;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(p.x, Math.max(0, p.y - 12));
@@ -1805,14 +1816,14 @@
     const stats = this.pixelCache.stats;
     if (this.showExtremes && stats) {
       const w = frame.raw.width;
-      this.drawMarker(ctx, (stats.maxAt % w) + 0.5, Math.floor(stats.maxAt / w) + 0.5, '#ff2d2d',
-        this.t('hottest', [this.formatValue(stats.max)]));
-      this.drawMarker(ctx, (stats.minAt % w) + 0.5, Math.floor(stats.minAt / w) + 0.5, '#3da5ff',
-        this.t('coldest', [this.formatValue(stats.min)]));
+      this.drawMarker(ctx, (stats.maxAt % w) + 0.5, Math.floor(stats.maxAt / w) + 0.5,
+        MARKER_COLOUR.hottest, this.t('hottest', [this.formatValue(stats.max)]));
+      this.drawMarker(ctx, (stats.minAt % w) + 0.5, Math.floor(stats.minAt / w) + 0.5,
+        MARKER_COLOUR.coldest, this.t('coldest', [this.formatValue(stats.min)]));
     }
     this.spots.forEach((spot, i) => {
       const raw = this.rawAt(spot.x, spot.y);
-      this.drawMarker(ctx, spot.x + 0.5, spot.y + 0.5, '#ffffff',
+      this.drawMarker(ctx, spot.x + 0.5, spot.y + 0.5, MARKER_COLOUR.spot,
         '#' + (i + 1) + ' ' + (raw === null ? '—' : this.formatValue(raw)));
     });
   };
@@ -2159,6 +2170,7 @@
     atmosphericTransmission,
     buildPalette,
     hasAtmTransmission,
+    MARKER_COLOUR,
     cameraScale,
     MODELS,
     MODEL_FLIR,
