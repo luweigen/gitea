@@ -1,8 +1,20 @@
 // Copyright 2026 The Gitea Authors. All rights reserved.
 // SPDX-License-Identifier: MIT
 //
-// Cross-checks the viewer's radiometry against flirpy, an independent Python
-// implementation of the same FLIR model, over a grid of parameter sets.
+// Cross-checks against flirpy, an independent Python implementation, on the two
+// things it can still settle:
+//
+//   * the container parsing -- frame boundaries, record offsets and the sensor
+//     counts themselves, compared pixel by pixel with flirpy's own FFF reader;
+//   * the shared algebra -- flirpy implements Thermimage's convention, in which
+//     the atmospheric transmission is evaluated over half the object distance
+//     and applied twice, so it is compared against thermimageTemp() rather than
+//     against the viewer.
+//
+// The viewer no longer uses that convention: measured against FLIR Thermal
+// Studio it reads about 0.1 K too cold (see ../doc/format.md and truth.mjs), so
+// the atmosphere is now evaluated over the whole distance and removed once. The
+// gap between the two conventions is reported below rather than asserted away.
 //
 //   pip install flirpy
 //   node compare-flirpy.mjs                    parameter grid
@@ -18,7 +30,7 @@ import {mkdtempSync, writeFileSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {loadFlirSeq} from './load.mjs';
+import {loadFlirSeq, thermimageTemp, referenceTemp} from './load.mjs';
 import {toArrayBuffer} from './fixture.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -86,15 +98,20 @@ try {
 
 let worst = 0;
 let worstCase = '';
+let conventionGap = 0;
 const fmt = (v) => (Number.isFinite(v) ? v.toFixed(6) : 'out of domain').padStart(13);
-console.log('case                          raw     flir-seq        flirpy          |Δ|');
+console.log('case                     raw   thermimage form        flirpy          |Δ|');
 for (let i = 0; i < cases.length; i++) {
   const conv = flir.makeConverter(cases[i].params);
   if (!conv.ok) throw new Error('case ' + cases[i].name + ' has no usable calibration: ' + conv.reason);
-  let caseWorst = 0, at = raws[0], mine = conv.toTemp(raws[0]);
+  let caseWorst = 0, at = raws[0], mine = thermimageTemp(raws[0], cases[i].params);
   let other = theirs[i][0] === null ? NaN : theirs[i][0];
   for (let j = 0; j < raws.length; j++) {
-    const a = conv.toTemp(raws[j]);
+    const a = thermimageTemp(raws[j], cases[i].params);
+    const shipped = conv.toTemp(raws[j]);
+    if (Number.isFinite(shipped) && Number.isFinite(a)) {
+      conventionGap = Math.max(conventionGap, Math.abs(shipped - a));
+    }
     // null is flirpy's NaN: a raw value the model cannot invert. Both sides
     // refusing is agreement; one side inventing a number is not.
     const b = theirs[i][j] === null ? NaN : theirs[i][j];
@@ -119,8 +136,10 @@ console.log('\nflirpy ' + execFileSync(python,
   ['-c', 'import importlib.metadata as m; print(m.version("flirpy"))'], {encoding: 'utf8'}).trim() +
   ', ' + cases.length + ' parameter sets × ' + raws.length + ' raw values');
 let ok = worst <= TOLERANCE;
-console.log((ok ? 'agrees' : 'DISAGREES') + ': largest deviation ' + worst.toExponential(2) +
-  ' K (' + worstCase + '), tolerance ' + TOLERANCE.toExponential(0) + ' K');
+console.log((ok ? 'agrees' : 'DISAGREES') + ' with flirpy in its own convention: largest deviation ' +
+  worst.toExponential(2) + ' K (' + worstCase + '), tolerance ' + TOLERANCE.toExponential(0) + ' K');
+console.log('the shipped full-path convention differs from it by up to ' +
+  conventionGap.toFixed(3) + ' K over these cases -- that difference is the point, see truth.mjs');
 
 // --- whole files, pixel by pixel ------------------------------------------
 //
@@ -156,6 +175,15 @@ for (const path of process.argv.slice(2)) {
     // parameters land 0.01 K high. Comparing twice separates that from a real
     // disagreement: once with flirpy's own numbers fed to our converter, once
     // with each side's own parsing.
+    // the sensor counts themselves must match: that is the parsing check
+    let rawMismatch = 0;
+    const ourPixels = flir.readFramePixels(buffer, frame);
+    for (let j = 0; j < ourPixels.length; j++) {
+      if (ourPixels[j] !== theirFrame.raw[j]) rawMismatch++;
+    }
+    agree('frame ' + (i + 1) + ': ' + ourPixels.length + ' sensor counts are identical',
+      rawMismatch === 0, rawMismatch + ' differ');
+
     const ours = flir.paramsFromInfo(frame.info);
     const sameInputs = Object.assign({}, ours, {
       reflectedTemp: theirFrame.meta['Reflected Apparent Temperature'],
@@ -163,11 +191,10 @@ for (const path of process.argv.slice(2)) {
       irWindowTemp: theirFrame.meta['IR Window Temperature'],
     });
     const convOurs = flir.makeConverter(ours);
-    const convSame = flir.makeConverter(sameInputs);
-    const pixels = flir.readFramePixels(buffer, frame);
-    let frameWorst = 0, asParsed = 0, mismatched = 0;
+    const pixels = ourPixels;
+    let frameWorst = 0, asShipped = 0, mismatched = 0;
     for (let j = 0; j < pixels.length; j++) {
-      const a = convSame.toTemp(pixels[j]);
+      const a = thermimageTemp(pixels[j], sameInputs);
       const b = theirFrame.temps[j] === null ? NaN : theirFrame.temps[j];
       if (!Number.isFinite(a) || !Number.isFinite(b)) {
         if (Number.isFinite(a) !== Number.isFinite(b)) mismatched++;
@@ -176,16 +203,17 @@ for (const path of process.argv.slice(2)) {
       const d = Math.abs(a - b);
       if (d > frameWorst) frameWorst = d;
       const dp = Math.abs(convOurs.toTemp(pixels[j]) - b);
-      if (dp > asParsed) asParsed = dp;
+      if (dp > asShipped) asShipped = dp;
     }
+    void referenceTemp;
     agree('frame ' + (i + 1) + ': same offset and geometry',
       frame.offset === theirFrame.offset && frame.raw.width === theirFrame.width &&
       frame.raw.height === theirFrame.height,
       frame.offset + ' ' + frame.raw.width + 'x' + frame.raw.height);
-    agree('frame ' + (i + 1) + ': ' + pixels.length + ' pixels agree',
+    agree('frame ' + (i + 1) + ': ' + pixels.length + ' pixels agree in flirpy\'s convention',
       frameWorst <= TOLERANCE && mismatched === 0,
-      'largest deviation ' + frameWorst.toExponential(2) + ' K; ' +
-      asParsed.toExponential(2) + " K with each side's own Kelvin constant" +
+      'largest deviation ' + frameWorst.toExponential(2) + ' K; the shipped viewer reads up to ' +
+      asShipped.toFixed(3) + ' K warmer, which is what matches Thermal Studio' +
       (mismatched ? ', ' + mismatched + ' disagree on being out of domain' : ''));
     if (frameWorst > worst) worst = frameWorst;
   }

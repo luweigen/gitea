@@ -80,6 +80,9 @@ def frames(seq_path, out_path):
             "offset": starts[i],
             "width": int(fff.width),
             "height": int(fff.height),
+            # flirpy's own parse of the sensor counts, to compare the record
+            # offsets independently of any radiometry
+            "raw": [int(v) for v in fff.get_image().reshape(-1).tolist()],
             "meta": {k: (v if isinstance(v, (int, float)) else str(v)) for k, v in fff.meta.items()
                      if isinstance(v, (int, float, bytes, str))},
             "temps": [float(t) if math.isfinite(t) else None for t in image.reshape(-1).tolist()],

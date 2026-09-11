@@ -142,8 +142,12 @@ Gitea 自带 29 种界面语言（`options/locale/`，其中包含 `zh-CN` 与 `
 * 整个文件会读进浏览器内存。几百兆的长序列建议先用相机软件裁剪，或调低
   `maxAutoLoadBytes` 让它先询问。
 * 大气透过率按 FLIR SDK 的规则取值：文件里的 `estAtmosphericTransmission` 非 0 就直接
-  采用，为 0 才按距离、湿度与大气温度估算。如果拍摄距离与文件记录不符，在「测温参数」
-  里改即可，温度会立刻重算。
+  采用，为 0 才按**整段目标距离**、湿度与大气温度估算。Thermimage 与 flirpy 在这里按
+  半程算再乘两次，那会系统性偏冷（样本上约 0.1–0.2 °C，远距离更多），本实现不跟随——
+  依据是 Thermal Studio 的实测读数，见 [`doc/format.md`](doc/format.md)。
+* **目标距离对结果有实质影响**，而相机往往按默认值 1 m 记录。这两段航拍样本文件里记的
+  就是 1 m。如果实际拍摄距离不是这个数，请在「测温参数」里改，温度会立刻重算。
+* 红外窗口那一项（窗口透过率 < 1）手头没有样本可核验，按 FLIR 的标准形式实现。
 * 显示的采集时间按文件里的 UTC 时间戳渲染，若文件带时区偏移则一并标出。
 * 不接管 diff 页面与文件列表预览，只接管单文件浏览页。
 * 温区限定只影响**画面**：被滤掉的像素依然可以用鼠标悬停读出温度（数据还在，只是没画），
@@ -160,14 +164,19 @@ node run.mjs                 # 解析、测温与翻译完整性，无需任何�
 ./run.sh /path/to/real.seq   # 同时跑一遍真实相机文件
 ```
 
-另有一个可选的交叉验证脚本，把温度换算与独立的 Python 实现 [flirpy](https://github.com/LJMUAstroecology/flirpy)
-对比（需要 `pip install flirpy`）：
+测温结果已用 **FLIR Thermal Studio 2.0.84** 核验过：两段 A655sc 录像共 7 帧、每帧
+max/min/avg 合计 21 个统计量，**全部落在 Thermal Studio 显示精度（±0.05 °C）之内**，
+平均偏差 +0.001 °C。真值表在 [`test/truth.mjs`](test/truth.mjs)，把对应录像传给
+`test/run.mjs` 就会逐帧断言。
+
+另有一个可选的交叉验证脚本，与独立的 Python 实现
+[flirpy](https://github.com/LJMUAstroecology/flirpy) 比对容器解析（需要 `pip install flirpy`）：
 
 ```sh
 node contrib/flir-seq/test/compare-flirpy.mjs /path/to/real.seq
 ```
 
-实测两者在 14 组参数 × 9 个原始值以及两个真实文件的全部 7 × 307200 个像素上偏差
-≤ 1.14e-13 K。公式出处与完整比对结果见 [`doc/format.md`](doc/format.md)。
+公式出处、与 Thermal Studio 的核验过程，以及本实现为何在大气透过率上**有意不同于**
+Thermimage/flirpy，见 [`doc/format.md`](doc/format.md)。
 
 详见 [`test/README.md`](test/README.md)。

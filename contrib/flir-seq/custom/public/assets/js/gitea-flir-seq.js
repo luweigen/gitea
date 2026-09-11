@@ -703,11 +703,18 @@
   }
 
   /**
-   * Atmospheric transmission. A value carried by the file wins outright, which
-   * is what the FLIR SDK prescribes for estAtmosphericTransmission; only when
-   * it is 0 is the transmission estimated from distance, humidity and air
-   * temperature. Values outside (0, 1] cannot be a transmission and are
-   * estimated instead.
+   * Atmospheric transmission over the whole object distance. A value carried by
+   * the file wins outright, which is what the FLIR SDK prescribes for
+   * estAtmosphericTransmission; only when it is 0 is the transmission estimated
+   * from distance, humidity and air temperature. Values outside (0, 1] cannot
+   * be a transmission and are estimated instead.
+   *
+   * The path length here is the full distance. Thermimage -- and flirpy, which
+   * is ported from it -- instead evaluate this at half the distance and then
+   * multiply the result by itself, modelling an IR window halfway along the
+   * path. That is not the same number: the expression is a sum of two
+   * exponentials, so tau(d/2)^2 != tau(d). Measured against FLIR Thermal Studio
+   * the full-path form is the right one; see doc/format.md.
    */
   function atmosphericTransmission(p) {
     if (hasAtmTransmission(p)) return p.atmTransmission;
@@ -715,7 +722,7 @@
     const at = p.atmosphericTemp;
     // water vapour pressure, FLIR's polynomial fit
     const h2o = rh * Math.exp(1.5587 + 0.06939 * at - 0.00027816 * at * at + 0.00000068455 * at * at * at);
-    const d = Math.sqrt(Math.max(p.objectDistance, 0) / 2);
+    const d = Math.sqrt(Math.max(p.objectDistance, 0));
     const root = Math.sqrt(Math.max(h2o, 0));
     return p.atmTransX * Math.exp(-d * (p.atmTransAlpha1 + p.atmTransBeta1 * root)) +
       (1 - p.atmTransX) * Math.exp(-d * (p.atmTransAlpha2 + p.atmTransBeta2 * root));
@@ -743,18 +750,21 @@
     const tau = atmosphericTransmission(p);
     if (!(tau > 0)) return invalid('errBadTau');
 
-    const emissWindow = 1 - irt;
+    // The measured signal is the object's own radiance attenuated by the
+    // atmosphere and any external optics, plus what those two emit themselves,
+    // plus the environment reflected off the object. Each contribution is
+    // removed once, over the whole path -- matching FLIR Thermal Studio, see
+    // doc/format.md.
     const rawRefl = planckRaw(p, p.reflectedTemp);
     const rawAtm = planckRaw(p, p.atmosphericTemp);
     const rawWind = planckRaw(p, p.irWindowTemp);
 
     // attenuation terms, all constant for a given parameter set
     const attnRefl = (1 - e) / e * rawRefl;
-    const attnAtm1 = (1 - tau) / e / tau * rawAtm;
-    const attnAtm2 = (1 - tau) / e / tau / irt / tau * rawAtm;
-    const attnWind = emissWindow / e / irt / tau * rawWind;
-    const gain = 1 / e / tau / irt / tau;
-    const offset = -(attnAtm1 + attnAtm2 + attnWind + attnRefl);
+    const attnAtm = (1 - tau) / (e * tau) * rawAtm;
+    const attnWind = (1 - irt) / (e * tau * irt) * rawWind;
+    const gain = 1 / (e * tau * irt);
+    const offset = -(attnAtm + attnWind + attnRefl);
 
     const toTemp = (raw) => {
       const objectSignal = raw * gain + offset;

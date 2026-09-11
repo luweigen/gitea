@@ -9,13 +9,19 @@ node run.mjs                 # 只跑合成样本
 node run.mjs /path/to/a.seq  # 另外打印真实文件每一帧的温度摘要
 ```
 
+传真实录像给 `run.mjs` 时，若文件名与 [`truth.mjs`](truth.mjs) 里的某条对得上，它会拿
+**FLIR Thermal Studio 2.0.84** 的读数逐帧断言 max/min/avg（容差取 TS 的显示精度
+±0.05 °C）；对不上则只打印摘要并说明没有对应真值。这是全套测试里唯一不源自同一次逆向的
+参照，也是它定下了大气透过率该怎么算——详见 [`../doc/format.md`](../doc/format.md)。
+
 `run.mjs` 不需要 `npm install`：它把 `gitea-flir-seq.js` 当作浏览器里的普通脚本
 用 `new Function` 求值（Gitea 的 `package.json` 把 `.js` 标成 ESM，所以不能直接
 `require`），再对合成样本逐项断言。
 
-关键一点是 `load.mjs` 里的 `referenceTemp()`：它是照 FLIR 公开的目标信号模型**另行
-抄写**的一份实现，没有复用查看器里那套预先整理好的 `gain`/`offset`。两者的偏差必须
-是 0，这样查看器为了提速做的代数变形一旦写错就会立刻暴露。
+关键一点是 `load.mjs` 里的 `referenceTemp()`：它是照 FLIR 的目标信号模型**另行抄写**的
+一份实现，没有复用查看器里那套预先整理好的 `gain`/`offset`。两者的偏差必须是 0，这样
+查看器为了提速做的代数变形一旦写错就会立刻暴露。同一个文件里的 `thermimageTemp()` 则是
+Thermimage/flirpy 那套「半程 τ 乘两次」的约定，只给 `compare-flirpy.mjs` 用。
 
 合成样本由 `fixture.mjs` 生成（大端帧头 + 小端记录，与真机一致），因此仓库里不必
 存放几兆字节的热成像数据。
@@ -63,9 +69,10 @@ node compare-flirpy.mjs /path/real.seq  # 再逐像素比真实文件
 FLIRPY_PYTHON=/path/to/venv/bin/python node compare-flirpy.mjs
 ```
 
-flirpy 是一份独立的 Python 实现，`compare-flirpy.mjs` 把同一组参数同时喂给两边并比较，
-真实文件模式下还会让 flirpy 自己的 FFF 解析器解出整幅温度图逐像素对比——因此连记录偏移
-一起验了，不只是算式。容差 1e-9 K，不达标时退出码非 0。
+本查看器的大气透过率算法与 flirpy **有意不同**（见 `../doc/format.md`），所以这个脚本
+核验的是它仍能核验的两件事：flirpy 自己的 FFF 解析器解出的**原始计数逐像素比特级一致**
+（连帧边界与记录偏移一起验了），以及 flirpy 与 `thermimageTemp()` 在它自己那套约定下的
+算式一致（容差 1e-9 K）。两种约定的差额会一并打印出来。不达标时退出码非 0。
 
 比对结果与 flirpy 那处 `273.14` 的说明记在 [`../doc/format.md`](../doc/format.md)。
 这个脚本需要 Python 与 flirpy，属于可选，不在 `run.sh` 里。
