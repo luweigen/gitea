@@ -117,6 +117,55 @@ check('unknown palette falls back', flir.buildPalette('nope').length === 768);
 // a file that is not a FLIR sequence must come back empty instead of throwing
 check('garbage input yields no frames', flir.parseSeq(toArrayBuffer(Buffer.alloc(4096, 0x42))).frames.length === 0);
 
+// --- atmospheric transmission ---------------------------------------------
+
+// The SDK is explicit: estAtmosphericTransmission is used as-is when it is not
+// zero, and only a zero means "estimate from humidity, distance and air temp".
+check('a file without a transmission estimates one', !conv.tauFromFile && conv.tau > 0 && conv.tau < 1,
+  conv.tau.toFixed(4));
+check('estAtmTransmission is read', frame.info.estAtmTransmission === 0, frame.info.estAtmTransmission);
+
+const supplied = flir.parseSeq(toArrayBuffer(buildFixture({width: 4, height: 2, frames: 1, estAtmTransmission: 0.75})));
+const suppliedParams = flir.paramsFromInfo(supplied.frames[0].info);
+const suppliedConv = flir.makeConverter(suppliedParams);
+check('a transmission in the file is taken as-is',
+  suppliedConv.tauFromFile && suppliedConv.tau === 0.75, suppliedConv.tau);
+check('the supplied transmission changes the temperature',
+  Math.abs(suppliedConv.toTemp(11000) - conv.toTemp(11000)) > 0.01,
+  suppliedConv.toTemp(11000).toFixed(2) + ' vs ' + conv.toTemp(11000).toFixed(2));
+check('the supplied transmission matches the reference model',
+  Math.abs(suppliedConv.toTemp(11000) - referenceTemp(11000, suppliedParams)) < 1e-6);
+check('humidity no longer moves the transmission once the file supplies one',
+  flir.makeConverter(Object.assign({}, suppliedParams, {relativeHumidity: 95})).tau === 0.75);
+check('humidity still moves an estimated transmission',
+  flir.makeConverter(Object.assign({}, params, {relativeHumidity: 95})).tau !== conv.tau);
+
+// a value outside (0, 1] cannot be a transmission, so it must not be believed
+for (const bogus of [-0.5, 1.5, 0]) {
+  const odd = flir.makeConverter(Object.assign({}, params, {atmTransmission: bogus}));
+  check('transmission ' + bogus + ' falls back to the estimate',
+    !odd.tauFromFile && Math.abs(odd.tau - conv.tau) < 1e-12, odd.tau);
+}
+
+// --- pixel value type -----------------------------------------------------
+
+check('a counts file raises no pixel-value warning',
+  !parsed.warnings.some((w) => w.key === 'warnPixelType'));
+check('pixel value type and unit are read',
+  frame.info.pixelValueType === 1 && frame.info.pixelValueUnit === 0,
+  frame.info.pixelValueType + '/' + frame.info.pixelValueUnit);
+
+const oddPixels = flir.parseSeq(toArrayBuffer(
+  buildFixture({width: 4, height: 2, frames: 2, pixelValueType: 2, pixelValueUnit: 3})));
+const pixelWarnings = oddPixels.warnings.filter((w) => w.key === 'warnPixelType');
+check('an unverified pixel value type is flagged once', pixelWarnings.length === 1,
+  JSON.stringify(oddPixels.warnings));
+check('the flag carries the type and the unit',
+  pixelWarnings.length === 1 && pixelWarnings[0].args.join('/') === '2/3',
+  pixelWarnings.length ? pixelWarnings[0].args.join('/') : '');
+check('the frames still decode', flir.readFramePixels(toArrayBuffer(
+  buildFixture({width: 4, height: 2, frames: 2, pixelValueType: 2})), oddPixels.frames[0]).length === 8);
+
 // --- translations ---------------------------------------------------------
 
 console.log('\ntranslations');
@@ -175,6 +224,9 @@ for (const path of process.argv.slice(2)) {
   console.log('  e=' + p.emissivity + ' d=' + p.objectDistance + 'm rh=' + p.relativeHumidity +
     '% refl=' + p.reflectedTemp.toFixed(1) + 'C  R1=' + p.planckR1.toFixed(2) + ' R2=' +
     p.planckR2.toPrecision(6) + ' B=' + p.planckB.toFixed(2) + ' O=' + p.planckO);
+  console.log('  tau=' + c.tau.toFixed(4) + (c.tauFromFile ? ' (from the file)' : ' (estimated)') +
+    '  pixel values ' + f0.info.pixelValueType + '/' + f0.info.pixelValueUnit +
+    (seq.warnings.length ? '  warnings: ' + seq.warnings.map((w) => w.key).join(', ') : ''));
   for (const frame of seq.frames) {
     const px = flir.readFramePixels(ab, frame);
     let min = 0xffff, max = 0;

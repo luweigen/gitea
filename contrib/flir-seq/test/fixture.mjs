@@ -14,6 +14,9 @@ export const FIXTURE = {
   irWindowTempK: 293.15,
   irWindowTransmission: 1,
   relativeHumidity: 0.5, // stored as a fraction, like the real cameras
+  estAtmTransmission: 0, // 0 means "estimate it", which is what real files hold
+  pixelValueType: 1, // sensor counts, the only kind verified against real files
+  pixelValueUnit: 0,
   planckR1: 14772.65,
   planckR2: 0.0137111,
   planckB: 1393.8,
@@ -46,7 +49,10 @@ export function rawAt(x, y, width, height, frame) {
   return 8200 + rampX + rampY + hot + frame * 40;
 }
 
-export function buildFixture({width = 8, height = 4, frames = 3, tz = 0} = {}) {
+export function buildFixture({width = 8, height = 4, frames = 3, tz = 0,
+  estAtmTransmission = FIXTURE.estAtmTransmission,
+  pixelValueType = FIXTURE.pixelValueType,
+  pixelValueUnit = FIXTURE.pixelValueUnit} = {}) {
   const infoSize = 0x470;
   const pixelCount = width * height;
   const rawSize = 32 + pixelCount * 2;
@@ -83,7 +89,10 @@ export function buildFixture({width = 8, height = 4, frames = 3, tz = 0} = {}) {
     buf.writeFloatLE(FIXTURE.atmosphericTempK, i + 0x2c);
     buf.writeFloatLE(FIXTURE.irWindowTempK, i + 0x30);
     buf.writeFloatLE(FIXTURE.irWindowTransmission, i + 0x34);
+    buf.writeFloatLE(estAtmTransmission, i + 0x38);
     buf.writeFloatLE(FIXTURE.relativeHumidity, i + 0x3c);
+    buf.writeUInt32LE(pixelValueType, i + 0x50);
+    buf.writeUInt32LE(pixelValueUnit, i + 0x54);
     buf.writeFloatLE(FIXTURE.planckR1, i + 0x58);
     buf.writeFloatLE(FIXTURE.planckB, i + 0x5c);
     buf.writeFloatLE(FIXTURE.planckF, i + 0x60);

@@ -28,8 +28,10 @@ export function referenceTemp(raw, p) {
     1.5587 + 0.06939 * p.atmosphericTemp - 0.00027816 * p.atmosphericTemp ** 2 +
     0.00000068455 * p.atmosphericTemp ** 3);
   const d = Math.sqrt(p.objectDistance / 2);
-  const tau = p.atmTransX * Math.exp(-d * (p.atmTransAlpha1 + p.atmTransBeta1 * Math.sqrt(h2o))) +
+  // estAtmosphericTransmission wins when the file carries one, per the SDK
+  const estimated = p.atmTransX * Math.exp(-d * (p.atmTransAlpha1 + p.atmTransBeta1 * Math.sqrt(h2o))) +
     (1 - p.atmTransX) * Math.exp(-d * (p.atmTransAlpha2 + p.atmTransBeta2 * Math.sqrt(h2o)));
+  const tau = p.atmTransmission > 0 && p.atmTransmission <= 1 ? p.atmTransmission : estimated;
   const planck = (t) => p.planckR1 / (p.planckR2 * (Math.exp(p.planckB / (t + K)) - p.planckF)) - p.planckO;
   const e = p.emissivity;
   const irt = p.irWindowTransmission;

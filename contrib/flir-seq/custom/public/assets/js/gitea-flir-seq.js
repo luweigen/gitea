@@ -99,6 +99,7 @@
       reflectedTemp: 'Reflected apparent temperature (°C)',
       objectDistance: 'Object distance (m)',
       relativeHumidity: 'Relative humidity (%)',
+      atmTransmission: 'Atmospheric transmission (0 = estimate)',
       atmosphericTemp: 'Atmospheric temperature (°C)',
       irWindowTemp: 'IR window temperature (°C)',
       irWindowTransmission: 'IR window transmission',
@@ -116,6 +117,11 @@
       metaFrameRate: 'Frame rate',
       metaRange: 'Temperature range',
       metaContainer: 'Container',
+      tauNote: 'Atmospheric transmission in use: {0} ({1})',
+      tauFromFile: 'from the file',
+      tauManual: 'entered by hand',
+      tauEstimated: 'estimated from distance, humidity and air temperature',
+      metaPixelValues: 'Pixel value type / unit',
       unknown: 'unknown',
       exportPng: 'Export PNG',
       exportCsv: 'Export temperature CSV',
@@ -139,6 +145,7 @@
       errRawPng: "This frame's raw data is PNG-compressed, which is not supported",
       errRawUnsupported: "This frame's RawData record is not uncompressed 16-bit data",
       warnResync: 'Resynchronised to the next frame at offset {0}',
+      warnPixelType: 'This file marks its pixel values as type {0} / unit {1}. Only type 1 (sensor counts) has been verified, so the temperatures below may not apply -- check them against FLIR\'s own tools.',
       warnFrameHeader: 'The frame header at offset {0} could not be parsed, so parsing stopped there',
       errNoPlanck: 'The file has no Planck calibration constants (R1/R2/B), so temperatures cannot be computed',
       errBadEmissivity: 'Emissivity and IR window transmission must both be greater than 0',
@@ -182,6 +189,7 @@
       reflectedTemp: '反射表观温度 (°C)',
       objectDistance: '目标距离 (m)',
       relativeHumidity: '相对湿度 (%)',
+      atmTransmission: '大气透过率（0＝自动估算）',
       atmosphericTemp: '大气温度 (°C)',
       irWindowTemp: '红外窗口温度 (°C)',
       irWindowTransmission: '窗口透过率',
@@ -199,6 +207,11 @@
       metaFrameRate: '帧率',
       metaRange: '量程',
       metaContainer: '容器格式',
+      tauNote: '当前大气透过率：{0}（{1}）',
+      tauFromFile: '来自文件',
+      tauManual: '手动输入',
+      tauEstimated: '按距离、湿度与大气温度估算',
+      metaPixelValues: '像素值类型 / 单位',
       unknown: '未知',
       exportPng: '导出 PNG',
       exportCsv: '导出温度 CSV',
@@ -222,6 +235,7 @@
       errRawPng: '该帧的原始数据是 PNG 压缩格式，暂不支持',
       errRawUnsupported: '该帧的 RawData 记录不是未压缩的 16 位数据',
       warnResync: '在偏移 {0} 处重新同步到下一帧',
+      warnPixelType: '该文件标记的像素值类型为 {0} / 单位 {1}。目前只验证过类型 1（原始计数），下面的温度换算可能不适用，请与 FLIR 官方工具核对。',
       warnFrameHeader: '偏移 {0} 处的帧头无法解析，已停止',
       errNoPlanck: '该文件缺少 Planck 标定常数（R1/R2/B），无法换算温度',
       errBadEmissivity: '发射率与红外窗口透过率必须大于 0',
@@ -265,6 +279,7 @@
       reflectedTemp: 'Heijastunut näennäislämpötila (°C)',
       objectDistance: 'Etäisyys kohteeseen (m)',
       relativeHumidity: 'Suhteellinen kosteus (%)',
+      atmTransmission: 'Ilmakehän läpäisy (0 = arvioidaan)',
       atmosphericTemp: 'Ilman lämpötila (°C)',
       irWindowTemp: 'IR-ikkunan lämpötila (°C)',
       irWindowTransmission: 'IR-ikkunan läpäisy',
@@ -282,6 +297,11 @@
       metaFrameRate: 'Kuvataajuus',
       metaRange: 'Mittausalue',
       metaContainer: 'Säiliömuoto',
+      tauNote: 'Käytössä oleva ilmakehän läpäisy: {0} ({1})',
+      tauFromFile: 'tiedostosta',
+      tauManual: 'syötetty käsin',
+      tauEstimated: 'arvioitu etäisyydestä, kosteudesta ja ilman lämpötilasta',
+      metaPixelValues: 'Pikseliarvojen tyyppi / yksikkö',
       unknown: 'tuntematon',
       exportPng: 'Vie PNG',
       exportCsv: 'Vie lämpötilat CSV:nä',
@@ -305,6 +325,7 @@
       errRawPng: 'Ruudun raakadata on PNG-pakattua, mitä ei tueta',
       errRawUnsupported: 'Ruudun RawData-tietue ei ole pakkaamatonta 16-bittistä dataa',
       warnResync: 'Synkronoitiin uudelleen seuraavaan ruutuun kohdassa {0}',
+      warnPixelType: 'Tiedosto merkitsee pikseliarvonsa tyypiksi {0} / yksiköksi {1}. Vain tyyppi 1 (raaka-arvot) on varmennettu, joten alla olevat lämpötilat eivät välttämättä päde -- tarkista ne FLIRin omilla työkaluilla.',
       warnFrameHeader: 'Ruudun otsaketta kohdassa {0} ei voitu jäsentää, joten jäsennys päättyi siihen',
       errNoPlanck: 'Tiedostosta puuttuvat Planckin kalibrointivakiot (R1/R2/B), joten lämpötilaa ei voi laskea',
       errBadEmissivity: 'Emissiivisyyden ja IR-ikkunan läpäisyn on oltava suurempia kuin 0',
@@ -365,6 +386,10 @@
   // for each of them instead of being assumed.
   // ------------------------------------------------------------------
 
+  // The pixel value type seen on every file this viewer was verified against.
+  // Anything else may not be sensor counts, so the reading is flagged.
+  const VERIFIED_PIXEL_VALUE_TYPE = 1;
+
   const REC_RAW_DATA = 1;
   const REC_CAMERA_INFO = 32;
   const FRAME_HEADER_SIZE = 0x40;
@@ -406,7 +431,15 @@
     atmosphericTempK: [0x2c, 'f'],
     irWindowTempK: [0x30, 'f'],
     irWindowTransmission: [0x34, 'f'],
+    // CObjectParametersReduceObject::estAtmosphericTransmission -- "set to 0 to
+    // calculate from relHum, distance, atmTemp". When the camera was given a
+    // transmission by hand it lands here and must be used as-is.
+    estAtmTransmission: [0x38, 'f'],
     relativeHumidity: [0x3c, 'f'],
+    // What the samples hold. Only type 1 (sensor counts) has been verified
+    // against real files; see warnPixelType.
+    pixelValueType: [0x50, 'u'],
+    pixelValueUnit: [0x54, 'u'],
     planckR1: [0x58, 'f'],
     planckB: [0x5c, 'f'],
     planckF: [0x60, 'f'],
@@ -582,6 +615,10 @@
       }
 
       frames.push(frame);
+      if (frames.length === 1 && frame.info && frame.info.pixelValueType !== undefined &&
+          frame.info.pixelValueType !== VERIFIED_PIXEL_VALUE_TYPE) {
+        warnings.push({key: 'warnPixelType', args: [frame.info.pixelValueType, frame.info.pixelValueUnit]});
+      }
 
       const next = off + head.frameEnd;
       if (next <= off) break;
@@ -627,6 +664,8 @@
       irWindowTemp: num(i.irWindowTempK, 293.15) - K0,
       irWindowTransmission: num(i.irWindowTransmission, 1),
       relativeHumidity: num(i.relativeHumidity, 50),
+      // 0 means "not set by the camera, estimate it from distance and humidity"
+      atmTransmission: num(i.estAtmTransmission, 0),
       planckR1: num(i.planckR1, 0),
       planckR2: num(i.planckR2, 0),
       planckB: num(i.planckB, 1400),
@@ -649,7 +688,20 @@
     return p.planckR1 / (p.planckR2 * (Math.exp(p.planckB / (t + K0)) - p.planckF)) - p.planckO;
   }
 
+  /** True when the file (or the user) supplied a usable transmission outright. */
+  function hasAtmTransmission(p) {
+    return p.atmTransmission > 0 && p.atmTransmission <= 1;
+  }
+
+  /**
+   * Atmospheric transmission. A value carried by the file wins outright, which
+   * is what the FLIR SDK prescribes for estAtmosphericTransmission; only when
+   * it is 0 is the transmission estimated from distance, humidity and air
+   * temperature. Values outside (0, 1] cannot be a transmission and are
+   * estimated instead.
+   */
   function atmosphericTransmission(p) {
+    if (hasAtmTransmission(p)) return p.atmTransmission;
     const rh = p.relativeHumidity / 100;
     const at = p.atmosphericTemp;
     // water vapour pressure, FLIR's polynomial fit
@@ -709,7 +761,7 @@
     const lut = new Float32Array(65536);
     for (let raw = 0; raw < 65536; raw++) lut[raw] = toTemp(raw);
 
-    return {ok: true, reason: '', toTemp, toRaw, lut, tau};
+    return {ok: true, reason: '', toTemp, toRaw, lut, tau, tauFromFile: hasAtmTransmission(p)};
   }
 
   // ------------------------------------------------------------------
@@ -1098,6 +1150,7 @@
       ['reflectedTemp', 0.1],
       ['objectDistance', 0.1, 0],
       ['relativeHumidity', 1, 0, 100],
+      ['atmTransmission', 0.01, 0, 1],
       ['atmosphericTemp', 0.1],
       ['irWindowTemp', 0.1],
       ['irWindowTransmission', 0.01, 0.01, 1],
@@ -1127,11 +1180,13 @@
       self.applyParams();
     });
 
+    this.tauNote = el('p', {class: 'flir-seq-hint'});
     this.paramNote = el('p', {class: 'flir-seq-hint'});
     return el('details', {class: 'flir-seq-panel'}, [
       el('summary', {text: t('params')}),
       el('div', {class: 'flir-seq-panel-body'}, [
         el('div', {class: 'flir-seq-form'}, controls),
+        this.tauNote,
         this.paramNote,
         el('div', {class: 'flir-seq-panel-actions'}, [reset]),
       ]),
@@ -1151,6 +1206,15 @@
       const v = this.params[key];
       this.paramInputs[key].value = Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
     }
+    // "from the file" only while the value still is the camera's own
+    let tauSource = 'tauEstimated';
+    if (this.converter.tauFromFile) {
+      tauSource = this.params.atmTransmission === this.originalParams.atmTransmission
+        ? 'tauFromFile' : 'tauManual';
+    }
+    this.tauNote.textContent = this.converter.ok
+      ? this.t('tauNote', [this.converter.tau.toFixed(4), this.t(tauSource)])
+      : '';
     this.paramNote.textContent = this.converter.ok
       ? this.t('planckNote', [
         this.params.planckR1.toFixed(2), this.params.planckR2.toPrecision(6),
@@ -1655,6 +1719,10 @@
         ? (info.cameraTempRangeMinK - K0).toFixed(1) + ' … ' + (info.cameraTempRangeMaxK - K0).toFixed(1) + ' °C' : ''],
       [t('metaContainer'), frame.format],
     ];
+    if (info.pixelValueType !== undefined &&
+        (info.pixelValueType !== VERIFIED_PIXEL_VALUE_TYPE || info.pixelValueUnit)) {
+      rows.push([t('metaPixelValues'), info.pixelValueType + ' / ' + info.pixelValueUnit]);
+    }
     this.metaBody.replaceChildren();
     for (const [k, v] of rows) {
       if (!v) continue;
@@ -1818,6 +1886,8 @@
     planckRaw,
     atmosphericTransmission,
     buildPalette,
+    hasAtmTransmission,
+    VERIFIED_PIXEL_VALUE_TYPE,
     makeTranslator,
     resolveLang,
     LANGUAGES,

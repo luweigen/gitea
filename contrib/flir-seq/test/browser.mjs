@@ -149,6 +149,21 @@ try {
     before.toFixed(1) + ' -> ' + after.toFixed(1));
   await emissivity.fill(String(params.emissivity));
   await emissivity.dispatchEvent('change');
+
+  // the transmission note must say where the value in use came from, and a
+  // hand-entered transmission must actually replace the estimate
+  const tauNote = () => page.locator('.flir-seq-panel-body .flir-seq-hint').nth(1).textContent();
+  check('the transmission is reported as estimated',
+    (await tauNote()) === t('tauNote', [converter.tau.toFixed(4), t('tauEstimated')]), await tauNote());
+  const transmission = page.locator('.flir-seq-form input').nth(4);
+  await transmission.fill('0.8');
+  await transmission.dispatchEvent('change');
+  check('a hand-entered transmission is used and labelled',
+    (await tauNote()) === t('tauNote', ['0.8000', t('tauManual')]), await tauNote());
+  await transmission.fill('0');
+  await transmission.dispatchEvent('change');
+  check('clearing it returns to the estimate',
+    (await tauNote()) === t('tauNote', [converter.tau.toFixed(4), t('tauEstimated')]), await tauNote());
   check('colour bar survives a parameter round trip',
     (await colorbarLabels()) === frameTemps.hi + '°C / ' + frameTemps.lo + '°C',
     await colorbarLabels());
@@ -214,11 +229,13 @@ try {
     try {
       await localised.goto(url + '?lang=' + lang, {waitUntil: 'load'});
       await localised.waitForSelector('.flir-seq-canvas', {timeout: 15000});
+      // innerText skips collapsed <details>, and two panels start closed
+      await localised.locator('details.flir-seq-panel').evaluateAll((ds) => ds.forEach((d) => (d.open = true)));
       const text = await localised.locator('.flir-seq').innerText();
       // one string from each area of the UI, so a key missed in one panel shows
       const expected = ['palette', 'scale', 'extremes', 'spots', 'spotsHint', 'noSpots',
-        'colRaw', 'colTemp', 'clearAll', 'params', 'fileInfo', 'exportPng', 'exportCsv',
-        'readoutHint', 'play'];
+        'colRaw', 'colTemp', 'clearAll', 'params', 'atmTransmission', 'fileInfo',
+        'exportPng', 'exportCsv', 'readoutHint', 'play'];
       const missing = expected.filter((key) => !text.includes(tl(key)));
       check(lang + ': every panel is translated', missing.length === 0,
         missing.map((key) => key + '=' + tl(key)).join(' | '));

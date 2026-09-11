@@ -67,8 +67,11 @@
 | `0x28` | float | 反射表观温度 ReflectedApparentTemperature（K） |
 | `0x2c` | float | 大气温度 AtmosphericTemperature（K） |
 | `0x30` | float | 红外窗口温度 IRWindowTemperature（K） |
-| `0x34` | float | 红外窗口透过率 IRWindowTransmission |
+| `0x34` | float | 红外窗口透过率 IRWindowTransmission（SDK 的 extOpticsTransmission） |
+| `0x38` | float | **estAtmosphericTransmission**，见下节；为 0 表示「请自行估算」 |
 | `0x3c` | float | 相对湿度 RelativeHumidity |
+| `0x50` | uint32 | typeOfPixelValues，见下节 |
+| `0x54` | uint32 | unitOfPixelValues |
 | `0x58` | float | PlanckR1 |
 | `0x5c` | float | PlanckB |
 | `0x60` | float | PlanckF |
@@ -86,15 +89,46 @@
 | `0x38c` | int16 | 时区偏移，分钟 |
 | `0x464` | uint16 | 帧率（Hz） |
 
+`0x20`–`0x3c` 这一段与 FLIR SDK 的 `CObjectParametersReduceObject`（`fnvreduce`）字段
+顺序逐个对应：`emissivity`、`distance`、`reflectedTemp`、`atmosphereTemp`、
+`extOpticsTemp`、`extOpticsTransmission`、`estAtmosphericTransmission`、
+`relativeHumidity`。结构体里夹在最后两者之间的 `atmosphericTransmission` 被 SDK 注释为
+“This is an out hole, don't write to it, read only please”——它是算出来的结果，不落盘，
+所以文件里没有它的位置。
+
 两个容易踩的坑：
 
 * **相对湿度**有的机型写 `0.5`（比例），有的写 `50`（百分数）。解析器按
   「≤ 1.5 视为比例」归一到百分数。
 * **PlanckO 必须按有符号读**，实测值为 `-3735`；按无符号读会直接把温度算到天上去。
 
+### 大气透过率：文件里的值优先
+
+SDK 对 `estAtmosphericTransmission` 的说明是
+“set to 0 to calculate from relHum, distance, atmTemp”，配套的 `atmosphericTransmission`
+则是“will be estAtmosphericTransmission if it's not 0, else will be computed atmospheric
+transmission”，另有 `editNoCalcAtmTrans` 标志表示“atmospheric transmission can't be
+calculated, user must supply it”。
+
+因此规则很明确：**`0x38` 非 0 时直接拿它当 τ，为 0 时才用下面的湿度/距离/气温公式估算。**
+在相机里手动设过大气透过率的文件，若一律走估算公式，算出的温度会与 FLIR 官方工具不一致。
+查看器按此实现，并且只接受落在 (0, 1] 区间的值——透过率不可能在这个区间之外，这样即使某台
+相机在这个偏移放了别的东西也不会被误用。手里两个 A655sc 样本该字段都是 0.0，正是“未设定”。
+
+### 像素值类型
+
+`0x50` / `0x54` 是 typeOfPixelValues / unitOfPixelValues。两个样本都是 `1 / 0`，也就是
+原始探测器计数，本查看器的整套换算正是针对这种文件验证的。开了 TLinear 之类功能的机型
+可能直接存温度线性值，那时「计数 → 温度」这条路就不适用。
+
+**这两个偏移只在样本上核对过取值，枚举含义没有公开文档可依**，所以查看器的做法是保守的：
+读出来，遇到 `1` 以外的类型就在界面上给出警告，提示温度换算可能不适用、请与 FLIR 官方
+工具核对，而不是假装算对了。图像照常显示。
+
 真实样本（FLIR A655sc，640×480）读出的值可作为对照：
 `ε=0.95`、`d=1 m`、`RH=50%`、反射表观温度 `20 °C`、
-`R1=14772.65`、`R2=0.0137111`、`B=1393.8`、`F=1`、`O=-3735`。
+`R1=14772.65`、`R2=0.0137111`、`B=1393.8`、`F=1`、`O=-3735`、
+`estAtmosphericTransmission=0`（即估算，实测 τ≈0.9957）、像素值类型 `1 / 0`。
 
 ## 从原始计数到温度
 
@@ -107,12 +141,15 @@
   反射表观、窗口温度（°C）
 * `R1, R2, B, F, O` 为文件里的 Planck 标定常数
 
-**1. 大气透过率**。先按经验多项式估算水汽含量：
+**1. 大气透过率**。文件里的 `estAtmosphericTransmission` 非 0 就直接用它；为 0 时先按
+经验多项式估算水汽含量，再算 τ：
 
 ```
 h2o = (RH / 100) · exp(1.5587 + 0.06939·T_atm − 0.00027816·T_atm² + 0.00000068455·T_atm³)
 τ   = X·exp(−√(d/2)·(α1 + β1·√h2o)) + (1 − X)·exp(−√(d/2)·(α2 + β2·√h2o))
 ```
+
+注意被覆盖的只有 τ 这一项：`T_atm` 仍然参与下面的大气自身辐射项，不受影响。
 
 **2. 各温度对应的黑体信号**（同一个函数，代入不同温度）：
 
@@ -150,6 +187,9 @@ T = B / ln(R1 / (R2 · (raw_obj + O)) + F) − 273.15
 ```sh
 exiftool -a -G1 -Planck* -Emissivity -ObjectDistance -RawThermalImage* your.seq
 ```
+
+ExifTool 的 FLIR 表没有给 `0x38` / `0x50` / `0x54` 命名，这三个字段的依据是 FLIR SDK 的
+`ObjectParametersReduceObject.h` 与样本实测，不是 ExifTool。
 
 注意 ExifTool 对 `.seq` 只解析第一帧。查看器的 `test/run.mjs` 接受真实文件作为
 参数，会把每一帧的最高/最低/中心温度都打印出来，便于逐帧比对：
