@@ -15,7 +15,7 @@
 import {basename} from 'node:path';
 import {readFileSync} from 'node:fs';
 import {loadFlirSeq, referenceTemp, thermimageTemp} from './load.mjs';
-import {truthFor, DISPLAY_ROUNDING} from './truth.mjs';
+import {truthFor, DISPLAY_ROUNDING, CAMERA_SCALE} from './truth.mjs';
 import {FIXTURE, buildFixture, toArrayBuffer, rawAt} from './fixture.mjs';
 
 const flir = loadFlirSeq();
@@ -189,6 +189,25 @@ for (const bogus of [-0.5, 1.5, 0]) {
 
 check('a counts file raises no pixel-value warning',
   !parsed.warnings.some((w) => w.key === 'warnPixelType'));
+// The scale Thermal Studio opens on comes from the file, not from the pixels.
+check('the recorded display scale is read',
+  frame.info.rawValueMedian === FIXTURE.rawValueMedian && frame.info.rawValueRange === FIXTURE.rawValueRange,
+  frame.info.rawValueMedian + ' +/- ' + frame.info.rawValueRange / 2);
+const camera = flir.cameraScale(frame.info, conv);
+check('it becomes a scale', camera !== null && camera.hi > camera.lo,
+  camera && camera.lo.toFixed(2) + ' .. ' + camera.hi.toFixed(2));
+check('it is centred on the median',
+  Math.abs((camera.lo + camera.hi) / 2 - conv.toTemp(frame.info.rawValueMedian)) < 0.2);
+check('its ends are the median plus and minus half the range',
+  Math.abs(camera.lo - conv.toTemp(FIXTURE.rawValueMedian - FIXTURE.rawValueRange / 2)) < 1e-9 &&
+  Math.abs(camera.hi - conv.toTemp(FIXTURE.rawValueMedian + FIXTURE.rawValueRange / 2)) < 1e-9);
+check('a file without a recorded scale has none',
+  flir.cameraScale(flir.parseSeq(toArrayBuffer(
+    buildFixture({width: 4, height: 2, frames: 1, rawValueRange: 0}))).frames[0].info, conv) === null);
+check('a scale needs a usable converter too',
+  flir.cameraScale(frame.info, flir.makeConverter(Object.assign({}, params, {planckR2: 0}))) === null ||
+  flir.cameraScale(frame.info, null) !== null);
+
 check('pixel value type and unit are read',
   frame.info.pixelValueType === 1 && frame.info.pixelValueUnit === 0,
   frame.info.pixelValueType + '/' + frame.info.pixelValueUnit);
@@ -288,6 +307,19 @@ for (const path of process.argv.slice(2)) {
     const deviation = Math.abs(c.toTemp(max) - referenceTemp(max, p));
     if (deviation > 1e-6) {
       check('frame ' + (frame.index + 1) + ' matches the reference model', false, deviation);
+    }
+    if (frame.index === 0) {
+      // the file's own scale, which is what Thermal Studio opens on
+      const scale = flir.cameraScale(frame.info, c);
+      console.log('  recorded scale ' + scale.lo.toFixed(2) + ' .. ' + scale.hi.toFixed(2) + ' C' +
+        '  (median ' + frame.info.rawValueMedian + ' +/- ' + frame.info.rawValueRange / 2 + ')');
+      if (truth) {
+        check('the recorded scale matches the one Thermal Studio opens on',
+          Math.abs(scale.lo - CAMERA_SCALE[0]) <= DISPLAY_ROUNDING &&
+          Math.abs(scale.hi - CAMERA_SCALE[1]) <= DISPLAY_ROUNDING,
+          scale.lo.toFixed(2) + ' .. ' + scale.hi.toFixed(2) + ' vs ' +
+          CAMERA_SCALE[0].toFixed(1) + ' .. ' + CAMERA_SCALE[1].toFixed(1));
+      }
     }
     const expected = truth && truth.frames[frame.index];
     if (!expected) continue;
