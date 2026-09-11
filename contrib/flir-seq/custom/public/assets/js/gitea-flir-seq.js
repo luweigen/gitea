@@ -79,13 +79,10 @@
       scaleMin: 'Min',
       scaleMax: 'Max',
       extremes: 'Hot/cold spot',
-      filterHigh: 'Upper limit of the displayed temperature window',
       scaleHigh: 'Top of the colour scale',
       scaleLow: 'Bottom of the colour scale',
       scaleCamera: 'From the file',
       metaCameraScale: 'Scale in the file',
-      filterLow: 'Lower limit of the displayed temperature window',
-      filterReset: 'Show all',
       zoomIn: 'Zoom in',
       zoomOut: 'Zoom out',
       zoomFit: 'Fit to window',
@@ -180,13 +177,10 @@
       scaleMin: '下限',
       scaleMax: '上限',
       extremes: '最高/最低点',
-      filterHigh: '显示温区上限',
       scaleHigh: '色标上限',
       scaleLow: '色标下限',
       scaleCamera: '文件记录',
       metaCameraScale: '文件记录温标',
-      filterLow: '显示温区下限',
-      filterReset: '显示全部',
       zoomIn: '放大',
       zoomOut: '缩小',
       zoomFit: '适应窗口',
@@ -281,13 +275,10 @@
       scaleMin: 'Alaraja',
       scaleMax: 'Yläraja',
       extremes: 'Kuumin/kylmin piste',
-      filterHigh: 'Näytettävän lämpötila-alueen yläraja',
       scaleHigh: 'Väriasteikon yläraja',
       scaleLow: 'Väriasteikon alaraja',
       scaleCamera: 'Tiedostosta',
       metaCameraScale: 'Tiedoston asteikko',
-      filterLow: 'Näytettävän lämpötila-alueen alaraja',
-      filterReset: 'Näytä kaikki',
       zoomIn: 'Lähennä',
       zoomOut: 'Loitonna',
       zoomFit: 'Sovita ikkunaan',
@@ -977,10 +968,6 @@
     this.playing = false;
     this.sequenceRawRange = null;
     this.showExtremes = true;
-    // {lo, hi} in whatever unit value() returns, or null for "show everything".
-    // Kept in absolute terms, not as a fraction of the colour bar, so that a
-    // window stays put while stepping through a sequence that rescales.
-    this.filter = null;
     this.pixelCache = {index: -1, pixels: null, stats: null};
   }
 
@@ -1079,7 +1066,6 @@
 
     this.imgCanvas = document.createElement('canvas');
     this.viewCanvas = el('canvas', {class: 'flir-seq-canvas'});
-    this.barCanvas = el('canvas', {class: 'flir-seq-colorbar-canvas', width: 16, height: 256});
     this.scaleCanvas = el('canvas', {class: 'flir-seq-colorbar-canvas', width: 16, height: 256});
 
     // --- toolbar -------------------------------------------------
@@ -1142,20 +1128,25 @@
       self.paintView();
     });
 
-    // Sits above the colour bar, with the limit handles it clears -- next to the
-    // extremes checkbox it read as if it controlled that instead. The label is a
-    // glyph so the column stays narrow whatever the translation is; the words go
-    // on the tooltip and the accessible name, which is what a screen reader and
-    // a hovering user get.
-    this.filterReset = el('button', {
-      class: 'flir-seq-btn flir-seq-btn-mini flir-seq-filter-reset',
-      type: 'button', text: '↕', title: t('filterReset'), 'aria-label': t('filterReset'),
-      disabled: true,
-    });
-    this.filterReset.addEventListener('click', () => {
-      self.filter = null;
-      self.paint();
-    });
+    // Two shortcuts for the scale, stacked above the bar they act on. The labels
+    // are glyphs so the column stays as narrow as its temperature labels in any
+    // language; the words go on the tooltip and the accessible name, which is
+    // what a hovering user and a screen reader get.
+    const scaleButton = (glyph, mode, key) => {
+      const button = el('button', {
+        class: 'flir-seq-btn flir-seq-btn-mini flir-seq-scale-' + mode,
+        type: 'button', text: glyph, title: t(key), 'aria-label': t(key),
+      });
+      button.addEventListener('click', () => {
+        self.rangeMode = mode;
+        self.rangeSelect.value = mode;
+        self.syncRangeInputs();
+        self.paint();
+      });
+      return button;
+    };
+    this.scaleFullButton = scaleButton('↕', 'frame', 'scaleFrame');
+    this.scaleCameraButton = scaleButton('⟲', 'camera', 'scaleCamera');
 
     this.toolbar = el('div', {class: 'flir-seq-toolbar'}, [
       labelled(t('palette'), this.paletteSelect),
@@ -1168,29 +1159,20 @@
 
     // --- canvas + colour bar ------------------------------------
     this.canvasWrap = el('div', {class: 'flir-seq-canvas-wrap'}, [this.viewCanvas]);
-    this.barHi = el('span', {class: 'flir-seq-colorbar-label'});
-    this.barLo = el('span', {class: 'flir-seq-colorbar-label'});
-    this.barMaskHi = el('div', {class: 'flir-seq-colorbar-mask'});
-    this.barMaskLo = el('div', {class: 'flir-seq-colorbar-mask'});
-    this.handleHi = this.buildHandle('hi', 'filter');
-    this.handleLo = this.buildHandle('lo', 'filter');
-    this.scaleHandleHi = this.buildHandle('hi', 'scale');
-    this.scaleHandleLo = this.buildHandle('lo', 'scale');
-    this.barTrack = el('div', {class: 'flir-seq-colorbar-track'},
-      [this.barCanvas, this.barMaskHi, this.barMaskLo, this.handleHi.root, this.handleLo.root]);
-    this.colorbar = el('div', {class: 'flir-seq-colorbar flir-seq-filterbar'},
-      [this.filterReset, this.barHi, this.barTrack, this.barLo]);
-
-    // The left-hand bar paints the frame's own data through the colour scale,
-    // so the flat bands at its ends are exactly the pixels the scale saturates.
-    // Its handles set where the palette starts and stops.
+    // The bar paints the frame's own data through the colour scale, so the flat
+    // bands at its ends are exactly the pixels the scale saturates. Its handles
+    // set where the palette starts and stops.
+    this.scaleHandleHi = this.buildHandle('hi');
+    this.scaleHandleLo = this.buildHandle('lo');
     this.scaleTopLabel = el('span', {class: 'flir-seq-colorbar-label'});
     this.scaleBottomLabel = el('span', {class: 'flir-seq-colorbar-label'});
     this.scaleTrack = el('div', {class: 'flir-seq-colorbar-track'},
       [this.scaleCanvas, this.scaleHandleHi.root, this.scaleHandleLo.root]);
+    this.scaleButtons = el('div', {class: 'flir-seq-scale-buttons'},
+      [this.scaleFullButton, this.scaleCameraButton]);
     this.scalebar = el('div', {class: 'flir-seq-colorbar flir-seq-scalebar'},
-      [this.scaleTopLabel, this.scaleTrack, this.scaleBottomLabel]);
-    this.stage = el('div', {class: 'flir-seq-stage'}, [this.scalebar, this.canvasWrap, this.colorbar]);
+      [this.scaleButtons, this.scaleTopLabel, this.scaleTrack, this.scaleBottomLabel]);
+    this.stage = el('div', {class: 'flir-seq-stage'}, [this.scalebar, this.canvasWrap]);
 
     // --- readout -------------------------------------------------
     this.readout = el('div', {class: 'flir-seq-readout'});
@@ -1368,26 +1350,24 @@
    * its temperature -- because the pointer alone makes it unusable without a
    * mouse and impossible to set precisely.
    */
-  Viewer.prototype.buildHandle = function (edge, kind) {
+  Viewer.prototype.buildHandle = function (edge) {
     const self = this;
-    const scale = kind === 'scale';
     const label = el('span', {class: 'flir-seq-colorbar-handle-label'});
     const root = el('div', {
-      class: 'flir-seq-colorbar-handle flir-seq-' + kind + '-handle-' + edge,
+      class: 'flir-seq-colorbar-handle flir-seq-scale-handle-' + edge,
       role: 'slider', tabindex: 0,
-      'aria-label': this.t((scale ? 'scale' : 'filter') + (edge === 'hi' ? 'High' : 'Low')),
+      'aria-label': this.t(edge === 'hi' ? 'scaleHigh' : 'scaleLow'),
     }, [label]);
-    const handle = {root, label, edge, kind};
+    const handle = {root, label, edge};
 
-    const trackDomain = () => (scale ? self.scaleDomain() : {lo: self.rangeLo, hi: self.rangeHi});
     const valueAt = (clientY) => {
-      const rect = (scale ? self.scaleTrack : self.barTrack).getBoundingClientRect();
+      const rect = self.scaleTrack.getBoundingClientRect();
       if (!rect.height) return null;
-      const domain = trackDomain();
+      const domain = self.scaleDomain();
       const t = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
-      return domain.hi - t * (domain.hi - domain.lo); // the bars run hot to cold
+      return domain.hi - t * (domain.hi - domain.lo); // the bar runs hot to cold
     };
-    const move = (v) => (scale ? self.moveScaleEdge(edge, v) : self.moveFilterEdge(edge, v));
+    const move = (v) => self.moveScaleEdge(edge, v);
 
     let dragging = false;
     root.addEventListener('pointerdown', (ev) => {
@@ -1413,20 +1393,14 @@
     root.addEventListener('pointercancel', stop);
 
     root.addEventListener('keydown', (ev) => {
-      const domain = trackDomain();
+      const domain = self.scaleDomain();
       const step = (ev.shiftKey ? 0.1 : 0.01) * (domain.hi - domain.lo);
-      const from = scale ? {lo: self.rangeLo, hi: self.rangeHi} : self.filterBounds();
+      const from = {lo: self.rangeLo, hi: self.rangeHi};
       let next = null;
       if (ev.key === 'ArrowUp' || ev.key === 'ArrowRight') next = from[edge] + step;
       else if (ev.key === 'ArrowDown' || ev.key === 'ArrowLeft') next = from[edge] - step;
       else if (ev.key === 'Home') next = domain.hi;
       else if (ev.key === 'End') next = domain.lo;
-      else if (ev.key === 'Escape' && !scale) {
-        self.filter = null;
-        self.paint();
-        ev.preventDefault();
-        return;
-      }
       if (next === null) return;
       ev.preventDefault();
       move(next);
@@ -1474,24 +1448,6 @@
     this.scheduleRepaint();
   };
 
-  /** The window in effect, falling back to the whole colour bar. */
-  Viewer.prototype.filterBounds = function () {
-    return this.filter || {lo: this.rangeLo, hi: this.rangeHi};
-  };
-
-  Viewer.prototype.moveFilterEdge = function (edge, value) {
-    const bounds = this.filterBounds();
-    const lo = Math.min(this.rangeLo, bounds.lo);
-    const hi = Math.max(this.rangeHi, bounds.hi);
-    const clamped = Math.min(hi, Math.max(lo, value));
-    const next = edge === 'hi'
-      ? {lo: Math.min(bounds.lo, clamped), hi: clamped}
-      : {lo: clamped, hi: Math.max(bounds.hi, clamped)};
-    // dragged back out to both ends: that is how the filter is switched off
-    this.filter = next.lo <= this.rangeLo && next.hi >= this.rangeHi ? null : next;
-    this.scheduleRepaint();
-  };
-
   /** Coalesce repaints so a drag does not queue one per pointer event. */
   Viewer.prototype.scheduleRepaint = function () {
     if (this.repaintPending) return;
@@ -1504,28 +1460,10 @@
     else run();
   };
 
-  Viewer.prototype.updateFilterUI = function () {
-    const span = this.rangeHi - this.rangeLo;
-    const bounds = this.filterBounds();
-    const position = (v) => Math.min(100, Math.max(0, (1 - (v - this.rangeLo) / span) * 100));
-    const topHi = position(bounds.hi);
-    const topLo = position(bounds.lo);
-
-    this.handleHi.root.style.top = topHi + '%';
-    this.handleLo.root.style.top = topLo + '%';
-    this.handleHi.label.textContent = this.formatScale(bounds.hi);
-    this.handleLo.label.textContent = this.formatScale(bounds.lo);
-    this.barMaskHi.style.height = topHi + '%';
-    this.barMaskLo.style.height = (100 - topLo) + '%';
-
-    for (const handle of [this.handleHi, this.handleLo]) {
-      handle.root.setAttribute('aria-valuemin', this.rangeLo.toFixed(this.cfg.decimals));
-      handle.root.setAttribute('aria-valuemax', this.rangeHi.toFixed(this.cfg.decimals));
-      handle.root.setAttribute('aria-valuenow', bounds[handle.edge].toFixed(this.cfg.decimals));
-      handle.root.setAttribute('aria-valuetext', this.formatScale(bounds[handle.edge]));
-    }
-    this.colorbar.classList.toggle('flir-seq-colorbar-filtered', Boolean(this.filter));
-    this.filterReset.disabled = !this.filter;
+  /** Places the scale handles and keeps the two shortcuts in step. */
+  Viewer.prototype.updateScaleUI = function () {
+    this.scaleFullButton.disabled = this.rangeMode === 'frame';
+    this.scaleCameraButton.disabled = this.rangeMode === 'camera' || !this.cameraScale();
 
     const domain = this.scaleDomain();
     const scalePos = (v) => Math.min(100, Math.max(0,
@@ -1677,23 +1615,19 @@
     this.rangeLo = range.lo;
     this.rangeHi = range.hi;
 
-    // raw count -> palette index and opacity, rebuilt whenever the range, the
-    // parameters or the limit handles change. Temperature is monotonic in the
-    // raw count, so a window on temperature is exact as a window on raw here.
+    // raw count -> palette index, rebuilt whenever the range or the parameters
+    // change. Anything outside the scale takes the end colour: that clamping is
+    // what the flat bands on the scale bar show.
     const idx = new Uint8Array(65536);
-    const alpha = new Uint8Array(65536);
     const span = range.hi - range.lo;
-    const filter = this.filter;
     for (let raw = 0; raw < 65536; raw++) {
       const v = this.value(raw);
       if (!isFinite(v)) {
         idx[raw] = 0;
-        alpha[raw] = 0;
         continue;
       }
       const k = Math.round((v - range.lo) / span * 255);
       idx[raw] = k < 0 ? 0 : (k > 255 ? 255 : k);
-      alpha[raw] = !filter || (v >= filter.lo && v <= filter.hi) ? 255 : 0;
     }
 
     const {width, height} = frame.raw;
@@ -1704,34 +1638,18 @@
     const data = image.data;
     const pal = this.palette;
     const pixels = cache.pixels;
-    // the extremes markers must point at pixels that are actually drawn, so
-    // they are tracked over what survives the filter rather than the frame
-    let visMin = 0xffff, visMax = -1, visMinAt = 0, visMaxAt = 0;
     for (let i = 0, o = 0; i < pixels.length; i++, o += 4) {
-      const raw = pixels[i];
-      const a = alpha[raw];
-      data[o + 3] = a;
-      if (!a) continue; // left fully transparent: the background shows through
-      const c = idx[raw] * 3;
+      const c = idx[pixels[i]] * 3;
       data[o] = pal[c];
       data[o + 1] = pal[c + 1];
       data[o + 2] = pal[c + 2];
-      if (raw < visMin) {
-        visMin = raw;
-        visMinAt = i;
-      }
-      if (raw > visMax) {
-        visMax = raw;
-        visMaxAt = i;
-      }
+      data[o + 3] = 255;
     }
     ctx.putImageData(image, 0, 0);
-    this.visibleStats = visMax < 0 ? null
-      : {min: visMin, max: visMax, minAt: visMinAt, maxAt: visMaxAt};
 
     this.layout();
-    this.paintColorbar();
-    this.updateFilterUI();
+    this.paintScalebar();
+    this.updateScaleUI();
     this.paintView();
     this.refreshSpots();
   };
@@ -1742,31 +1660,8 @@
     return ' · ' + formatDate(info.dateTime, info.dateTimeOffsetMinutes);
   };
 
-  Viewer.prototype.paintColorbar = function () {
-    const ctx = this.barCanvas.getContext('2d');
-    const image = ctx.createImageData(1, 256);
-    for (let y = 0; y < 256; y++) {
-      const c = (255 - y) * 3;
-      const o = y * 4;
-      image.data[o] = this.palette[c];
-      image.data[o + 1] = this.palette[c + 1];
-      image.data[o + 2] = this.palette[c + 2];
-      image.data[o + 3] = 255;
-    }
-    const tmp = document.createElement('canvas');
-    tmp.width = 1;
-    tmp.height = 256;
-    tmp.getContext('2d').putImageData(image, 0, 0);
-    ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, 16, 256);
-    ctx.drawImage(tmp, 0, 0, 16, 256);
-    this.barHi.textContent = this.formatScale(this.rangeHi);
-    this.barLo.textContent = this.formatScale(this.rangeLo);
-    this.paintScalebar();
-  };
-
   /**
-   * The left bar: the frame's data range run through the colour scale, so the
+   * The scale bar: the frame's data range run through the colour scale, so the
    * saturated bands at top and bottom show what the scale is clipping.
    */
   Viewer.prototype.paintScalebar = function () {
@@ -1907,7 +1802,7 @@
 
   /** The extremes and the spot meters, in image coordinates. */
   Viewer.prototype.drawMarkers = function (ctx, frame) {
-    const stats = this.visibleStats;
+    const stats = this.pixelCache.stats;
     if (this.showExtremes && stats) {
       const w = frame.raw.width;
       this.drawMarker(ctx, (stats.maxAt % w) + 0.5, Math.floor(stats.maxAt / w) + 0.5, '#ff2d2d',
