@@ -99,11 +99,26 @@ try {
 let worst = 0;
 let worstCase = '';
 let conventionGap = 0;
+let modeMismatch = 0;
+let ok = true;
 const fmt = (v) => (Number.isFinite(v) ? v.toFixed(6) : 'out of domain').padStart(13);
 console.log('case                     raw   thermimage form        flirpy          |Δ|');
 for (let i = 0; i < cases.length; i++) {
   const conv = flir.makeConverter(cases[i].params);
   if (!conv.ok) throw new Error('case ' + cases[i].name + ' has no usable calibration: ' + conv.reason);
+  // the viewer can be put into flirpy's own convention, and when it is it has
+  // to agree with the separate transcription of that convention
+  const asThermimage = flir.makeConverter(cases[i].params, flir.MODEL_THERMIMAGE);
+  for (const raw of raws) {
+    const a = asThermimage.toTemp(raw);
+    const b = thermimageTemp(raw, cases[i].params);
+    if (Number.isFinite(a) !== Number.isFinite(b) ||
+        (Number.isFinite(a) && Math.abs(a - b) > TOLERANCE)) {
+      console.log('  FAIL the viewer\'s Thermimage mode differs from the reference: ' +
+        cases[i].name + ' raw ' + raw + ' ' + a + ' vs ' + b);
+      modeMismatch++;
+    }
+  }
   let caseWorst = 0, at = raws[0], mine = thermimageTemp(raws[0], cases[i].params);
   let other = theirs[i][0] === null ? NaN : theirs[i][0];
   for (let j = 0; j < raws.length; j++) {
@@ -135,11 +150,15 @@ for (let i = 0; i < cases.length; i++) {
 console.log('\nflirpy ' + execFileSync(python,
   ['-c', 'import importlib.metadata as m; print(m.version("flirpy"))'], {encoding: 'utf8'}).trim() +
   ', ' + cases.length + ' parameter sets × ' + raws.length + ' raw values');
-let ok = worst <= TOLERANCE;
+ok = worst <= TOLERANCE;
 console.log((ok ? 'agrees' : 'DISAGREES') + ' with flirpy in its own convention: largest deviation ' +
   worst.toExponential(2) + ' K (' + worstCase + '), tolerance ' + TOLERANCE.toExponential(0) + ' K');
-console.log('the shipped full-path convention differs from it by up to ' +
+console.log('the default full-path convention differs from it by up to ' +
   conventionGap.toFixed(3) + ' K over these cases -- that difference is the point, see truth.mjs');
+if (modeMismatch) ok = false;
+console.log((modeMismatch ? 'DISAGREES' : 'agrees') +
+  ": the viewer's own Thermimage mode reproduces that convention" +
+  (modeMismatch ? ' (' + modeMismatch + ' mismatches)' : ''));
 
 // --- whole files, pixel by pixel ------------------------------------------
 //

@@ -14,7 +14,7 @@
 
 import {basename} from 'node:path';
 import {readFileSync} from 'node:fs';
-import {loadFlirSeq, referenceTemp} from './load.mjs';
+import {loadFlirSeq, referenceTemp, thermimageTemp} from './load.mjs';
 import {truthFor, DISPLAY_ROUNDING} from './truth.mjs';
 import {FIXTURE, buildFixture, toArrayBuffer, rawAt} from './fixture.mjs';
 
@@ -65,11 +65,37 @@ check('Planck O read as signed', params.planckO === FIXTURE.planckO, params.plan
 
 const conv = flir.makeConverter(params);
 check('converter usable', conv.ok, conv.reason);
+check('the FLIR convention is the default', conv.model === flir.MODEL_FLIR, conv.model);
+const probes = [6000, 8000, 9000, 9891, 12000, 20000];
 let worst = 0;
-for (const raw of [6000, 8000, 9000, 9891, 12000, 20000]) {
+for (const raw of probes) {
   worst = Math.max(worst, Math.abs(conv.toTemp(raw) - referenceTemp(raw, params)));
 }
 check('matches the reference model', worst < 1e-6, 'max deviation ' + worst.toExponential(2) + ' K');
+
+// The Thermimage convention is kept selectable, and has to reproduce the
+// implementation it is named after -- transcribed separately in load.mjs.
+const thermimage = flir.makeConverter(params, flir.MODEL_THERMIMAGE);
+check('the Thermimage convention is selectable', thermimage.ok && thermimage.model === flir.MODEL_THERMIMAGE,
+  thermimage.model);
+let worstThermimage = 0;
+for (const raw of probes) {
+  worstThermimage = Math.max(worstThermimage, Math.abs(thermimage.toTemp(raw) - thermimageTemp(raw, params)));
+}
+check('the Thermimage convention matches Thermimage', worstThermimage < 1e-6,
+  'max deviation ' + worstThermimage.toExponential(2) + ' K');
+check('the two conventions really differ', Math.abs(thermimage.toTemp(9891) - conv.toTemp(9891)) > 0.01,
+  thermimage.toTemp(9891).toFixed(3) + ' vs ' + conv.toTemp(9891).toFixed(3));
+check('Thermimage reads colder', thermimage.toTemp(9891) < conv.toTemp(9891));
+check('its transmission spans half the distance',
+  Math.abs(thermimage.tau - flir.makeConverter(
+    Object.assign({}, params, {objectDistance: params.objectDistance / 2})).tau) < 1e-12,
+  thermimage.tau.toFixed(6));
+check('an unknown model falls back to FLIR',
+  flir.makeConverter(params, 'nonsense').model === flir.MODEL_FLIR);
+check('a supplied transmission is used by both conventions',
+  flir.makeConverter(Object.assign({}, params, {atmTransmission: 0.8})).tau === 0.8 &&
+  flir.makeConverter(Object.assign({}, params, {atmTransmission: 0.8}), flir.MODEL_THERMIMAGE).tau === 0.8);
 check('lut agrees with toTemp', close(conv.lut[9891], conv.toTemp(9891), 1e-3), conv.lut[9891]);
 check('toRaw inverts toTemp', close(conv.toRaw(conv.toTemp(9891)), 9891, 1e-3), conv.toRaw(conv.toTemp(9891)));
 check('monotonic in raw', conv.toTemp(9000) < conv.toTemp(9100) && conv.toTemp(9100) < conv.toTemp(9200));
@@ -222,6 +248,7 @@ check('translator ignores extra arguments', flir.makeTranslator('en')('loadAnywa
 
 // --- real files -----------------------------------------------------------
 
+let thermimageOff = 0, thermimageTotal = 0, thermimageWorst = 0;
 for (const path of process.argv.slice(2)) {
   console.log('\n' + basename(path));
   const truth = truthFor(path);
@@ -246,10 +273,12 @@ for (const path of process.argv.slice(2)) {
   for (const frame of seq.frames) {
     const px = flir.readFramePixels(ab, frame);
     let min = 0xffff, max = 0, sum = 0;
+    const hist = new Float64Array(65536);
     for (let i = 0; i < px.length; i++) {
       if (px[i] < min) min = px[i];
       if (px[i] > max) max = px[i];
       sum += c.lut[px[i]];
+      hist[px[i]]++;
     }
     const mine = [c.toTemp(max), c.toTemp(min), sum / px.length];
     console.log('  frame ' + (frame.index + 1) + ' @' + frame.offset +
@@ -271,7 +300,23 @@ for (const path of process.argv.slice(2)) {
         Math.abs(d) <= DISPLAY_ROUNDING,
         mine[i].toFixed(2) + ' vs ' + expected[i].toFixed(1) + ' (' + (d >= 0 ? '+' : '') + d.toFixed(2) + ')');
     }
+    // and the other convention has to be measurably worse, or the default
+    // would be an arbitrary preference rather than a finding
+    const tc = flir.makeConverter(p, flir.MODEL_THERMIMAGE);
+    let tsum = 0;
+    for (let raw = 0; raw < 65536; raw++) if (hist[raw]) tsum += tc.lut[raw] * hist[raw];
+    const theirs = [tc.toTemp(max), tc.toTemp(min), tsum / px.length];
+    thermimageOff += theirs.filter((v, i) => Math.abs(v - expected[i]) > DISPLAY_ROUNDING).length;
+    thermimageTotal += 3;
+    thermimageWorst = Math.max(thermimageWorst, ...theirs.map((v, i) => Math.abs(v - expected[i])));
   }
+}
+
+if (thermimageTotal) {
+  check('the Thermimage convention would miss Thermal Studio on most of them',
+    thermimageOff > thermimageTotal / 2,
+    thermimageOff + ' of ' + thermimageTotal + ' outside the rounding, worst ' +
+    thermimageWorst.toFixed(3) + ' K');
 }
 
 console.log(failures ? '\n' + failures + ' check(s) failed' : '\nall checks passed');

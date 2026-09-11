@@ -33,6 +33,8 @@
     maxLoadBytes: 1024 * 1024 * 1024,
     // 'iron' | 'rainbow' | 'white-hot' | 'black-hot' | 'arctic'
     defaultPalette: 'iron',
+    // 'flir' (matches FLIR Thermal Studio) | 'thermimage' (Thermimage/flirpy)
+    defaultModel: 'flir',
     // 'frame' (auto-scale each frame) | 'sequence' | 'manual'
     defaultRangeMode: 'frame',
     // playback speed for multi-frame sequences
@@ -103,6 +105,10 @@
       objectDistance: 'Object distance (m)',
       relativeHumidity: 'Relative humidity (%)',
       atmTransmission: 'Atmospheric transmission (0 = estimate)',
+      model: 'Temperature model',
+      modelFlir: 'FLIR (matches Thermal Studio)',
+      modelThermimage: 'Thermimage / flirpy',
+      modelNote: 'FLIR spans the atmospheric transmission over the whole object distance and removes it once, which reproduces Thermal Studio. Thermimage, and flirpy after it, spans half the distance and applies it twice; that reads colder, increasingly so with distance.',
       atmosphericTemp: 'Atmospheric temperature (°C)',
       irWindowTemp: 'IR window temperature (°C)',
       irWindowTransmission: 'IR window transmission',
@@ -196,6 +202,10 @@
       objectDistance: '目标距离 (m)',
       relativeHumidity: '相对湿度 (%)',
       atmTransmission: '大气透过率（0＝自动估算）',
+      model: '测温模型',
+      modelFlir: 'FLIR（与 Thermal Studio 一致）',
+      modelThermimage: 'Thermimage / flirpy',
+      modelNote: 'FLIR 按整段目标距离算大气透过率并只扣一次，与 Thermal Studio 的读数一致；Thermimage 及移植自它的 flirpy 按半程算再乘两次，读数偏冷，距离越远差得越多。',
       atmosphericTemp: '大气温度 (°C)',
       irWindowTemp: '红外窗口温度 (°C)',
       irWindowTransmission: '窗口透过率',
@@ -289,6 +299,10 @@
       objectDistance: 'Etäisyys kohteeseen (m)',
       relativeHumidity: 'Suhteellinen kosteus (%)',
       atmTransmission: 'Ilmakehän läpäisy (0 = arvioidaan)',
+      model: 'Lämpötilamalli',
+      modelFlir: 'FLIR (vastaa Thermal Studiota)',
+      modelThermimage: 'Thermimage / flirpy',
+      modelNote: 'FLIR laskee ilmakehän läpäisyn koko kohde-etäisyydeltä ja poistaa sen kerran, mikä vastaa Thermal Studiota. Thermimage ja siitä siirretty flirpy laskevat sen puolikkaalta matkalta ja soveltavat kahdesti; lukema on silloin kylmempi, ja ero kasvaa etäisyyden myötä.',
       atmosphericTemp: 'Ilman lämpötila (°C)',
       irWindowTemp: 'IR-ikkunan lämpötila (°C)',
       irWindowTransmission: 'IR-ikkunan läpäisy',
@@ -702,27 +716,38 @@
     return p.atmTransmission > 0 && p.atmTransmission <= 1;
   }
 
+  // Two ways to account for the atmosphere, see doc/format.md:
+  //
+  //   MODEL_FLIR        the transmission spans the whole object distance and is
+  //                     removed once. Reproduces FLIR Thermal Studio on the
+  //                     recordings in test/truth.mjs, so it is the default.
+  //   MODEL_THERMIMAGE  Thermimage's raw2temp(), which flirpy is ported from:
+  //                     the transmission spans half the distance and is applied
+  //                     twice, modelling an IR window at the midpoint. The
+  //                     expression is a sum of two exponentials, so tau(d/2)^2
+  //                     is not tau(d); it reads colder, the more so the further
+  //                     away the object is. Kept because it is what the
+  //                     published implementations do, and comparing against
+  //                     them is the only way to reconcile a figure they
+  //                     produced.
+  const MODEL_FLIR = 'flir';
+  const MODEL_THERMIMAGE = 'thermimage';
+  const MODELS = [MODEL_FLIR, MODEL_THERMIMAGE];
+
   /**
-   * Atmospheric transmission over the whole object distance. A value carried by
-   * the file wins outright, which is what the FLIR SDK prescribes for
-   * estAtmosphericTransmission; only when it is 0 is the transmission estimated
-   * from distance, humidity and air temperature. Values outside (0, 1] cannot
-   * be a transmission and are estimated instead.
-   *
-   * The path length here is the full distance. Thermimage -- and flirpy, which
-   * is ported from it -- instead evaluate this at half the distance and then
-   * multiply the result by itself, modelling an IR window halfway along the
-   * path. That is not the same number: the expression is a sum of two
-   * exponentials, so tau(d/2)^2 != tau(d). Measured against FLIR Thermal Studio
-   * the full-path form is the right one; see doc/format.md.
+   * Atmospheric transmission. A value carried by the file wins outright, which
+   * is what the FLIR SDK prescribes for estAtmosphericTransmission; only when
+   * it is 0 is it estimated from distance, humidity and air temperature. Values
+   * outside (0, 1] cannot be a transmission and are estimated instead.
    */
-  function atmosphericTransmission(p) {
+  function atmosphericTransmission(p, model) {
     if (hasAtmTransmission(p)) return p.atmTransmission;
     const rh = p.relativeHumidity / 100;
     const at = p.atmosphericTemp;
     // water vapour pressure, FLIR's polynomial fit
     const h2o = rh * Math.exp(1.5587 + 0.06939 * at - 0.00027816 * at * at + 0.00000068455 * at * at * at);
-    const d = Math.sqrt(Math.max(p.objectDistance, 0));
+    const path = Math.max(p.objectDistance, 0) / (model === MODEL_THERMIMAGE ? 2 : 1);
+    const d = Math.sqrt(path);
     const root = Math.sqrt(Math.max(h2o, 0));
     return p.atmTransX * Math.exp(-d * (p.atmTransAlpha1 + p.atmTransBeta1 * root)) +
       (1 - p.atmTransX) * Math.exp(-d * (p.atmTransAlpha2 + p.atmTransBeta2 * root));
@@ -734,7 +759,8 @@
    * translation key rather than a sentence. The lookup table covers the whole
    * uint16 domain so per-pixel conversion is a single index.
    */
-  function makeConverter(p) {
+  function makeConverter(p, model) {
+    const convention = model === MODEL_THERMIMAGE ? MODEL_THERMIMAGE : MODEL_FLIR;
     const invalid = (reason) => ({
       ok: false, reason,
       toTemp: () => NaN,
@@ -747,24 +773,32 @@
     const irt = p.irWindowTransmission;
     if (!(e > 0) || !(irt > 0)) return invalid('errBadEmissivity');
 
-    const tau = atmosphericTransmission(p);
+    const tau = atmosphericTransmission(p, convention);
     if (!(tau > 0)) return invalid('errBadTau');
 
     // The measured signal is the object's own radiance attenuated by the
     // atmosphere and any external optics, plus what those two emit themselves,
-    // plus the environment reflected off the object. Each contribution is
-    // removed once, over the whole path -- matching FLIR Thermal Studio, see
-    // doc/format.md.
+    // plus the environment reflected off the object. All terms are constant for
+    // a given parameter set, so they collapse into one gain and one offset.
     const rawRefl = planckRaw(p, p.reflectedTemp);
     const rawAtm = planckRaw(p, p.atmosphericTemp);
     const rawWind = planckRaw(p, p.irWindowTemp);
-
-    // attenuation terms, all constant for a given parameter set
     const attnRefl = (1 - e) / e * rawRefl;
-    const attnAtm = (1 - tau) / (e * tau) * rawAtm;
-    const attnWind = (1 - irt) / (e * tau * irt) * rawWind;
-    const gain = 1 / (e * tau * irt);
-    const offset = -(attnAtm + attnWind + attnRefl);
+
+    let gain, offset;
+    if (convention === MODEL_THERMIMAGE) {
+      // the window sits halfway, so there are two atmospheric segments
+      gain = 1 / (e * tau * irt * tau);
+      offset = -(attnRefl
+        + (1 - tau) / (e * tau) * rawAtm
+        + (1 - tau) / (e * tau * irt * tau) * rawAtm
+        + (1 - irt) / (e * tau * irt) * rawWind);
+    } else {
+      gain = 1 / (e * tau * irt);
+      offset = -(attnRefl
+        + (1 - tau) / (e * tau) * rawAtm
+        + (1 - irt) / (e * tau * irt) * rawWind);
+    }
 
     const toTemp = (raw) => {
       const objectSignal = raw * gain + offset;
@@ -780,7 +814,8 @@
     const lut = new Float32Array(65536);
     for (let raw = 0; raw < 65536; raw++) lut[raw] = toTemp(raw);
 
-    return {ok: true, reason: '', toTemp, toRaw, lut, tau, tauFromFile: hasAtmTransmission(p)};
+    return {ok: true, reason: '', toTemp, toRaw, lut, tau, model: convention,
+      tauFromFile: hasAtmTransmission(p)};
   }
 
   // ------------------------------------------------------------------
@@ -906,6 +941,7 @@
     this.paletteName = PALETTE_STOPS[this.cfg.defaultPalette] ? this.cfg.defaultPalette : 'iron';
     this.palette = buildPalette(this.paletteName);
     this.rangeMode = this.cfg.defaultRangeMode;
+    this.model = MODELS.indexOf(this.cfg.defaultModel) >= 0 ? this.cfg.defaultModel : MODEL_FLIR;
     this.manualLo = null;
     this.manualHi = null;
     this.view = {scale: 1, tx: 0, ty: 0, fit: 1};
@@ -998,7 +1034,7 @@
     this.frameIndex = 0;
     this.params = paramsFromInfo(this.frames[0].info);
     this.originalParams = Object.assign({}, this.params);
-    this.converter = makeConverter(this.params);
+    this.converter = makeConverter(this.params, this.model);
 
     this.buildUI();
     this.selectFrame(0, true);
@@ -1172,6 +1208,9 @@
 
     this.bindCanvas();
     this.updateReadout(null);
+    // the parameter fields and the two notes under them are only written by
+    // syncParamInputs, so the panel starts blank unless it is called here too
+    this.syncParamInputs();
     this.syncRangeInputs();
     this.fillMeta();
     this.observeResize();
@@ -1211,18 +1250,27 @@
       return labelled(t(f[0]), input);
     });
 
+    this.modelSelect = el('select', {class: 'flir-seq-select'},
+      MODELS.map((m) => option(m, t(m === MODEL_FLIR ? 'modelFlir' : 'modelThermimage'), m === this.model)));
+    this.modelSelect.addEventListener('change', () => {
+      self.model = self.modelSelect.value;
+      self.applyParams();
+    });
+    controls.unshift(labelled(t('model'), this.modelSelect));
+
     const reset = el('button', {class: 'flir-seq-btn', type: 'button', text: t('resetParams')});
     reset.addEventListener('click', () => {
       self.params = Object.assign({}, self.originalParams);
       self.applyParams();
     });
 
-    this.tauNote = el('p', {class: 'flir-seq-hint'});
-    this.paramNote = el('p', {class: 'flir-seq-hint'});
+    this.tauNote = el('p', {class: 'flir-seq-hint flir-seq-tau-note'});
+    this.paramNote = el('p', {class: 'flir-seq-hint flir-seq-planck-note'});
     return el('details', {class: 'flir-seq-panel'}, [
       el('summary', {text: t('params')}),
       el('div', {class: 'flir-seq-panel-body'}, [
         el('div', {class: 'flir-seq-form'}, controls),
+        el('p', {class: 'flir-seq-hint flir-seq-model-note', text: t('modelNote')}),
         this.tauNote,
         this.paramNote,
         el('div', {class: 'flir-seq-panel-actions'}, [reset]),
@@ -1233,7 +1281,7 @@
   Viewer.prototype.applyParams = function () {
     // Only the conversion changes here. The cached raw counts and their
     // extremes are properties of the sensor data, so they stay valid.
-    this.converter = makeConverter(this.params);
+    this.converter = makeConverter(this.params, this.model);
     this.syncParamInputs();
     this.paint();
   };
@@ -2066,6 +2114,9 @@
     atmosphericTransmission,
     buildPalette,
     hasAtmTransmission,
+    MODELS,
+    MODEL_FLIR,
+    MODEL_THERMIMAGE,
     VERIFIED_PIXEL_VALUE_TYPE,
     makeTranslator,
     resolveLang,
