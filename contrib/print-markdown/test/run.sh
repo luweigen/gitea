@@ -2,8 +2,11 @@
 # Copyright 2026 The Gitea Authors. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# pdf-links.py 的回归检查：造一份模仿 Safari 写法的 PDF，确认两个芬兰语标题
-# （MacRoman 简单字体 / 带 ToUnicode 的子集字体各一个）都能从网页链接改成文档内跳转。
+# pdf-links.py 的回归检查：造一份模仿 Safari 写法的 PDF，确认
+#   * 本文档所在目录能从几条链接里猜出来（图片在子目录里也不跑偏）
+#   * 同目录下的图片链接改成了打开本地文件，子目录和大写扩展名都算
+#   * 同目录的 .md 和站外链接保持原样
+#   * 原件改名留着，再跑一次不会重复改
 #
 # 用法: ./run.sh
 
@@ -12,9 +15,10 @@ dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-python3 "$dir/make-fixture.py" "$work/fi.pdf" >/dev/null
-python3 "$dir/../pdf-links.py" "$work/fi.pdf" >"$work/fix.log"
-python3 "$dir/../pdf-links.py" "$work/fi.pdf" --dry-run >"$work/after.log"
+python3 "$dir/make-fixture.py" "$work/doc.pdf" >/dev/null
+python3 "$dir/../pdf-links.py" "$work/doc.pdf" >"$work/fix.log"
+python3 "$dir/../pdf-links.py" "$work/doc.pdf" --dry-run >"$work/after.log"
+python3 "$dir/../pdf-links.py" "$work/doc.pdf" >"$work/again.log"
 
 fail=0
 check() { # 说明 期待的内容 文件
@@ -25,12 +29,29 @@ check() { # 说明 期待的内容 文件
     fail=1
   fi
 }
+absent() { # 说明 不该出现的内容 文件
+  if grep -qF "$2" "$3"; then
+    echo "  FAIL $1 —— 输出里不该有 '$2'"
+    fail=1
+  else
+    echo "  ok   $1"
+  fi
+}
+
 echo "改写:"
-check "MacRoman 字体里的 ä 认得出来" "user-content-2-kentät-yhdellä-silmäyksellä  ->  第 2 页" "$work/fix.log"
-check "子集字体靠 ToUnicode 认得出来" "user-content-3-ehdokaspisteiden-kentät  ->  第 2 页" "$work/fix.log"
-check "打印时换的 ASCII id 解得回来" "pd-user-content-4-mittausalueiden-kent.c3.a4t  ->  第 2 页" "$work/fix.log"
+check "猜对了本文档所在目录" "本文档所在目录: http://x/docs/" "$work/fix.log"
+check "子目录里的图片" "图片 taulukko-figs/kuva1.png" "$work/fix.log"
+check "大写扩展名也算" "图片 taulukko-figs/alikansio/kuva2.PNG" "$work/fix.log"
+absent "同目录的 .md 不动" "图片 taulukko.en.md" "$work/fix.log"
+check "改了两条" "改了 2 条链接" "$work/fix.log"
 check "原件改名留着" "原件留在" "$work/fix.log"
+
 echo "改完:"
-check "三条都成了文档内跳转" "合计 3 个内部跳转, 0 个网页链接" "$work/after.log"
+check "两张图成了打开本地文件" "合计 0 个内部跳转, 2 个网页链接, 2 个打开本地文件" "$work/after.log"
+check "站外链接保持原样" "网页链接  https://github.com/example/repo" "$work/after.log"
+
+echo "再跑一次:"
+check "没有可改的，原文件没动" "没有可以改的链接" "$work/again.log"
+[ -e "$work/doc-web-web.pdf" ] && { echo "  FAIL 又生成了一个 -web"; fail=1; } || echo "  ok   没有重复生成 -web"
 
 [ "$fail" = 0 ] && echo "全部通过" || { echo "有失败"; exit 1; }
