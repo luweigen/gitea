@@ -48,8 +48,10 @@ gitea manager reload-templates
 * 代码块 `white-space: pre-wrap` 换行；标题 `break-after: avoid`；
   表格行、图片、引用块 `break-inside: avoid`；`@page` 设置页边距。
 * 通过 `print-color-adjust: exact` 保留代码块与表格的浅色底纹，效果与网页一致。
+* 隐藏 YAML front matter 渲染出的 `details.frontmatter-content` 表格（`modules/markup/markdown/convertyaml.go`），
+  打印内容从正文第一个标题开始。
 * `beforeprint` / `afterprint` 事件自动展开再还原 `<details>` 折叠块
-  （折叠内容无法仅用 CSS 可靠展开）。
+  （折叠内容无法仅用 CSS 可靠展开）；front matter 的 `details` 被排除在外，不会被展开。
 
 ## 可选调整
 
