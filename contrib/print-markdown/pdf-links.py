@@ -33,6 +33,7 @@ import os
 import re
 import sys
 import unicodedata
+from typing import NamedTuple
 import urllib.parse
 import zlib
 
@@ -206,6 +207,82 @@ def stream_data(body: bytes) -> bytes:
         return raw
 
 
+# 简单字体（非 Type0）的内置编码。Safari 给拉丁文用的就是 MacRomanEncoding，
+# 按 latin1 读的话 ä（0x8A）会变成控制字符，芬兰语、瑞典语的标题就对不上了。
+BASE_ENCODINGS = {
+    b"/MacRomanEncoding": "mac_roman",
+    b"/WinAnsiEncoding": "cp1252",
+    b"/StandardEncoding": "latin1",
+    b"/PDFDocEncoding": "latin1",
+}
+
+
+class Font(NamedTuple):
+    type0: bool                 # Type0 字体的字符串是两字节一个字形编号
+    to_unicode: dict[int, str]  # 有 ToUnicode 就以它为准
+    codec: str                  # 没有时按这个内置编码解
+
+
+def base_codec(font_body: bytes) -> str:
+    m = re.search(rb"/Encoding\s*(/[A-Za-z]+)", font_body)
+    return BASE_ENCODINGS.get(m.group(1), "latin1") if m else "latin1"
+
+
+def unhex(raw: bytes) -> bytes:
+    raw = re.sub(rb"\s", b"", raw)
+    if len(raw) % 2:
+        raw += b"0"
+    return bytes.fromhex(raw.decode())
+
+
+def unescape_literal(raw: bytes) -> bytes:
+    """PDF 字面量字符串里的转义。
+
+    非 ASCII 字节通常写成八进制（MacRoman 的 ä 是 \\212），不认就会原样留下
+    一串反斜杠和数字。
+    """
+    named = {ord("n"): 10, ord("r"): 13, ord("t"): 9, ord("b"): 8, ord("f"): 12}
+    out = bytearray()
+    i = 0
+    while i < len(raw):
+        if raw[i] != 0x5C:  # 反斜杠
+            out.append(raw[i])
+            i += 1
+            continue
+        i += 1
+        if i >= len(raw):
+            break
+        ch = raw[i]
+        if ch in named:
+            out.append(named[ch])
+            i += 1
+        elif 0x30 <= ch <= 0x37:  # 八进制，最多三位
+            j = i
+            while j < min(i + 3, len(raw)) and 0x30 <= raw[j] <= 0x37:
+                j += 1
+            out.append(int(raw[i:j], 8) & 0xFF)
+            i = j
+        elif ch == 0x0A:  # 行末反斜杠是续行
+            i += 1
+        else:
+            out.append(ch)
+            i += 1
+    return bytes(out)
+
+
+def decode_string(raw: bytes, font: Font | None) -> str:
+    """按字体把字符串字节还原成文字。"""
+    if font is None:
+        return raw.decode("latin1")
+    if font.type0:
+        codes = [int.from_bytes(raw[i:i + 2], "big") for i in range(0, len(raw) - 1, 2)]
+        return "".join(font.to_unicode.get(c, "") for c in codes)
+    if font.to_unicode:
+        # 子集字体的编号是随便编的（常从 33 开始），只有 ToUnicode 说了算
+        return "".join(font.to_unicode.get(b, bytes([b]).decode(font.codec, "replace")) for b in raw)
+    return raw.decode(font.codec, "replace")
+
+
 class Doc(Pdf):
     """在 Pdf 之上加页面遍历和取字，只有改链接时会用到。"""
 
@@ -259,7 +336,7 @@ class Doc(Pdf):
         """
         body = self.objs.get(page_num, b"")
         res = re.search(rb"/Resources\s*(\d+\s+0\s+R|<<.*?>>)", body, re.S)
-        fonts: dict[str, tuple[bool, dict[int, str]]] = {}
+        fonts: dict[str, "Font"] = {}
         if res:
             # 这里不走 field()：/Font 的值常是个内联字典，field() 不认 << >> 形式
             resources = self.deref(res.group(1))
@@ -267,7 +344,7 @@ class Doc(Pdf):
             fdict = self.deref(fm.group(1)) if fm else b""
             for name, num in re.findall(rb"/([A-Za-z0-9]+)\s+(\d+)\s+0\s+R", fdict):
                 fb = self.objs.get(int(num), b"")
-                fonts[name.decode()] = (b"/Type0" in fb, self.to_unicode(fb))
+                fonts[name.decode()] = Font(b"/Type0" in fb, self.to_unicode(fb), base_codec(fb))
 
         contents = re.search(rb"/Contents\s*(\d+\s+0\s+R|\[.*?\])", body, re.S)
         if not contents:
@@ -289,35 +366,26 @@ class Doc(Pdf):
         return [(y, "".join(parts)) for y, parts in sorted(lines.items(), reverse=True)]
 
     @staticmethod
-    def decode_text_block(blk: bytes, fonts: dict[str, tuple[bool, dict[int, str]]]) -> str:
-        font: tuple[bool, dict[int, str]] | None = None
+    def decode_text_block(blk: bytes, fonts: dict[str, "Font"]) -> str:
+        font: Font | None = None
         out: list[str] = []
-
-        def literal(raw: bytes) -> str:
-            escapes = {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f"}
-            raw = re.sub(rb"\\([nrtbf()\\])", lambda m: escapes.get(m.group(1), m.group(1)), raw)
-            return raw.decode("latin1")
-
-        def hexstr(raw: bytes) -> str:
-            raw = re.sub(rb"\s", b"", raw)
-            if font and font[0]:  # Type0 字体：两字节一个字形编号，查 ToUnicode
-                codes = [int(raw[i:i + 4], 16) for i in range(0, len(raw) - 3, 4)]
-                return "".join(font[1].get(c, "") for c in codes)
-            return bytes.fromhex(raw.decode()).decode("latin1")
-
-        pattern = rb"/([A-Za-z0-9]+)\s+[\d.]+\s+Tf|\((?:\\.|[^\\)])*\)|<([0-9A-Fa-f\s]+)>|\[((?:[^\[\]]|\\.)*)\]\s*TJ"
+        pattern = (rb"/([A-Za-z0-9]+)\s+[\d.]+\s+Tf"
+                   rb"|\((?:\\.|[^\\)])*\)"
+                   rb"|<([0-9A-Fa-f\s]+)>"
+                   rb"|\[((?:[^\[\]]|\\.)*)\]\s*TJ")
         for tok in re.finditer(pattern, blk, re.S):
             piece = tok.group(0)
             if piece.endswith(b"Tf"):
                 font = fonts.get(tok.group(1).decode())
             elif piece.startswith(b"("):
-                out.append(literal(piece[1:-1]))
+                out.append(decode_string(unescape_literal(piece[1:-1]), font))
             elif piece.startswith(b"<"):
-                out.append(hexstr(tok.group(2)))
+                out.append(decode_string(unhex(tok.group(2)), font))
             elif piece.endswith(b"TJ"):
                 for part in re.finditer(rb"\((?:\\.|[^\\)])*\)|<([0-9A-Fa-f\s]+)>", tok.group(3) or b""):
                     chunk = part.group(0)
-                    out.append(literal(chunk[1:-1]) if chunk.startswith(b"(") else hexstr(part.group(1)))
+                    raw = unescape_literal(chunk[1:-1]) if chunk.startswith(b"(") else unhex(part.group(1))
+                    out.append(decode_string(raw, font))
         return "".join(out)
 
 
