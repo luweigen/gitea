@@ -53,6 +53,9 @@ gitea manager reload-templates
 * `beforeprint` / `afterprint` 事件自动展开再还原 `<details>` 折叠块
   （折叠内容无法仅用 CSS 可靠展开）；front matter 的 `details` 被排除在外，不会被展开。
 
+页面里的 mermaid 图由 `contrib/mermaid-pan-zoom` 自己负责打印适配（打印时换成一份按
+页幅宽度等比缩放的静态副本，详见该目录的 README），本样式表不需要为它额外配置。
+
 ## 可选调整
 
 * 想让 Wiki 页面也生效，把条件改成 `{{if or .IsMarkup .PageIsWiki}}`，
