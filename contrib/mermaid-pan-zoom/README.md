@@ -9,6 +9,8 @@
   `---\nconfig:\n  layout: elk\n---` 前置配置获得更好的布局。
 * **高度自适应**：容器高度按图形宽高比随页面宽度等比伸缩，也可配置封顶或固定高度。
 * **导出 PNG**：一键把当前图形按自然尺寸 2 倍分辨率导出为 PNG 文件。
+* **打印适配**：打印时换成一份未经缩放/平移处理的静态副本，宽度铺满打印页幅，
+  高度按图形比例换算；竖长的图超过一页高度时等比缩小并居中，不会被分页切断。
 * 跟随 Gitea 主题：暗色主题下使用 mermaid 的 `dark` 主题与站点背景色。
 
 ## 安装
@@ -47,6 +49,12 @@ gitea manager reload-templates
   然后调用 `mermaid.render()` 生成 SVG 并整体替换 `<pre>`。
 * 高度自适应从 SVG 的 `viewBox` 读取图形真实宽高比，按容器宽度等比换算高度；
   `ResizeObserver` 在页面宽度变化时重算并让 pan-zoom 重新 fit/center。
+* 打印走的是另一条路：页面上那份 SVG 被 svg-pan-zoom 接管后 `viewBox` 已被摘掉、
+  当前缩放写成了 viewport 上的 `transform` 矩阵，纸张宽度与屏幕不同就对不上。
+  所以渲染时额外插入一份 `.mermaid-print-copy`（同样来自原始 SVG 字符串，带回扩好的
+  `viewBox`、`preserveAspectRatio="xMidYMid meet"`），屏幕上 `display:none`，
+  `@media print` 下反过来隐藏交互版、显示它。副本里的 id 统一加 `-print` 后缀，
+  免得箭头 marker 等 `url(#id)` 引用与页面上那份相撞。
 * 导出 PNG 使用 `mermaid.render()` 返回的 **原始 SVG 字符串**（不是页面里被
   pan-zoom 包上 transform 的 DOM），按 `viewBox` 自然尺寸放大后经
   Blob URL → `Image` → 离屏 canvas → `canvas.toBlob('image/png')` 下载，
@@ -63,6 +71,9 @@ gitea manager reload-templates
   框高完全随图形增长）；设为正数则封顶到该值，超出部分用缩放/平移查看；
   两者设为同一正数（如 500）则固定高度。
 * `EXPORT_SCALE`：导出 PNG 相对自然尺寸的放大倍数，默认 2，越大文字越清晰、文件越大。
+* `PRINT_MAX_HEIGHT`：打印时图形的高度上限，默认 `'240mm'`（A4 纵向、16mm 页边距下
+  可用高度约 265mm，留出标题与正文的余量）。竖长的图按页幅宽度换算出的高度会超过一页，
+  封顶后图形等比缩小并居中，两侧留白。设为 `'none'` 则不封顶：宽度优先，超高的图跨页。
 * `MAX_VIEWBOX_GROWTH`：内容画到 `viewBox` 外面时，每一侧最多把 `viewBox` 扩大到声明
   尺寸的多少倍，默认 0.25（25%）。标签溢出这种小幅超界会被兜住；某一侧超出太多
   （gantt 会把辅助图形画到很远的空白处）则维持原样，免得图被挤成一条线。

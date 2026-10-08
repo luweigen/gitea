@@ -1,3 +1,36 @@
+<style>
+/* 打印用的静态副本只在打印时出现,屏幕上始终隐藏 */
+.mermaid-print-copy {
+  display: none;
+}
+
+@media print {
+  /* 页面上那份图被 svg-pan-zoom 接管(缩放写进了 transform、容器高度是按屏幕宽度
+     算出来的 px),纸张宽度不同就对不上,所以打印时整块换成静态副本 */
+  .mermaid-block > .mermaid-live,
+  .mermaid-block > .mermaid-controls {
+    display: none !important;
+  }
+  .mermaid-block > .mermaid-print-copy {
+    display: block !important;
+  }
+  .mermaid-block {
+    overflow: visible !important;
+    break-inside: avoid;
+  }
+  /* 宽度铺满纸张,高度按 viewBox 比例换算;超过一页高度时由 max-height 收住,
+     图形靠 preserveAspectRatio="xMidYMid meet" 等比缩小并居中 */
+  .mermaid-print-copy svg {
+    display: block;
+    width: 100% !important;
+    height: auto !important;
+    max-width: 100% !important;
+    /* 节点配色在默认不打印背景色的浏览器里也要保留 */
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+</style>
 <script type="module">
 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
 import elkLayouts from 'https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk/dist/mermaid-layout-elk.esm.min.mjs';
@@ -26,6 +59,12 @@ const HAS_CAP = Number.isFinite(MAX_HEIGHT) && MAX_HEIGHT > 0;
 
 // 导出 PNG 的放大倍数(相对图形自然尺寸),越大文字越清晰、文件越大
 const EXPORT_SCALE = 2;
+
+// 打印时图形的高度上限。宽度总是铺满打印页幅,高度按图形比例换算;竖长的图(如
+// flowchart TB)换算出来会超过一页,这里收住高度让它等比缩小并居中,免得被分页切断。
+// A4 纵向可用高度约 265mm(页边距 16mm),留出标题/正文的余量后默认 240mm;
+// 设为 'none' 则不封顶(宽度优先,超高的图会跨页)
+const PRINT_MAX_HEIGHT = '240mm';
 
 // 有些图(如 radar-beta)会把轴标签、图例画到自己声明的 viewBox 之外,靠 overflow="visible"
 // 在页面上勉强露出来;而 <img> 光栅化严格按 viewBox 裁切,导出的 PNG 里这些标签就被切掉。
@@ -118,12 +157,14 @@ async function renderMermaid(el) {
 
     // SVG 容器(高度稍后根据图形宽高比自适应计算)
     const svgContainer = document.createElement('div');
+    svgContainer.className = 'mermaid-live';
     svgContainer.style.cssText = 'width:100%; background:var(--color-box-body);';
     svgContainer.innerHTML = svg;
     block.appendChild(svgContainer);
 
     // 控制按钮
     const controls = document.createElement('div');
+    controls.className = 'mermaid-controls';
     // 放左上角,避免与 Gitea 在右上角加的复制按钮重叠
     controls.style.cssText = 'position:absolute; top:8px; left:8px; display:flex; gap:4px; z-index:10;';
     controls.innerHTML = `
@@ -148,6 +189,28 @@ async function renderMermaid(el) {
     // 再据此读取图形真实宽高比,用于按容器宽度等比换算高度
     const vb = fitViewBoxToContent(svgEl);
     const aspect = vb ? vb[2] / vb[3] : null;
+
+    // 打印专用的静态副本:用 mermaid 原始 SVG 字符串(未被 pan-zoom 改过 —— pan-zoom
+    // 会摘掉 viewBox 并把当前缩放写成 viewport 上的 transform matrix,那份 SVG 没法
+    // 按纸张宽度重新适应)。只在 @media print 下显示,宽度 100%、高度按 viewBox 比例走。
+    // 同一文档里两份 mermaid SVG 的 id 会互撞(箭头 marker 等都靠 url(#id) 引用),
+    // 所以整份把渲染 id 换成另一个前缀,让副本自成一体。
+    const printCopy = document.createElement('div');
+    printCopy.className = 'mermaid-print-copy';
+    printCopy.innerHTML = svg.replaceAll(id, id + '-print');
+    const printSvg = printCopy.querySelector('svg');
+    if (printSvg) {
+      if (vb) {
+        printSvg.setAttribute('viewBox', vb.join(' '));
+        // 显式给出宽高比,height:auto 就不必依赖浏览器从 viewBox 推断
+        printSvg.style.aspectRatio = vb[2] + ' / ' + vb[3];
+      }
+      printSvg.setAttribute('width', '100%');
+      printSvg.removeAttribute('height');
+      printSvg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+      printSvg.style.maxHeight = PRINT_MAX_HEIGHT;
+    }
+    block.appendChild(printCopy);
 
     // 根据当前容器宽度计算自适应高度
     const fitHeight = () => {
@@ -272,6 +335,9 @@ async function renderMermaid(el) {
     let lastWidth = svgContainer.clientWidth;
     new ResizeObserver(() => {
       const w = svgContainer.clientWidth;
+      // 打印时这个容器被 @media print 隐藏,宽高都是 0;此时 pan-zoom 会算出一个
+      // 不可逆矩阵(scale 0)写进 SVG,打印结束回到屏幕后图就空了。宽度为 0 直接跳过。
+      if (!w) return;
       if (w !== lastWidth) {
         lastWidth = w;
         fitHeight();
