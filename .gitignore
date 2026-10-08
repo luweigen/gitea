@@ -124,3 +124,7 @@ prime/
 
 # A Makefile for custom make targets
 Makefile.local
+
+# Python bytecode from contrib scripts
+__pycache__/
+*.pyc
