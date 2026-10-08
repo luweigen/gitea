@@ -99,16 +99,16 @@ Gitea 这边有两处会让页内链接打印出来不对：
 这一步依赖浏览器在打印时生成链接注解，上表是在 Chromium（Chrome / Edge）上验证的。
 两个已知的坑：
 
-* **Safari 打印出来的 PDF 里一条链接注解都没有。** 实测 Safari 17.6 存成的 PDF 中
-  内部跳转和网页链接都是 0 条，连站外链接都没带上 —— 这不是改写没生效，是 Safari 的
-  打印输出根本不写链接。需要可点的 PDF 就得用 Chrome 出。
-  （脚本仍然同时挂了打印媒体查询的 `change`：Safari 不触发 `beforeprint` / `afterprint`，
-  靠它才能在 Safari 上展开折叠块。Chromium 两套都触发，内部有闸保证只生效一轮。）
-* **Chrome 写的内部跳转在部分阅读器里点不动。** Chrome 把命名目标放在文档目录的
-  `/Dests` 字典里 —— 这是 PDF 1.1 的老机制，PDF 1.2 起改用 `/Names` 下的 `/Dests`
-  名称树。实测 Chrome 的普通输出、tagged 输出、带大纲的输出都只写前者，从不写名称树，
-  页面这边改不了。只实现了名称树那条路的阅读器（据反馈 macOS 预览如此）就跟不过去；
-  同一份 PDF 用 Acrobat / Chrome / Firefox 打开可以验证跳转本身是好的。
+* **Safari 不生成文档内部跳转。** 实测 Safari 17.6：改写本身是生效的（打印媒体查询的
+  `change` 在 Safari 上会触发，`beforeprint` / `afterprint` 不会，所以两套都挂着），
+  但 Safari 把裸 `#fragment` 还原成"页面地址 + 片段"的绝对 URL，写成普通的网页链接。
+  同一篇文档 Chrome 出 43 条注解、Safari 只有 11 条：图片上的链接 Safari 也不写。
+  要在 PDF 里点着跳就得用 Chrome 出。
+* **Chrome 用的是老的命名目标机制。** Chrome 把命名目标放在文档目录的 `/Dests` 字典里
+  —— 这是 PDF 1.1 的办法，PDF 1.2 起改用 `/Names` 下的 `/Dests` 名称树。实测 Chrome 的
+  普通输出、tagged 输出、带大纲的输出都只写前者，页面这边改不了。如果某个阅读器
+  （比如 macOS 预览）点不动这些跳转，拿同一份 PDF 用 Acrobat / Chrome / Firefox 打开
+  对比一下，就能分清是文件的问题还是阅读器的问题。
 
 ### 自查工具
 
@@ -119,8 +119,11 @@ Gitea 这边有两处会让页内链接打印出来不对：
 python3 contrib/print-markdown/pdf-links.py out.pdf
 ```
 
-内部跳转的几种写法（`/Dest` 给名字、字符串或数组，以及 `/A <</S /GoTo>>` 动作）都认，
-认不出来的注解会原样打出来，不会悄悄漏掉。只用 Python 标准库，按字节扫描，不解析加密的 PDF。
+各家浏览器的写法差别很大，所以脚本是整个注解字典一起看、间接引用也跟进去的：Chrome 把值
+直接写在注解里、键按出现顺序排；Safari 按字母序排键（`/A` 在 `/Subtype` 前面），动作和 URI
+还都是单独的对象。内部跳转的几种写法（`/Dest` 给名字、字符串或数组，以及 `/A <</S /GoTo>>`
+动作）都认，认不出来的注解会原样打出来，不会悄悄漏掉。只用 Python 标准库，按字节扫描，
+不解析加密的 PDF。
 
 某条页内链接在输出里**完全没出现**，就说明浏览器没找到它的目标 —— 多半是上面第 1 种情况。
 
