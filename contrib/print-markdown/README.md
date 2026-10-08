@@ -99,16 +99,13 @@ Gitea 这边有两处会让页内链接打印出来不对：
 这一步依赖浏览器在打印时生成链接注解，上表是在 Chromium（Chrome / Edge）上验证的。
 两个已知的坑：
 
+* **Chrome 出的 PDF 是好的。** 命名目标放在文档目录的 `/Dests` 字典里（PDF 1.1 的办法，
+  不是 PDF 1.2 起的 `/Names` 名称树；Chrome 的普通输出、tagged 输出、带大纲的输出都只写
+  这种，页面这边改不了），实测 macOS 预览能正常跳转。
 * **Safari 不生成文档内部跳转。** 实测 Safari 17.6：改写本身是生效的（打印媒体查询的
   `change` 在 Safari 上会触发，`beforeprint` / `afterprint` 不会，所以两套都挂着），
   但 Safari 把裸 `#fragment` 还原成"页面地址 + 片段"的绝对 URL，写成普通的网页链接。
-  同一篇文档 Chrome 出 43 条注解、Safari 只有 11 条：图片上的链接 Safari 也不写。
-  要在 PDF 里点着跳就得用 Chrome 出。
-* **Chrome 用的是老的命名目标机制。** Chrome 把命名目标放在文档目录的 `/Dests` 字典里
-  —— 这是 PDF 1.1 的办法，PDF 1.2 起改用 `/Names` 下的 `/Dests` 名称树。实测 Chrome 的
-  普通输出、tagged 输出、带大纲的输出都只写前者，页面这边改不了。如果某个阅读器
-  （比如 macOS 预览）点不动这些跳转，拿同一份 PDF 用 Acrobat / Chrome / Firefox 打开
-  对比一下，就能分清是文件的问题还是阅读器的问题。
+  想要能跳的 PDF，要么用 Chrome 打印，要么用下面的 `--to-dest` 把 Safari 的成品改一遍。
 
 ### 自查工具
 
@@ -118,6 +115,29 @@ Gitea 这边有两处会让页内链接打印出来不对：
 ```sh
 python3 contrib/print-markdown/pdf-links.py out.pdf
 ```
+
+加上 `--to-dest fixed.pdf`，还会把"指回本文档自己某个标题"的网页链接改写成文档内跳转，
+另存一份（原文件不动）：
+
+```sh
+python3 contrib/print-markdown/pdf-links.py safari.pdf --to-dest safari-fixed.pdf
+```
+
+```
+把这个地址当作本文档自己: https://git.example.com/…/docs/字段说明.md
+  user-content-1-这张表是怎么来的  ->  第 1 页 (1. 这张表是怎么来的)
+  user-content-3-字段一览          ->  第 2 页 (3. 字段⼀览)
+  …
+改了 8 条链接，写到 safari-fixed.pdf
+```
+
+它是这么找到跳转目标的：把 PDF 的文字按页抽出来（内容流 + 字体的 ToUnicode 表，顺带做
+NFKC 规范化 —— PingFang 会把"目"这种字映射成康熙部首），对每一行算出 GitHub 式的 slug，
+和链接里的片段对上，就知道该跳到第几页的什么高度。去掉片段后地址相同、出现次数最多的那个
+URL 被当作"本文档自己"，只有指向它的链接才会被改；片段找不到对应标题的保留原样，免得造出
+点不动的跳转。写出来的是**增量更新**：原文件的字节一个不动，改过的注解对象追加在后面，
+再补一张新的 xref 表。只支持传统 xref 表的 PDF（Safari 就是），交叉引用流的会直接拒绝 ——
+Chrome 出的本来就是文档内跳转，不需要改。
 
 各家浏览器的写法差别很大，所以脚本是整个注解字典一起看、间接引用也跟进去的：Chrome 把值
 直接写在注解里、键按出现顺序排；Safari 按字母序排键（`/A` 在 `/Subtype` 前面），动作和 URI

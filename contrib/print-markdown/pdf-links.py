@@ -6,7 +6,13 @@
 #   - 文档内部跳转（/Dest 或 /S /GoTo，点了在 PDF 里翻页）
 #   - 网页链接（/S /URI，点了打开浏览器）
 #
-# 用法: python3 pdf-links.py out.pdf
+# 用法: python3 pdf-links.py out.pdf                     只看
+#       python3 pdf-links.py out.pdf --to-dest fixed.pdf  顺便修
+#
+# --to-dest 把"指回本文档自己某个标题"的网页链接改写成文档内跳转，另存一份。
+# Safari 打印时会把 #片段 还原成"页面地址 + 片段"的绝对 URL，点了会开浏览器；
+# 改写之后在 PDF 里就直接翻页了。做法是把文档的文字抽出来，按标题文字算出
+# GitHub 式的 slug，和链接里的片段对上，就知道该跳到哪一页的哪个高度。
 #
 # 顺便报告这份 PDF 用的是哪种"命名目标"机制：
 #   - 文档目录里的 /Dests 字典     —— PDF 1.1 的老办法，Chrome 只会写这种
@@ -22,6 +28,7 @@
 
 import re
 import sys
+import unicodedata
 import urllib.parse
 import zlib
 
@@ -87,7 +94,8 @@ class Pdf:
         self.blob = inflate_all(data)
         self.objs: dict[int, bytes] = {}
         for m in re.finditer(rb"(?:^|[^0-9])(\d+)\s+0\s+obj(.*?)endobj", self.blob, re.S):
-            self.objs.setdefault(int(m.group(1)), m.group(2))
+            # 增量更新过的文件里同一个对象号会出现两次，后面那份才是新的
+            self.objs[int(m.group(1))] = m.group(2)
 
     def deref(self, value: bytes) -> bytes:
         """`12 0 R` 这样的间接引用跟进去取出对象本体，其它原样返回。"""
@@ -134,6 +142,251 @@ def describe(pdf: Pdf, dic: bytes) -> tuple[str, str]:
     return "", dic.decode("latin1")[:200]
 
 
+# ---------------------------------------------------------------------------
+# 以下是 --to-dest 用的：把文档文字抽出来，好把链接片段对到具体的页和高度
+# ---------------------------------------------------------------------------
+
+
+def slugify(text: str) -> str:
+    """按 GitHub / Gitea 生成标题 id 的办法算 slug。
+
+    先做 NFKC 规范化：PingFang 的 ToUnicode 会把一些汉字映射成康熙部首
+    （"目"写成 U+2F6C "⽬"），不规范化就对不上。
+    """
+    t = unicodedata.normalize("NFKC", text).strip().lower()
+    t = "".join(ch for ch in t if ch.isalnum() or ch in " -_")
+    return "-".join(t.split(" "))
+
+
+def stream_data(body: bytes) -> bytes:
+    """取出对象里的流，能解压就解压。"""
+    m = re.search(rb"stream\r?\n", body)
+    if not m:
+        return b""
+    raw = body[m.end():body.rfind(b"endstream")]
+    try:
+        return zlib.decompress(raw)
+    except zlib.error:
+        return raw
+
+
+class Doc(Pdf):
+    """在 Pdf 之上加页面遍历和取字，只有 --to-dest 会用到。"""
+
+    def pages(self) -> list[int]:
+        """按先后顺序列出每一页的对象号。"""
+        catalog = next((b for b in self.objs.values() if re.search(rb"/Type\s*/Catalog", b)), b"")
+        m = re.search(rb"/Pages\s+(\d+)\s+0\s+R", catalog)
+        if not m:
+            return [n for n, b in sorted(self.objs.items()) if re.search(rb"/Type\s*/Page[^s]", b)]
+        out: list[int] = []
+        seen: set[int] = set()
+
+        def walk(num: int) -> None:
+            if num in seen:
+                return
+            seen.add(num)
+            body = self.objs.get(num, b"")
+            kids = re.search(rb"/Kids\s*\[(.*?)\]", body, re.S)
+            if not kids:
+                out.append(num)
+                return
+            for k in re.findall(rb"(\d+)\s+0\s+R", kids.group(1)):
+                walk(int(k))
+
+        walk(int(m.group(1)))
+        return out
+
+    def to_unicode(self, font_body: bytes) -> dict[int, str]:
+        """字体的 ToUnicode CMap：字形编号 -> 字符。"""
+        m = re.search(rb"/ToUnicode\s+(\d+)\s+0\s+R", font_body)
+        if not m:
+            return {}
+        cmap = stream_data(self.objs.get(int(m.group(1)), b""))
+        table: dict[int, str] = {}
+        for blk in re.findall(rb"beginbfchar(.*?)endbfchar", cmap, re.S):
+            for src, dst in re.findall(rb"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", blk):
+                table[int(src, 16)] = bytes.fromhex(dst.decode()).decode("utf-16-be", "replace")
+        for blk in re.findall(rb"beginbfrange(.*?)endbfrange", cmap, re.S):
+            for lo, hi, dst in re.findall(rb"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", blk):
+                base = int(dst, 16)
+                for code in range(int(lo, 16), int(hi, 16) + 1):
+                    table[code] = chr(base + code - int(lo, 16))
+        return table
+
+    def page_lines(self, page_num: int) -> list[tuple[float, str]]:
+        """一页里的文字，按行返回 (基线高度, 文字)。
+
+        不做完整的文字排版还原：浏览器打印出来的内容流是一段文字一个
+        `q … cm BT … ET Q`，取 cm 的平移量当高度，同高度的拼成一行，
+        对"找标题在第几页什么位置"已经够了。
+        """
+        body = self.objs.get(page_num, b"")
+        res = re.search(rb"/Resources\s*(\d+\s+0\s+R|<<.*?>>)", body, re.S)
+        fonts: dict[str, tuple[bool, dict[int, str]]] = {}
+        if res:
+            # 这里不走 field()：/Font 的值常是个内联字典，field() 不认 << >> 形式
+            resources = self.deref(res.group(1))
+            fm = re.search(rb"/Font\s*(\d+\s+0\s+R|<<.*?>>)", resources, re.S)
+            fdict = self.deref(fm.group(1)) if fm else b""
+            for name, num in re.findall(rb"/([A-Za-z0-9]+)\s+(\d+)\s+0\s+R", fdict):
+                fb = self.objs.get(int(num), b"")
+                fonts[name.decode()] = (b"/Type0" in fb, self.to_unicode(fb))
+
+        contents = re.search(rb"/Contents\s*(\d+\s+0\s+R|\[.*?\])", body, re.S)
+        if not contents:
+            return []
+        content = b"".join(
+            stream_data(self.objs.get(int(n), b""))
+            for n in re.findall(rb"(\d+)\s+0\s+R", contents.group(1))
+        )
+
+        lines: dict[float, list[str]] = {}
+        for text_block in re.finditer(rb"BT(.*?)ET", content, re.S):
+            placements = list(re.finditer(
+                rb"([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+cm",
+                content[:text_block.start()]))
+            y = float(placements[-1].group(6)) if placements else 0.0
+            text = self.decode_text_block(text_block.group(1), fonts)
+            if text:
+                lines.setdefault(round(y, 1), []).append(text)
+        return [(y, "".join(parts)) for y, parts in sorted(lines.items(), reverse=True)]
+
+    @staticmethod
+    def decode_text_block(blk: bytes, fonts: dict[str, tuple[bool, dict[int, str]]]) -> str:
+        font: tuple[bool, dict[int, str]] | None = None
+        out: list[str] = []
+
+        def literal(raw: bytes) -> str:
+            escapes = {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f"}
+            raw = re.sub(rb"\\([nrtbf()\\])", lambda m: escapes.get(m.group(1), m.group(1)), raw)
+            return raw.decode("latin1")
+
+        def hexstr(raw: bytes) -> str:
+            raw = re.sub(rb"\s", b"", raw)
+            if font and font[0]:  # Type0 字体：两字节一个字形编号，查 ToUnicode
+                codes = [int(raw[i:i + 4], 16) for i in range(0, len(raw) - 3, 4)]
+                return "".join(font[1].get(c, "") for c in codes)
+            return bytes.fromhex(raw.decode()).decode("latin1")
+
+        pattern = rb"/([A-Za-z0-9]+)\s+[\d.]+\s+Tf|\((?:\\.|[^\\)])*\)|<([0-9A-Fa-f\s]+)>|\[((?:[^\[\]]|\\.)*)\]\s*TJ"
+        for tok in re.finditer(pattern, blk, re.S):
+            piece = tok.group(0)
+            if piece.endswith(b"Tf"):
+                font = fonts.get(tok.group(1).decode())
+            elif piece.startswith(b"("):
+                out.append(literal(piece[1:-1]))
+            elif piece.startswith(b"<"):
+                out.append(hexstr(tok.group(2)))
+            elif piece.endswith(b"TJ"):
+                for part in re.finditer(rb"\((?:\\.|[^\\)])*\)|<([0-9A-Fa-f\s]+)>", tok.group(3) or b""):
+                    chunk = part.group(0)
+                    out.append(literal(chunk[1:-1]) if chunk.startswith(b"(") else hexstr(part.group(1)))
+        return "".join(out)
+
+
+def link_uri(pdf: Pdf, body: bytes) -> str:
+    """一条链接注解指向的 URL，不是网页链接就返回空串。"""
+    action = pdf.field(body, "A")
+    uri = (pdf.field(action, "URI") if action else b"") or pdf.field(body, "URI")
+    return urllib.parse.unquote(uri[1:-1].decode("utf-8", "replace")) if uri.startswith(b"(") else ""
+
+
+def to_dest(data: bytes, out_path: str) -> int:
+    doc = Doc(data)
+    if not re.search(rb"[\r\n]xref[\r\n]", data):
+        print("这份 PDF 用的是交叉引用流（xref stream），本脚本只会改传统 xref 表的文件。",
+              file=sys.stderr)
+        print("Chrome 打印出来的本来就是文档内跳转，不需要改；Safari 的是传统表。", file=sys.stderr)
+        return 1
+
+    # 每个标题 slug 对应到 (页序号, 页对象号, 基线高度, 原文)
+    index: dict[str, tuple[int, int, float, str]] = {}
+    page_objs = doc.pages()
+    for i, page in enumerate(page_objs):
+        for y, text in doc.page_lines(page):
+            index.setdefault(slugify(text), (i + 1, page, y, text))
+
+    # 带片段的网页链接，按"去掉片段后的地址"分组；出现最多的那个当成本文档自己
+    links: list[tuple[int, bytes, str, str]] = []
+    for num, body in doc.objs.items():
+        if not (b"/Subtype" in body and b"/Link" in body):
+            continue
+        uri = link_uri(doc, body)
+        if "#" in uri:
+            base, frag = uri.split("#", 1)
+            links.append((num, body, base, frag))
+    if not links:
+        print("没找到带 #片段 的网页链接，无事可做。")
+        return 0
+    bases: dict[str, int] = {}
+    for _, _, base, _ in links:
+        bases[base] = bases.get(base, 0) + 1
+    self_base = max(bases, key=lambda b: bases[b])
+    print(f"把这个地址当作本文档自己: {self_base}")
+
+    changed: dict[int, bytes] = {}
+    for num, body, base, frag in links:
+        if base != self_base:
+            continue
+        key = frag[len("user-content-"):] if frag.startswith("user-content-") else frag
+        hit = index.get(slugify(key))
+        if not hit:
+            print(f"  片段 {frag} 在文档里找不到对应标题，保留原链接")
+            continue
+        page_no, page_obj, y, text = hit
+        # 目标落在标题基线稍上方一点，免得标题贴着窗口上沿
+        dest = f"/Dest [ {page_obj} 0 R /XYZ 0 {y + 10:.1f} 0 ]".encode()
+        new_body, n = re.subn(rb"/A\s+\d+\s+0\s+R|/A\s*<<.*?>>", dest, body, count=1, flags=re.S)
+        if not n:
+            new_body = body.replace(b">>", b" " + dest + b" >>", 1)
+        changed[num] = new_body
+        print(f"  {frag}  ->  第 {page_no} 页 ({text[:24]})")
+
+    if not changed:
+        print("没有可以改成文档内跳转的链接。")
+        return 0
+
+    # 增量更新：把改过的对象追加到文件末尾，再写一张新的 xref 表指过去
+    out = bytearray(data)
+    if not out.endswith(b"\n"):
+        out += b"\n"
+    offsets: dict[int, int] = {}
+    for num in sorted(changed):
+        offsets[num] = len(out)
+        out += b"%d 0 obj" % num + changed[num] + b"endobj\n"
+
+    xref_at = len(out)
+    out += b"xref\n"
+    for first, group in group_runs(sorted(changed)):
+        out += b"%d %d\n" % (first, len(group))
+        for num in group:
+            out += b"%010d %05d n \n" % (offsets[num], 0)
+    root = re.findall(rb"/Root\s+(\d+)\s+0\s+R", data)[-1]
+    # 没有新增对象，/Size 沿用原来的就行（objs 是按字节扫出来的，可能混进假对象号）
+    sizes = [int(m) for m in re.findall(rb"/Size\s+(\d+)", data)]
+    size = max(sizes + [n + 1 for n in changed])
+    prev = re.findall(rb"startxref\s+(\d+)", data)[-1]
+    out += b"trailer\n<< /Size %d /Root %s 0 R /Prev %s >>\nstartxref\n%d\n%%%%EOF\n" % (
+        size, root, prev, xref_at)
+
+    with open(out_path, "wb") as fh:
+        fh.write(out)
+    print(f"\n改了 {len(changed)} 条链接，写到 {out_path}")
+    return 0
+
+
+def group_runs(nums: list[int]) -> list[tuple[int, list[int]]]:
+    """把对象号切成连续的几段，xref 表要按段写。"""
+    runs: list[tuple[int, list[int]]] = []
+    for num in nums:
+        if runs and num == runs[-1][1][-1] + 1:
+            runs[-1][1].append(num)
+        else:
+            runs.append((num, [num]))
+    return runs
+
+
 def main(path: str) -> int:
     pdf = Pdf(open(path, "rb").read())
     blob = pdf.blob
@@ -153,14 +406,17 @@ def main(path: str) -> int:
         body = pdf.objs.get(int(catalog_dests.group(1)), b"")
         known = {unescape_name(m.group(1)) for m in re.finditer(rb"/([^\s/\[\]<>()]+)\s*\[", body)}
 
-    dests = uris = unknown = 0
-    print()
-    seen = set()
+    # 同一条注解可能出现不止一次：原始字节和解压出来的对象流里各有一份，
+    # 增量更新过的文件里还会有旧版本。按 /Rect 去重，保留文件里靠后的那一份。
+    annots: dict[bytes, bytes] = {}
     for m in re.finditer(rb"/Subtype\s*/Link", blob):
         dic = enclosing_dict(blob, m.start())
-        if dic in seen:  # 同一条注解在原始字节和解压流里各出现一次
-            continue
-        seen.add(dic)
+        rect = re.search(rb"/Rect\s*\[(.*?)\]", dic, re.S)
+        annots[rect.group(1).strip() if rect else dic] = dic
+
+    dests = uris = unknown = 0
+    print()
+    for dic in annots.values():
         kind, text = describe(pdf, dic)
         if kind == "dest":
             dests += 1
@@ -179,7 +435,20 @@ def main(path: str) -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("用法: python3 pdf-links.py out.pdf", file=sys.stderr)
+    args = sys.argv[1:]
+    fixed = None
+    if "--to-dest" in args:
+        i = args.index("--to-dest")
+        if i + 1 >= len(args):
+            print("--to-dest 后面要跟输出文件名", file=sys.stderr)
+            sys.exit(2)
+        fixed = args[i + 1]
+        del args[i:i + 2]
+    if len(args) != 1:
+        print("用法: python3 pdf-links.py out.pdf [--to-dest fixed.pdf]", file=sys.stderr)
         sys.exit(2)
-    sys.exit(main(sys.argv[1]))
+    code = main(args[0])
+    if fixed and code == 0:
+        print()
+        code = to_dest(open(args[0], "rb").read(), fixed)
+    sys.exit(code)
