@@ -50,11 +50,41 @@ gitea manager reload-templates
 * 通过 `print-color-adjust: exact` 保留代码块与表格的浅色底纹，效果与网页一致。
 * 隐藏 YAML front matter 渲染出的 `details.frontmatter-content` 表格（`modules/markup/markdown/convertyaml.go`），
   打印内容从正文第一个标题开始。
+* 打印前把指向本页自身的锚点链接改写成裸 `#fragment`，打印成 PDF 时它们会变成
+  PDF 内部跳转而不是跳回网站的外链（见下一节），打印后还原。
 * `beforeprint` / `afterprint` 事件自动展开再还原 `<details>` 折叠块
   （折叠内容无法仅用 CSS 可靠展开）；front matter 的 `details` 被排除在外，不会被展开。
 
 页面里的 mermaid 图由 `contrib/mermaid-pan-zoom` 自己负责打印适配（打印时换成一份按
 页幅宽度等比缩放的静态副本，详见该目录的 README），本样式表不需要为它额外配置。
+
+## 打印成 PDF 时的链接
+
+浏览器把页面里的链接写进 PDF 时有两种形式：跳到文档内某处的**内部跳转**（PDF 里的
+`/Dest`），和打开浏览器的**网页链接**（`/Action /URI`）。Chromium 生成内部跳转的条件是
+链接 URL 与当前文档 URL 完全一致（**query 不同也算不一致**）且片段在本页能找到。
+
+Gitea 会把 Markdown 里的相对链接重写成不带 query 的绝对仓库路径，而文件视图的地址常常
+带着 `?display=rendered`，两者对不上，这类链接在 PDF 里就成了跳回网站的外链。所以
+`beforeprint` 时会把**指向本页自身**的链接统一改写成裸 `#fragment`，打印结束再还原。
+
+改写后的效果（在 Chromium 上实测）：
+
+| 链接 | PDF 里 |
+| --- | --- |
+| `#user-content-某标题`（Gitea 对 `[x](#某标题)` 的重写） | 内部跳转 |
+| 被 Gitea 展开成绝对仓库路径、指回本文件的锚点链接 | 内部跳转 |
+| 指向折叠块里标题的锚点（打印时折叠块已展开） | 内部跳转 |
+| 脚注与脚注返回链接（`#fn:user-content-1` / `#fnref:...`） | 内部跳转 |
+| 片段在本页找不到的链接 | 保留网页链接（避免造出点不动的跳转） |
+| `?display=source` 等指向同一文件另一个视图的链接 | 保留网页链接 |
+| 指向仓库里其它文件的链接 | 保留网页链接（目标不在这份 PDF 里） |
+| 站外链接 | 保留网页链接 |
+
+中文标题也可以：PDF 的命名目标用百分号编码加 `#` 转义写入，名称树里能对上。
+
+注意这依赖浏览器在打印时生成链接注解，上面是在 Chromium（Chrome / Edge）上验证的；
+其它浏览器的打印输出是否带链接未测。
 
 ## 可选调整
 

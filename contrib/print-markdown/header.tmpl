@@ -118,16 +118,68 @@
 }
 </style>
 <script>
-// 打印前展开所有 <details> 折叠块，打印后恢复（折叠内容用纯 CSS 无法可靠展开）
 (() => {
+	// 打印前展开所有 <details> 折叠块，打印后恢复（折叠内容用纯 CSS 无法可靠展开）
 	let opened = [];
-	addEventListener('beforeprint', () => {
+	const expandDetails = () => {
 		opened = [...document.querySelectorAll('.file-view.markup details:not([open]):not(.frontmatter-content)')];
 		for (const el of opened) el.open = true;
-	});
-	addEventListener('afterprint', () => {
+	};
+	const restoreDetails = () => {
 		for (const el of opened) el.open = false;
 		opened = [];
+	};
+
+	// 指向本页自身的锚点链接，打印前统一改写成裸 #fragment。
+	// 浏览器把链接写成 PDF 内部跳转（/Dest）的条件是链接 URL 与文档 URL 完全一致，
+	// query 不同也算不一致；而 Gitea 会把 Markdown 里的相对链接重写成不带 query 的
+	// 绝对仓库路径，页面地址是 ...?display=rendered 时就对不上，于是在 PDF 里变成
+	// 跳回网站的外部链接。裸 #fragment 一定被当作同文档引用。
+	let rewritten = [];
+	const localizeAnchors = () => {
+		const here = location.origin + location.pathname;
+		for (const a of document.querySelectorAll('.file-view.markup a[href]')) {
+			const href = a.getAttribute('href');
+			if (!href || href.startsWith('#')) continue;
+			let url;
+			try {
+				url = new URL(a.href);
+			} catch {
+				continue;
+			}
+			if (url.origin + url.pathname !== here || !url.hash) continue;
+			// ?display=source 之类指的是同一个文件的另一个视图，不是本页，保留原链接
+			if (url.search && url.search !== location.search) continue;
+			let id = url.hash.slice(1);
+			try {
+				id = decodeURIComponent(id);
+			} catch { /* 不是合法的百分号编码就按原样找 */ }
+			// 目标不在这份文档里（例如被折叠或根本没渲染出来）就别造悬空的 PDF 跳转
+			if (!document.getElementById(id)) continue;
+			rewritten.push([a, href]);
+			a.setAttribute('href', url.hash);
+		}
+	};
+	const restoreAnchors = () => {
+		for (const [a, href] of rewritten) a.setAttribute('href', href);
+		rewritten = [];
+	};
+
+	// beforeprint 可能连着来好几次（打印预览里改纸张、改方向都会再触发一轮），
+	// 不设闸的话第二轮会把"原始状态"记成已经改过的状态，打印完就恢复不回去了
+	let prepared = false;
+	addEventListener('beforeprint', () => {
+		if (prepared) return;
+		prepared = true;
+		// 先展开再改写：折叠块里的锚点目标展开后才找得到
+		expandDetails();
+		localizeAnchors();
+	});
+	addEventListener('afterprint', () => {
+		if (!prepared) return;
+		prepared = false;
+		restoreAnchors();
+		restoreDetails();
 	});
 })();
 </script>
