@@ -74,15 +74,23 @@ Gitea 这边有两处会让页内链接打印出来不对：
 2. **被展开成绝对路径的锚点链接成了外链。** Gitea 把相对链接重写成不带 query 的绝对
    仓库路径，而文件视图地址常带 `?display=rendered`，两者对不上。
 
+3. **Safari 解析不了带非 ASCII 的片段。** 同一篇芬兰语文档里，`#1-ennen-kuin-luet-taulukkoa`
+   能跳到文档内，`#2-kentät-yhdellä-silmäyksellä` 就退化成跳回网站；整篇中文文档的锚点
+   因此一条都跳不了。
+
 所以 `beforeprint` 时会按 Gitea 自己 `scrollToAnchor` 的找法定位目标元素（先补
 `user-content-` 前缀，再试 `a[name]`，最后按原样），把链接改写成 `#目标真实的 id`，
-打印结束再还原；`a[name]` 这类没有 id 的目标会临时加一个 id，打印后删掉。
+打印结束再还原；`a[name]` 这类没有 id 的目标会临时加一个 id。目标 id 里有非 ASCII 字符的
+（第 3 种情况），打印期间还会临时换成 `pd-` 开头的纯 ASCII id —— 原 id 的每个字节按 `.hh`
+转义，比如 `user-content-2-kentät…` 变成 `pd-user-content-2-kent.c3.a4t…`。这个编码是可逆的，
+下面的 `pdf-links.py` 认得回去。已经是 ASCII 的 id 原样不动。
 
 改写后的效果（在 Chromium 上实测）：
 
 | 链接 | PDF 里 |
 | --- | --- |
 | 目录里的 `[x](#某标题)`（前端抹掉前缀后指向不存在的 id） | 内部跳转 |
+| 标题带非 ASCII 字符的锚点（Safari 原本跳不了） | 内部跳转 |
 | 用户自己写的 `<a name="x">` 锚点 | 内部跳转 |
 | 被 Gitea 展开成绝对仓库路径、指回本文件的锚点链接 | 内部跳转 |
 | 指向折叠块里标题的锚点（打印时折叠块已展开） | 内部跳转 |
@@ -102,10 +110,11 @@ Gitea 这边有两处会让页内链接打印出来不对：
 * **Chrome 出的 PDF 是好的。** 命名目标放在文档目录的 `/Dests` 字典里（PDF 1.1 的办法，
   不是 PDF 1.2 起的 `/Names` 名称树；Chrome 的普通输出、tagged 输出、带大纲的输出都只写
   这种，页面这边改不了），实测 macOS 预览能正常跳转。
-* **Safari 不生成文档内部跳转。** 实测 Safari 17.6：改写本身是生效的（打印媒体查询的
+* **Safari 只认 ASCII 片段。** 实测 Safari 17.6：改写本身是生效的（打印媒体查询的
   `change` 在 Safari 上会触发，`beforeprint` / `afterprint` 不会，所以两套都挂着），
-  但 Safari 把裸 `#fragment` 还原成"页面地址 + 片段"的绝对 URL，写成普通的网页链接。
-  想要能跳的 PDF，要么用 Chrome 打印，要么用下面的 `pdf-links.py` 把 Safari 的成品改一遍。
+  纯 ASCII 的片段会写成文档内跳转，带非 ASCII 的则还原成"页面地址 + 片段"的绝对 URL，
+  成了普通网页链接 —— 上面给非 ASCII 目标换 ASCII id 就是为了这个。
+  另外同一篇文档 Chrome 写 43 条注解、Safari 只有 11 条：图片上的链接 Safari 不写。
 
 ### 自查工具
 

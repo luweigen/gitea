@@ -43,15 +43,22 @@ objs = {
     12: b"<< /Type /Action /S /URI /URI 13 0 R >>",
     14: b"<< /Type /Annot /Subtype /Link /Rect [50 670 300 690] /Border [0 0 0] /A 15 0 R >>",
     15: b"<< /Type /Action /S /URI /URI 16 0 R >>",
+    17: b"<< /Type /Annot /Subtype /Link /Rect [50 640 300 660] /Border [0 0 0] /A 18 0 R >>",
+    18: b"<< /Type /Action /S /URI /URI 19 0 R >>",
 }
 frag2 = urllib.parse.quote("user-content-2-kentät-yhdellä-silmäyksellä")
 frag3 = urllib.parse.quote("user-content-3-ehdokaspisteiden-kentät")
+# 第三条用的是 header.tmpl 打印时换上的纯 ASCII id（每个字节 .hh 转义），
+# 脚本要能解回原来的 id 才找得到标题
+frag4 = "pd-user-content-4-mittausalueiden-kent.c3.a4t"
 objs[13] = b"(" + f"{BASE}#{frag2}".encode() + b")"
 objs[16] = b"(" + f"{BASE}#{frag3}".encode() + b")"
+objs[19] = b"(" + f"{BASE}#{frag4}".encode() + b")"
 
 # 第 1 页是目录（链接在这儿），第 2 页是两个标题
 page1 = content(b"Sisallys", b"F1", 760)
-page2 = content(mac, b"F1", 600) + content(subset, b"F2", 500)
+page2 = (content(mac, b"F1", 600) + content(subset, b"F2", 500)
+         + content(b"4. Mittausalueiden kent\\212t", b"F1", 400))
 for num, body in ((4, page1), (7, page2), (10, cmap)):
     objs[num] = b"<< /Length %d >>\nstream\n" % len(body) + body + b"endstream"
 

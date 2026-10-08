@@ -417,6 +417,27 @@ def replace_action(body: bytes, entry: bytes) -> bytes:
     return new_body if n else body.replace(b">>", b" " + entry + b" >>", 1)
 
 
+def decode_print_id(fragment: str) -> str:
+    """还原 header.tmpl 打印时临时换上的纯 ASCII id。
+
+    Safari 解析不了带非 ASCII 的片段，所以模板会把目标的 id 换成
+    `pd-` 加上原 id 每个字节的 `.hh` 转义；这里反过来解回原 id。
+    """
+    if not fragment.startswith("pd-"):
+        return fragment
+    body = fragment[3:]
+    out = bytearray()
+    i = 0
+    while i < len(body):
+        if body[i] == "." and re.fullmatch(r"[0-9a-f]{2}", body[i + 1:i + 3] or "x"):
+            out.append(int(body[i + 1:i + 3], 16))
+            i += 3
+        else:
+            out.append(ord(body[i]) & 0xFF)
+            i += 1
+    return out.decode("utf-8", "replace")
+
+
 def plan_changes(doc: "Doc") -> dict[int, bytes]:
     """算出要改哪些链接注解，返回 {对象号: 新的注解内容}。
 
@@ -465,7 +486,8 @@ def plan_changes(doc: "Doc") -> dict[int, bytes]:
             base, frag = uri.split("#", 1)
             if base != self_base:
                 continue
-            key = frag[len("user-content-"):] if frag.startswith("user-content-") else frag
+            key = decode_print_id(frag)
+            key = key[len("user-content-"):] if key.startswith("user-content-") else key
             hit = index.get(slugify(key))
             if not hit:
                 print(f"  片段 {frag} 在文档里找不到对应标题，保留原链接")
