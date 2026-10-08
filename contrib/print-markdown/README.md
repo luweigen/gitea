@@ -105,7 +105,7 @@ Gitea 这边有两处会让页内链接打印出来不对：
 * **Safari 不生成文档内部跳转。** 实测 Safari 17.6：改写本身是生效的（打印媒体查询的
   `change` 在 Safari 上会触发，`beforeprint` / `afterprint` 不会，所以两套都挂着），
   但 Safari 把裸 `#fragment` 还原成"页面地址 + 片段"的绝对 URL，写成普通的网页链接。
-  想要能跳的 PDF，要么用 Chrome 打印，要么用下面的 `--to-dest` 把 Safari 的成品改一遍。
+  想要能跳的 PDF，要么用 Chrome 打印，要么用下面的 `pdf-links.py` 把 Safari 的成品改一遍。
 
 ### 自查工具
 
@@ -116,28 +116,44 @@ Gitea 这边有两处会让页内链接打印出来不对：
 python3 contrib/print-markdown/pdf-links.py out.pdf
 ```
 
-加上 `--to-dest fixed.pdf`，还会把"指回本文档自己某个标题"的网页链接改写成文档内跳转，
-另存一份（原文件不动）：
+它同时会把两类链接改掉，**改好的那份仍叫原来的名字，原件改名加 `-web` 后缀留着**
+（想只看不改就加 `--dry-run`）：
+
+| 原来 | 改成 |
+| --- | --- |
+| 指回本文档自己某个标题的网页链接 | 文档内跳转（翻到那一页） |
+| 和本文档同目录的图片链接 | 打开 PDF 旁边同样相对位置的那个文件 |
 
 ```sh
-python3 contrib/print-markdown/pdf-links.py safari.pdf --to-dest safari-fixed.pdf
+python3 contrib/print-markdown/pdf-links.py safari.pdf
 ```
 
 ```
 把这个地址当作本文档自己: https://git.example.com/…/docs/字段说明.md
+把这个目录当作本文档所在目录: https://git.example.com/…/docs/
+  图片 字段说明-figs/fig4_1.png  ->  打开本地同名文件
   user-content-1-这张表是怎么来的  ->  第 1 页 (1. 这张表是怎么来的)
   user-content-3-字段一览          ->  第 2 页 (3. 字段⼀览)
   …
-改了 8 条链接，写到 safari-fixed.pdf
+改了 24 条链接。原件留在 safari-web.pdf，改好的还叫 safari.pdf。
 ```
 
-它是这么找到跳转目标的：把 PDF 的文字按页抽出来（内容流 + 字体的 ToUnicode 表，顺带做
+**跳转目标是怎么找到的**：把 PDF 的文字按页抽出来（内容流 + 字体的 ToUnicode 表，顺带做
 NFKC 规范化 —— PingFang 会把"目"这种字映射成康熙部首），对每一行算出 GitHub 式的 slug，
 和链接里的片段对上，就知道该跳到第几页的什么高度。去掉片段后地址相同、出现次数最多的那个
 URL 被当作"本文档自己"，只有指向它的链接才会被改；片段找不到对应标题的保留原样，免得造出
-点不动的跳转。写出来的是**增量更新**：原文件的字节一个不动，改过的注解对象追加在后面，
-再补一张新的 xref 表。只支持传统 xref 表的 PDF（Safari 就是），交叉引用流的会直接拒绝 ——
-Chrome 出的本来就是文档内跳转，不需要改。
+点不动的跳转。
+
+**图片**：以"本文档所在目录"为准做前缀相减，剩下的就是相对路径（`字段说明-figs/fig4_1.png`），
+写成 PDF 的 `/Launch` 动作。所以要把 PDF 和图片目录按原来的相对位置放在一起才点得开 ——
+PDF 放在 `docs/` 里、`docs/字段说明-figs/` 还在旁边。只改图片扩展名的链接，指向其它
+Markdown 文件之类的保持原样（打开本地 `.md` 源文件没什么用）。`/Launch` 能不能点开要看
+阅读器，有的出于安全考虑会拦。
+
+**怎么写出去**：**增量更新** —— 原文件的字节一个不动，改过的注解对象追加在后面，再补一张
+新的 xref 表。只支持传统 xref 表的 PDF（Safari 就是），交叉引用流的会直接跳过 —— Chrome
+出的本来就是文档内跳转，不需要改。重复跑是安全的：改过的链接已经不是网页链接了，第二次
+跑会报"没有可以改的链接"，不会再生成一个 `-web`。
 
 各家浏览器的写法差别很大，所以脚本是整个注解字典一起看、间接引用也跟进去的：Chrome 把值
 直接写在注解里、键按出现顺序排；Safari 按字母序排键（`/A` 在 `/Subtype` 前面），动作和 URI

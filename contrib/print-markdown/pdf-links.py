@@ -6,13 +6,16 @@
 #   - 文档内部跳转（/Dest 或 /S /GoTo，点了在 PDF 里翻页）
 #   - 网页链接（/S /URI，点了打开浏览器）
 #
-# 用法: python3 pdf-links.py out.pdf                     只看
-#       python3 pdf-links.py out.pdf --to-dest fixed.pdf  顺便修
+# 用法: python3 pdf-links.py out.pdf              看一遍，顺手改
+#       python3 pdf-links.py out.pdf --dry-run    只看，不动文件
 #
-# --to-dest 把"指回本文档自己某个标题"的网页链接改写成文档内跳转，另存一份。
-# Safari 打印时会把 #片段 还原成"页面地址 + 片段"的绝对 URL，点了会开浏览器；
-# 改写之后在 PDF 里就直接翻页了。做法是把文档的文字抽出来，按标题文字算出
-# GitHub 式的 slug，和链接里的片段对上，就知道该跳到哪一页的哪个高度。
+# 默认会把两类链接改掉，改好的那份仍叫原来的名字，原件改名加 -web 后缀留着：
+#   * 指回本文档自己某个标题的 -> 文档内跳转。Safari 打印时会把 #片段 还原成
+#     "页面地址 + 片段"的绝对 URL，点了会开浏览器；改完在 PDF 里就直接翻页。
+#     做法是把文档的文字抽出来，按标题文字算出 GitHub 式的 slug，和链接里的
+#     片段对上，就知道该跳到哪一页的哪个高度。
+#   * 和本文档同目录的图片 -> 打开 PDF 旁边同样相对位置的那个文件（/Launch）。
+#     把 PDF 和图片目录按原来的相对位置放在一起才点得开。
 #
 # 顺便报告这份 PDF 用的是哪种"命名目标"机制：
 #   - 文档目录里的 /Dests 字典     —— PDF 1.1 的老办法，Chrome 只会写这种
@@ -26,6 +29,7 @@
 # 只用标准库，按字节扫描，不是完整的 PDF 解析器：加密的 PDF 读不了。
 # 够用来回答"这条链接是内部跳转还是外链"。
 
+import os
 import re
 import sys
 import unicodedata
@@ -102,6 +106,15 @@ class Pdf:
         m = re.fullmatch(rb"\s*(\d+)\s+0\s+R\s*", value)
         return self.objs.get(int(m.group(1)), b"").strip() if m else value.strip()
 
+    def field_obj(self, dic: bytes, name: str) -> bytes:
+        """取一个值是字典的键：可能是间接引用，也可能是就地写的 << >>。"""
+        m = re.search(rb"/" + name.encode() + rb"\s*(\d+\s+0\s+R|<<)", dic)
+        if not m:
+            return b""
+        if m.group(1) != b"<<":
+            return self.deref(m.group(1))
+        return balanced_dict(dic, m.end() - 2)
+
     def field(self, dic: bytes, *names: str) -> bytes:
         """取字典里某个键的值（跟进间接引用）。
 
@@ -119,9 +132,26 @@ class Pdf:
         return b""
 
 
+def balanced_dict(buf: bytes, start: int) -> bytes:
+    """从 buf[start] 这个 << 开始，取出配平的整个字典（里面可以再套字典）。"""
+    depth, j = 0, start
+    while j < len(buf) - 1:
+        if buf[j:j + 2] == b"<<":
+            depth += 1
+            j += 2
+        elif buf[j:j + 2] == b">>":
+            depth -= 1
+            j += 2
+            if depth == 0:
+                return buf[start:j]
+        else:
+            j += 1
+    return buf[start:]
+
+
 def describe(pdf: Pdf, dic: bytes) -> tuple[str, str]:
     """把一条链接注解说清楚：(类别, 内容)。"""
-    action = pdf.field(dic, "A")
+    action = pdf.field_obj(dic, "A")
     kind = pdf.field(action, "S") if action else b""
 
     uri = pdf.field(action, "URI") if action else b""
@@ -129,6 +159,12 @@ def describe(pdf: Pdf, dic: bytes) -> tuple[str, str]:
         uri = pdf.field(dic, "URI")
     if uri.startswith(b"("):
         return "uri", urllib.parse.unquote(uri[1:-1].decode("utf-8", "replace"))
+
+    if kind == b"/Launch":
+        # 文件说明里的 /F 是条字面量路径
+        m = re.search(rb"/F\s*\((.*?)\)", action, re.S)
+        name = m.group(1).decode("utf-8", "replace") if m else "?"
+        return "file", name
 
     dest = pdf.field(dic, "Dest") or (pdf.field(action, "D") if action else b"")
     if dest.startswith(b"/"):
@@ -143,7 +179,7 @@ def describe(pdf: Pdf, dic: bytes) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# 以下是 --to-dest 用的：把文档文字抽出来，好把链接片段对到具体的页和高度
+# 以下是改链接用的：把文档文字抽出来，好把链接片段对到具体的页和高度
 # ---------------------------------------------------------------------------
 
 
@@ -171,7 +207,7 @@ def stream_data(body: bytes) -> bytes:
 
 
 class Doc(Pdf):
-    """在 Pdf 之上加页面遍历和取字，只有 --to-dest 会用到。"""
+    """在 Pdf 之上加页面遍历和取字，只有改链接时会用到。"""
 
     def pages(self) -> list[int]:
         """按先后顺序列出每一页的对象号。"""
@@ -292,62 +328,101 @@ def link_uri(pdf: Pdf, body: bytes) -> str:
     return urllib.parse.unquote(uri[1:-1].decode("utf-8", "replace")) if uri.startswith(b"(") else ""
 
 
-def to_dest(data: bytes, out_path: str) -> int:
-    doc = Doc(data)
-    if not re.search(rb"[\r\n]xref[\r\n]", data):
-        print("这份 PDF 用的是交叉引用流（xref stream），本脚本只会改传统 xref 表的文件。",
-              file=sys.stderr)
-        print("Chrome 打印出来的本来就是文档内跳转，不需要改；Safari 的是传统表。", file=sys.stderr)
-        return 1
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif",
+                  ".bmp", ".tif", ".tiff")
 
+
+def pdf_literal(text: str) -> bytes:
+    """写成 PDF 的字面量字符串，转义反斜杠和括号。"""
+    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    return b"(" + escaped.encode("latin1", "replace") + b")"
+
+
+def pdf_utf16(text: str) -> bytes:
+    """写成 PDF 的 UTF-16BE 十六进制字符串，非 ASCII 的文件名要用它。"""
+    return b"<" + (b"\xfe\xff" + text.encode("utf-16-be")).hex().upper().encode() + b">"
+
+
+def replace_action(body: bytes, entry: bytes) -> bytes:
+    """把注解里的 /A 动作换成别的（/Dest 或另一个 /A）。"""
+    new_body, n = re.subn(rb"/A\s+\d+\s+0\s+R|/A\s*<<.*?>>", entry, body, count=1, flags=re.S)
+    return new_body if n else body.replace(b">>", b" " + entry + b" >>", 1)
+
+
+def plan_changes(doc: "Doc") -> dict[int, bytes]:
+    """算出要改哪些链接注解，返回 {对象号: 新的注解内容}。
+
+    两类：
+      * 指回本文档某个标题的，改成文档内跳转（/Dest）；
+      * 和本文档同目录的图片，改成打开磁盘上同样相对位置的文件（/Launch）。
+    """
     # 每个标题 slug 对应到 (页序号, 页对象号, 基线高度, 原文)
     index: dict[str, tuple[int, int, float, str]] = {}
-    page_objs = doc.pages()
-    for i, page in enumerate(page_objs):
+    for i, page in enumerate(doc.pages()):
         for y, text in doc.page_lines(page):
             index.setdefault(slugify(text), (i + 1, page, y, text))
 
-    # 带片段的网页链接，按"去掉片段后的地址"分组；出现最多的那个当成本文档自己
-    links: list[tuple[int, bytes, str, str]] = []
+    links: list[tuple[int, bytes, str]] = []
     for num, body in doc.objs.items():
-        if not (b"/Subtype" in body and b"/Link" in body):
-            continue
-        uri = link_uri(doc, body)
-        if "#" in uri:
-            base, frag = uri.split("#", 1)
-            links.append((num, body, base, frag))
+        if b"/Subtype" in body and b"/Link" in body:
+            uri = link_uri(doc, body)
+            if uri:
+                links.append((num, body, uri))
     if not links:
-        print("没找到带 #片段 的网页链接，无事可做。")
-        return 0
+        print("这份 PDF 里没有网页链接，无事可做。")
+        return {}
+
+    # 带片段的链接按"去掉片段后的地址"分组，出现最多的那个当成本文档自己
     bases: dict[str, int] = {}
-    for _, _, base, _ in links:
-        bases[base] = bases.get(base, 0) + 1
-    self_base = max(bases, key=lambda b: bases[b])
-    print(f"把这个地址当作本文档自己: {self_base}")
+    for _, _, uri in links:
+        if "#" in uri:
+            bases[uri.split("#", 1)[0]] = bases.get(uri.split("#", 1)[0], 0) + 1
+    self_base = max(bases, key=lambda b: bases[b]) if bases else ""
+    if self_base:
+        print(f"把这个地址当作本文档自己: {self_base}")
+        base_dir = self_base.rsplit("/", 1)[0] + "/"
+    else:
+        # 没有页内锚点可参考时，用出现最多的目录当本文档所在目录
+        dirs: dict[str, int] = {}
+        for _, _, uri in links:
+            d = uri.rsplit("/", 1)[0] + "/"
+            dirs[d] = dirs.get(d, 0) + 1
+        base_dir = max(dirs, key=lambda d: dirs[d]) if dirs else ""
+    if base_dir:
+        print(f"把这个目录当作本文档所在目录: {base_dir}")
 
     changed: dict[int, bytes] = {}
-    for num, body, base, frag in links:
-        if base != self_base:
+    for num, body, uri in links:
+        if "#" in uri:
+            base, frag = uri.split("#", 1)
+            if base != self_base:
+                continue
+            key = frag[len("user-content-"):] if frag.startswith("user-content-") else frag
+            hit = index.get(slugify(key))
+            if not hit:
+                print(f"  片段 {frag} 在文档里找不到对应标题，保留原链接")
+                continue
+            page_no, page_obj, y, text = hit
+            # 目标落在标题基线稍上方一点，免得标题贴着窗口上沿
+            changed[num] = replace_action(body, f"/Dest [ {page_obj} 0 R /XYZ 0 {y + 10:.1f} 0 ]".encode())
+            print(f"  {frag}  ->  第 {page_no} 页 ({text[:24]})")
             continue
-        key = frag[len("user-content-"):] if frag.startswith("user-content-") else frag
-        hit = index.get(slugify(key))
-        if not hit:
-            print(f"  片段 {frag} 在文档里找不到对应标题，保留原链接")
+
+        if not base_dir or not uri.startswith(base_dir):
             continue
-        page_no, page_obj, y, text = hit
-        # 目标落在标题基线稍上方一点，免得标题贴着窗口上沿
-        dest = f"/Dest [ {page_obj} 0 R /XYZ 0 {y + 10:.1f} 0 ]".encode()
-        new_body, n = re.subn(rb"/A\s+\d+\s+0\s+R|/A\s*<<.*?>>", dest, body, count=1, flags=re.S)
-        if not n:
-            new_body = body.replace(b">>", b" " + dest + b" >>", 1)
-        changed[num] = new_body
-        print(f"  {frag}  ->  第 {page_no} 页 ({text[:24]})")
+        rel = uri[len(base_dir):]
+        if not rel.lower().endswith(IMAGE_SUFFIXES) or rel.startswith(("/", "..")):
+            continue
+        # 打开 PDF 旁边同样相对位置的那个文件
+        spec = b"<< /Type /Filespec /F " + pdf_literal(rel) + b" /UF " + pdf_utf16(rel) + b" >>"
+        changed[num] = replace_action(body, b"/A << /S /Launch /F " + spec + b" >>")
+        print(f"  图片 {rel}  ->  打开本地同名文件")
 
-    if not changed:
-        print("没有可以改成文档内跳转的链接。")
-        return 0
+    return changed
 
-    # 增量更新：把改过的对象追加到文件末尾，再写一张新的 xref 表指过去
+
+def apply_update(data: bytes, changed: dict[int, bytes], out_path: str) -> None:
+    """增量更新：原字节一个不动，改过的对象追加到末尾，再补一张新的 xref 表。"""
     out = bytearray(data)
     if not out.endswith(b"\n"):
         out += b"\n"
@@ -369,10 +444,33 @@ def to_dest(data: bytes, out_path: str) -> int:
     prev = re.findall(rb"startxref\s+(\d+)", data)[-1]
     out += b"trailer\n<< /Size %d /Root %s 0 R /Prev %s >>\nstartxref\n%d\n%%%%EOF\n" % (
         size, root, prev, xref_at)
-
     with open(out_path, "wb") as fh:
         fh.write(out)
-    print(f"\n改了 {len(changed)} 条链接，写到 {out_path}")
+
+
+def fix_in_place(path: str, data: bytes) -> int:
+    """改好的那份用原来的文件名，原件改名加 -web 后缀留着。"""
+    if not re.search(rb"[\r\n]xref[\r\n]", data):
+        print("这份 PDF 用的是交叉引用流（xref stream），本脚本只会改传统 xref 表的文件。")
+        print("Chrome 打印出来的本来就是文档内跳转，不需要改；Safari 的是传统表。")
+        return 0
+
+    changed = plan_changes(Doc(data))
+    if not changed:
+        print("没有可以改的链接，原文件没动。")
+        return 0
+
+    stem, dot, ext = path.rpartition(".")
+    backup = (stem if dot else path) + "-web" + (dot + ext if dot else "")
+    if os.path.exists(backup):
+        print(f"{backup} 已经存在，不覆盖；先把它挪开再跑。", file=sys.stderr)
+        return 1
+
+    tmp = path + ".tmp"
+    apply_update(data, changed, tmp)
+    os.rename(path, backup)
+    os.rename(tmp, path)
+    print(f"\n改了 {len(changed)} 条链接。原件留在 {backup}，改好的还叫 {path}。")
     return 0
 
 
@@ -414,7 +512,7 @@ def main(path: str) -> int:
         rect = re.search(rb"/Rect\s*\[(.*?)\]", dic, re.S)
         annots[rect.group(1).strip() if rect else dic] = dic
 
-    dests = uris = unknown = 0
+    dests = uris = files = unknown = 0
     print()
     for dic in annots.values():
         kind, text = describe(pdf, dic)
@@ -425,30 +523,29 @@ def main(path: str) -> int:
         elif kind == "uri":
             uris += 1
             print(f"网页链接  {text}")
+        elif kind == "file":
+            files += 1
+            print(f"打开文件  {text}")
         else:
             unknown += 1  # 认不出来的照原样打出来，免得静悄悄漏掉
             print(f"认不出来  {text!r}")
 
-    tail = f", {unknown} 条认不出来" if unknown else ""
+    tail = f", {files} 个打开本地文件" if files else ""
+    tail += f", {unknown} 条认不出来" if unknown else ""
     print(f"\n合计 {dests} 个内部跳转, {uris} 个网页链接{tail}")
     return 0
 
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    fixed = None
-    if "--to-dest" in args:
-        i = args.index("--to-dest")
-        if i + 1 >= len(args):
-            print("--to-dest 后面要跟输出文件名", file=sys.stderr)
-            sys.exit(2)
-        fixed = args[i + 1]
-        del args[i:i + 2]
+    dry_run = "--dry-run" in args
+    if dry_run:
+        args.remove("--dry-run")
     if len(args) != 1:
-        print("用法: python3 pdf-links.py out.pdf [--to-dest fixed.pdf]", file=sys.stderr)
+        print("用法: python3 pdf-links.py out.pdf [--dry-run]", file=sys.stderr)
         sys.exit(2)
     code = main(args[0])
-    if fixed and code == 0:
+    if code == 0 and not dry_run:
         print()
-        code = to_dest(open(args[0], "rb").read(), fixed)
+        code = fix_in_place(args[0], open(args[0], "rb").read())
     sys.exit(code)
