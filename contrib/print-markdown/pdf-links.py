@@ -66,25 +66,43 @@ def main(path: str) -> int:
         if obj:
             known = {m.group(1) for m in re.finditer(rb"/([^\s/\[\]<>()]+)\s*\[", obj.group(1))}
 
-    dests = uris = 0
+    dests = uris = unknown = 0
     print()
     for m in re.finditer(rb"/Subtype\s*/Link", blob):
         # 只看这条注解自己的范围：到 endobj 或下一条注解为止，免得把邻居吃进来
-        window = blob[m.end():m.end() + 400]
+        window = blob[m.end():m.end() + 600]
         bounds = [i for i in (window.find(b"endobj"), window.find(b"/Subtype")) if i >= 0]
         chunk = window[:min(bounds)] if bounds else window
+
         uri = re.search(rb"/URI\s*\((.*?)\)", chunk, re.S)
-        dest = re.search(rb"/Dest\s*/([^\s/>\]]+)", chunk)
-        if dest:
+        # 文档内跳转有好几种写法：/Dest 直接给名字/字符串/数组，
+        # 或者走动作 /A <</S /GoTo /D ...>>
+        dest_name = re.search(rb"/(?:Dest|D)\s*/([^\s/>\]()]+)", chunk)
+        dest_str = re.search(rb"/(?:Dest|D)\s*\((.*?)\)", chunk, re.S)
+        dest_arr = re.search(rb"/(?:Dest|D)\s*\[(.{0,80}?)\]", chunk, re.S)
+        goto = re.search(rb"/S\s*/GoTo\b", chunk)
+
+        if dest_name or dest_str or dest_arr or goto:
             dests += 1
-            name = dest.group(1)
-            mark = "" if not known or name in known else "   <- 目标名字不在命名目标表里，悬空"
-            print(f"内部跳转  {unescape_name(name)}{mark}")
+            if dest_name:
+                name = dest_name.group(1)
+                mark = "" if not known or name in known else "   <- 目标名字不在命名目标表里，悬空"
+                print(f"内部跳转  {unescape_name(name)}{mark}")
+            elif dest_str:
+                print(f"内部跳转  {dest_str.group(1).decode('utf-8', 'replace')}（字符串形式）")
+            else:
+                where = dest_arr.group(1).decode("latin1").strip() if dest_arr else "?"
+                print(f"内部跳转  直接目标 [{where}]")
         elif uri:
             uris += 1
             print(f"网页链接  {urllib.parse.unquote(uri.group(1).decode('latin1'))}")
+        else:
+            # 认不出来的照原样打出来，免得静悄悄漏掉
+            unknown += 1
+            print(f"认不出来  {chunk[:200].decode('latin1')!r}")
 
-    print(f"\n合计 {dests} 个内部跳转, {uris} 个网页链接")
+    tail = f", {unknown} 条认不出来" if unknown else ""
+    print(f"\n合计 {dests} 个内部跳转, {uris} 个网页链接{tail}")
     return 0
 
 
