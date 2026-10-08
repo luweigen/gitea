@@ -165,22 +165,33 @@
 		rewritten = [];
 	};
 
-	// beforeprint 可能连着来好几次（打印预览里改纸张、改方向都会再触发一轮），
-	// 不设闸的话第二轮会把"原始状态"记成已经改过的状态，打印完就恢复不回去了
+	// 同一次打印可能连着触发好几轮（打印预览里改纸张、改方向都会再来一次，
+	// 而且下面挂了两套事件），不设闸的话第二轮会把"原始状态"记成已经改过的状态，
+	// 打印完就恢复不回去了
 	let prepared = false;
-	addEventListener('beforeprint', () => {
+	const prepare = () => {
 		if (prepared) return;
 		prepared = true;
 		// 先展开再改写：折叠块里的锚点目标展开后才找得到
 		expandDetails();
 		localizeAnchors();
-	});
-	addEventListener('afterprint', () => {
+	};
+	const restore = () => {
 		if (!prepared) return;
 		prepared = false;
 		restoreAnchors();
 		restoreDetails();
-	});
+	};
+
+	addEventListener('beforeprint', prepare);
+	addEventListener('afterprint', restore);
+
+	// Safari 不支持 beforeprint / afterprint 事件，但打印开始与结束时会触发
+	// 打印媒体查询的 change。Chromium 两套都会触发，上面的闸保证幂等。
+	const printMedia = matchMedia('print');
+	const onPrintMedia = (e) => (e.matches ? prepare() : restore());
+	if (printMedia.addEventListener) printMedia.addEventListener('change', onPrintMedia);
+	else printMedia.addListener(onPrintMedia);
 })();
 </script>
 {{end}}

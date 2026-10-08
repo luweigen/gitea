@@ -83,8 +83,31 @@ Gitea 会把 Markdown 里的相对链接重写成不带 query 的绝对仓库路
 
 中文标题也可以：PDF 的命名目标用百分号编码加 `#` 转义写入，名称树里能对上。
 
-注意这依赖浏览器在打印时生成链接注解，上面是在 Chromium（Chrome / Edge）上验证的；
-其它浏览器的打印输出是否带链接未测。
+### 浏览器与阅读器的差异
+
+这一步依赖浏览器在打印时生成链接注解，上表是在 Chromium（Chrome / Edge）上验证的。
+两个已知的坑：
+
+* **Safari 不触发 `beforeprint` / `afterprint`**，所以改写不会发生，锚点链接在 PDF 里
+  仍是网站地址。脚本因此同时挂了打印媒体查询的 `change`（Safari 打印前后会触发它，
+  Chromium 两套都触发，内部有闸保证只生效一轮）。Safari 在改写之后是否真的会写出
+  文档内部跳转，手头没有 Safari 可测，需要在 Safari 上用下面的脚本自行确认。
+* **Chrome 写的内部跳转在部分阅读器里点不动。** Chrome 把命名目标放在文档目录的
+  `/Dests` 字典里 —— 这是 PDF 1.1 的老机制，PDF 1.2 起改用 `/Names` 下的 `/Dests`
+  名称树。实测 Chrome 的普通输出、tagged 输出、带大纲的输出都只写前者，从不写名称树，
+  页面这边改不了。只实现了名称树那条路的阅读器（据反馈 macOS 预览如此）就跟不过去；
+  同一份 PDF 用 Acrobat / Chrome / Firefox 打开可以验证跳转本身是好的。
+
+### 自查工具
+
+`pdf-links.py` 列出一份 PDF 里每条链接是内部跳转还是网页链接，并报告它用的是哪种命名
+目标机制 —— 用来区分"浏览器没生成内部跳转"和"阅读器不跟这种跳转"：
+
+```sh
+python3 contrib/print-markdown/pdf-links.py out.pdf
+```
+
+只用 Python 标准库，按字节扫描，不解析加密的 PDF。
 
 ## 可选调整
 
