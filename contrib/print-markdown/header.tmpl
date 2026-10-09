@@ -118,17 +118,129 @@
 }
 </style>
 <script>
-// 打印前展开所有 <details> 折叠块，打印后恢复（折叠内容用纯 CSS 无法可靠展开）
 (() => {
+	// 打印前展开所有 <details> 折叠块，打印后恢复（折叠内容用纯 CSS 无法可靠展开）
 	let opened = [];
-	addEventListener('beforeprint', () => {
+	const expandDetails = () => {
 		opened = [...document.querySelectorAll('.file-view.markup details:not([open]):not(.frontmatter-content)')];
 		for (const el of opened) el.open = true;
-	});
-	addEventListener('afterprint', () => {
+	};
+	const restoreDetails = () => {
 		for (const el of opened) el.open = false;
 		opened = [];
-	});
+	};
+
+	// 打印前，把指向本页某个位置的链接改写成"#目标元素真正的 id"。两件事都得做：
+	//
+	// 1. Gitea 的前端会把 a[href^="#user-content-"] 的前缀抹掉（web_src/js/markup/anchors.ts），
+	//    只在 click 时用 JS 补回去跳转，而标题的 id 仍然带 user-content- 前缀。于是页面上
+	//    目录里的链接指向一个并不存在的 id —— 浏览器打印时找不到目标，这条链接在 PDF 里
+	//    干脆不生成任何注解（既不是跳转也不是外链，直接没了）。
+	// 2. 浏览器把链接写成 PDF 内部跳转（/Dest）的条件是链接 URL 与文档 URL 完全一致，
+	//    query 不同也算不一致；而 Gitea 把 Markdown 里的相对链接重写成不带 query 的绝对
+	//    仓库路径，页面地址是 ...?display=rendered 时就对不上，于是成了跳回网站的外链。
+	//
+	// 统一改成裸 #真实id 就两头都解决了，打印结束再还原。
+	let rewritten = [];
+	let retargeted = [];
+	const decodeId = (raw) => {
+		try {
+			return decodeURIComponent(raw);
+		} catch {
+			return raw; // 不是合法的百分号编码就按原样找
+		}
+	};
+	// 跟 Gitea 自己的 scrollToAnchor 一样的找法：先补前缀，再试 a[name]，最后按原样
+	const findTarget = (fragment) => {
+		const id = decodeId(fragment);
+		if (!id) return null;
+		return document.getElementById('user-content-' + id)
+			|| document.querySelector(`a[name="${CSS.escape('user-content-' + id)}"]`)
+			|| document.getElementById(id)
+			|| document.querySelector(`a[name="${CSS.escape(id)}"]`);
+	};
+	// Safari 打印时解析不了带非 ASCII 的片段：同一篇文档里纯 ASCII 的锚点能跳到
+	// 文档内，带 ä 或汉字的就退化成跳回网站。所以这类目标打印期间临时换一个纯 ASCII
+	// 的 id —— 原 id 的每个字节按 .hh 转义，可逆，pdf-links.py 认得回去。
+	const asciiId = (id) => 'pd-' + [...new TextEncoder().encode(id)].map((b) =>
+		(b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a)
+		|| b === 0x2d || b === 0x5f
+			? String.fromCharCode(b)
+			: '.' + b.toString(16).padStart(2, '0')).join('');
+	const printId = (el) => {
+		// 已经是 ASCII 的就别动，Chrome 那边的命名目标还能保持可读
+		if (el.id && /^[A-Za-z0-9\-_]+$/.test(el.id)) return el.id;
+		const fresh = el.id ? asciiId(el.id) : 'pd-anchor-' + retargeted.length;
+		retargeted.push([el, el.getAttribute('id')]);
+		el.id = fresh;
+		return fresh;
+	};
+	const localizeAnchors = () => {
+		const here = location.origin + location.pathname;
+		for (const a of document.querySelectorAll('.file-view.markup a[href]')) {
+			const href = a.getAttribute('href');
+			if (!href) continue;
+			let fragment;
+			if (href.startsWith('#')) {
+				fragment = href.slice(1);
+			} else {
+				let url;
+				try {
+					url = new URL(a.href);
+				} catch {
+					continue;
+				}
+				if (url.origin + url.pathname !== here || !url.hash) continue;
+				// ?display=source 之类指的是同一个文件的另一个视图，不是本页，保留原链接
+				if (url.search && url.search !== location.search) continue;
+				fragment = url.hash.slice(1);
+			}
+			const target = findTarget(fragment);
+			// 目标不在这份文档里就别造悬空的 PDF 跳转，保留原链接
+			if (!target) continue;
+			const localHref = '#' + printId(target);
+			if (href === localHref) continue;
+			rewritten.push([a, href]);
+			a.setAttribute('href', localHref);
+		}
+	};
+	const restoreAnchors = () => {
+		for (const [a, href] of rewritten) a.setAttribute('href', href);
+		rewritten = [];
+		for (const [el, id] of retargeted) {
+			if (id === null) el.removeAttribute('id');
+			else el.id = id;
+		}
+		retargeted = [];
+	};
+
+	// 同一次打印可能连着触发好几轮（打印预览里改纸张、改方向都会再来一次，
+	// 而且下面挂了两套事件），不设闸的话第二轮会把"原始状态"记成已经改过的状态，
+	// 打印完就恢复不回去了
+	let prepared = false;
+	const prepare = () => {
+		if (prepared) return;
+		prepared = true;
+		// 先展开再改写：折叠块里的锚点目标展开后才找得到
+		expandDetails();
+		localizeAnchors();
+	};
+	const restore = () => {
+		if (!prepared) return;
+		prepared = false;
+		restoreAnchors();
+		restoreDetails();
+	};
+
+	addEventListener('beforeprint', prepare);
+	addEventListener('afterprint', restore);
+
+	// Safari 不支持 beforeprint / afterprint 事件，但打印开始与结束时会触发
+	// 打印媒体查询的 change。Chromium 两套都会触发，上面的闸保证幂等。
+	const printMedia = matchMedia('print');
+	const onPrintMedia = (e) => (e.matches ? prepare() : restore());
+	if (printMedia.addEventListener) printMedia.addEventListener('change', onPrintMedia);
+	else printMedia.addListener(onPrintMedia);
 })();
 </script>
 {{end}}
