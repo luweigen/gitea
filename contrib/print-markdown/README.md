@@ -162,6 +162,27 @@ python3 contrib/print-markdown/pdf-links.py safari.pdf
 动作）都认，认不出来的注解会原样打出来，不会悄悄漏掉。只用 Python 标准库，按字节扫描，
 不解析加密的 PDF。
 
+### 阅读器认不认 /Launch
+
+`/Launch` 能不能点开完全看阅读器，有的出于安全考虑直接拦掉（点了只"嘟"一声）。
+`test/make-link-probe.py` 造一张"试纸"：一页 PDF，八行链接都指向同一张图片，每行换一种
+PDF 动作写法（`/Launch` 配文件说明 / 纯字符串 / 绝对路径，`/URI` 配相对路径 / `./` 相对路径
+/ `file://` 绝对地址，`/GoToR` 两种）。它会在 PDF 旁边一起生成 `probe-figs/kuva1.png`，
+所以生成完别挪动 PDF：
+
+```sh
+python3 contrib/print-markdown/test/make-link-probe.py ~/Desktop/link-probe.pdf
+```
+
+拿阅读器打开挨个点，哪一行能打开那张小红图，就把 `pdf-links.py` 的 `plan_changes` 改成
+写哪种。macOS 上想看阅读器到底报了什么错，点之前先开着这个：
+
+```sh
+log stream --style compact --predicate 'process == "Preview" OR process == "sandboxd"' --info
+```
+
+被沙箱拦掉会有 `deny(1) file-read*` 之类的字样，拒绝执行动作一般也能看到对应的日志。
+
 `test/run.sh` 是一小段回归检查：造一份模仿 Safari 写法的 PDF，确认所在目录猜得对、子目录和
 大写扩展名的图片都改到、同目录的 `.md` 和站外链接不动、原件改名留着、重复跑不会再改一遍。
 
