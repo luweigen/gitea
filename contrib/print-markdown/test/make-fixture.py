@@ -6,7 +6,10 @@
 # 动作和 URI 各是单独的对象。里面放四条链接：同目录的另一个 Markdown、两张在
 # `taulukko-figs/` 子目录里的图片、一条站外链接。
 #
-# 用法: python3 make-fixture.py 输出.pdf
+# 用法: python3 make-fixture.py 输出.pdf [--only-figs]
+#
+# --only-figs 只留两条图片链接，模拟页内锚点都成了文档内跳转之后的样子：这时候
+# 所有链接都挤在图片目录里，猜"文档所在目录"不能直接取公共前缀。
 
 import sys
 
@@ -17,6 +20,9 @@ LINKS = [
     f"{BASE}/taulukko-figs/alikansio/kuva2.PNG",
     "https://github.com/example/repo",
 ]
+if "--only-figs" in sys.argv:
+    sys.argv.remove("--only-figs")
+    LINKS = [u for u in LINKS if u.endswith((".png", ".PNG"))]
 
 objs = {
     1: b"<< /Type /Catalog /Pages 2 0 R >>",

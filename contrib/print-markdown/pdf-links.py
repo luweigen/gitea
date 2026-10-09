@@ -191,15 +191,39 @@ def pdf_utf16(text: str) -> bytes:
 
 def replace_action(body: bytes, entry: bytes) -> bytes:
     """把注解里的 /A 动作换成别的。"""
-    new_body, n = re.subn(rb"/A\s+\d+\s+0\s+R|/A\s*<<.*?>>", entry, body, count=1, flags=re.S)
-    return new_body if n else body.replace(b">>", b" " + entry + b" >>", 1)
+    m = re.search(rb"/A\s*(\d+\s+0\s+R|<<)", body)
+    if not m:
+        return body.replace(b">>", b" " + entry + b" >>", 1)
+    if m.group(1) == b"<<":
+        # 就地写的动作里还能再套字典（文件说明就是），非贪婪的 >> 会停在里层那个，
+        # 把后面的 /D 之类剩在外面，注解就废了 —— 得配平着找
+        end = m.end() - 2 + len(balanced_dict(body, m.end() - 2))
+    else:
+        end = m.end()
+    return body[:m.start()] + entry + body[end:]
+
+
+# Markdown 放插图的目录常见叫法。所有链接都挤在同一个这样的目录里时，
+# 文档本身应该在它的上一级
+FIG_DIR_NAMES = ("figs", "figures", "images", "img", "assets", "attachments")
+FIG_DIR_SUFFIXES = tuple(sep + name for name in FIG_DIR_NAMES for sep in ("-", "_", "."))
+
+
+def looks_like_figure_dir(url_dir: str) -> bool:
+    last = url_dir.rstrip("/").rsplit("/", 1)[-1].lower()
+    return last in FIG_DIR_NAMES or last.endswith(FIG_DIR_SUFFIXES)
 
 
 def base_directory(urls: list[str]) -> str:
-    """猜本文档在网站上的所在目录，图片路径按它做前缀相减。
+    """猜本文档在网站上的所在目录，图片路径按它做前缀相减。猜不出来就返回空串。
 
-    取同一个站点下所有链接的最长公共目录前缀：图片在 `docs/某文档-figs/` 里、
-    同目录还有别的文件链接时，公共前缀正好是 `docs/`。猜错了用 --base-url 指定。
+    链接分布在好几个目录时，取同一站点下的最长公共目录前缀就对了：图片在
+    `docs/某文档-figs/` 里、同目录还有别的文件链接，公共前缀正好是 `docs/`。
+
+    但页内锚点现在都是文档内跳转、不再是链接了，常常只剩下图片链接，而且全挤在
+    同一个 `-figs` 目录里 —— 这时候公共前缀就是那个图片目录本身，照它相减会把
+    `某文档-figs/` 这一段吃掉。所以单目录的情况要单独判断：目录名像个放图的地方
+    就取它的上一级，否则宁可说不知道，也别算出一条错的相对路径。
     """
     hosts: dict[str, int] = {}
     for u in urls:
@@ -209,13 +233,27 @@ def base_directory(urls: list[str]) -> str:
     if not hosts:
         return ""
     main = max(hosts, key=lambda h: hosts[h])
-    dirs = [u.rsplit("/", 1)[0].split("/") for u in urls if u.startswith(main + "/")]
-    common: list[str] = []
-    for segs in zip(*dirs):
-        if len(set(segs)) != 1:
-            break
-        common.append(segs[0])
-    return "/".join(common) + "/" if len(common) > 3 else ""
+    dirs = [u.rsplit("/", 1)[0] + "/" for u in urls if u.startswith(main + "/")]
+    if not dirs:
+        return ""
+
+    unique = set(dirs)
+    if len(unique) == 1:
+        candidate, need_figure_dir = dirs[0], True
+    else:
+        common: list[str] = []
+        for segs in zip(*[d.split("/") for d in dirs]):
+            if len(set(segs)) != 1:
+                break
+            common.append(segs[0])
+        candidate, need_figure_dir = "/".join(common) + "/", False
+
+    if looks_like_figure_dir(candidate):
+        # 公共前缀落在图片目录上（图片还分了子目录也算），文档在它上一级
+        candidate = candidate.rstrip("/").rsplit("/", 1)[0] + "/"
+    elif need_figure_dir:
+        return ""  # 所有链接都在同一个目录，又看不出那是图片目录，说不准
+    return candidate if candidate.count("/") > 3 else ""
 
 
 def plan_changes(pdf: Pdf, base_url: str) -> dict[int, bytes]:
@@ -232,7 +270,10 @@ def plan_changes(pdf: Pdf, base_url: str) -> dict[int, bytes]:
 
     base_dir = base_url or base_directory([u for _, _, u in links])
     if not base_dir:
-        print("认不出本文档所在的目录，没法算图片的相对路径；可以用 --base-url 指定。")
+        print("认不出本文档所在的目录，没法算图片的相对路径。链接都在这些目录下：")
+        for d in sorted({u.rsplit("/", 1)[0] + "/" for u in (u for _, _, u in links)}):
+            print(f"  {d}")
+        print("挑出文档自己所在的那个目录，用 --base-url 指定它再跑一次。")
         return {}
     print(f"把这个目录当作本文档所在目录: {base_dir}")
 

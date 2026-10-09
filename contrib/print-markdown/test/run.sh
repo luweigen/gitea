@@ -6,6 +6,7 @@
 #   * 本文档所在目录能从几条链接里猜出来（图片在子目录里也不跑偏）
 #   * 同目录下的图片链接改成了打开本地文件，子目录和大写扩展名都算
 #   * 同目录的 .md 和站外链接保持原样
+#   * 只剩图片链接时也不会把图片目录错当成文档目录
 #   * 原件改名留着，再跑一次不会重复改
 #
 # 用法: ./run.sh
@@ -49,6 +50,12 @@ check "原件改名留着" "原件留在" "$work/fix.log"
 echo "改完:"
 check "两张图成了打开本地文件" "合计 0 个内部跳转, 2 个网页链接, 2 个打开本地文件" "$work/after.log"
 check "站外链接保持原样" "网页链接  https://github.com/example/repo" "$work/after.log"
+
+echo "只剩图片链接时（页内锚点都成了文档内跳转）:"
+python3 "$dir/make-fixture.py" "$work/figs.pdf" --only-figs >/dev/null
+python3 "$dir/../pdf-links.py" "$work/figs.pdf" >"$work/figs.log"
+check "没把图片目录当成文档目录" "本文档所在目录: http://x/docs/" "$work/figs.log"
+check "相对路径保留了图片目录那一段" "图片 taulukko-figs/kuva1.png" "$work/figs.log"
 
 echo "再跑一次:"
 check "没有可改的，原文件没动" "没有可以改的链接" "$work/again.log"
