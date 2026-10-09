@@ -191,8 +191,16 @@ def pdf_utf16(text: str) -> bytes:
 
 def replace_action(body: bytes, entry: bytes) -> bytes:
     """把注解里的 /A 动作换成别的。"""
-    new_body, n = re.subn(rb"/A\s+\d+\s+0\s+R|/A\s*<<.*?>>", entry, body, count=1, flags=re.S)
-    return new_body if n else body.replace(b">>", b" " + entry + b" >>", 1)
+    m = re.search(rb"/A\s*(\d+\s+0\s+R|<<)", body)
+    if not m:
+        return body.replace(b">>", b" " + entry + b" >>", 1)
+    if m.group(1) == b"<<":
+        # 就地写的动作里还能再套字典（文件说明就是），非贪婪的 >> 会停在里层那个，
+        # 把后面的 /D 之类剩在外面，注解就废了 —— 得配平着找
+        end = m.end() - 2 + len(balanced_dict(body, m.end() - 2))
+    else:
+        end = m.end()
+    return body[:m.start()] + entry + body[end:]
 
 
 # Markdown 放插图的目录常见叫法。所有链接都挤在同一个这样的目录里时，
