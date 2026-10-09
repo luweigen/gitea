@@ -12,7 +12,7 @@
 #       python3 pdf-links.py out.pdf --base-url https://git.example.com/…/docs/
 #
 # 默认会把**和本文档同目录的图片链接**改成打开 PDF 旁边同样相对位置的那个文件
-# （PDF 的 /Launch 动作），改好的那份仍叫原来的名字，原件改名加 -web 后缀留着。
+# （PDF 的 /GoToR 动作），改好的那份仍叫原来的名字，原件改名加 -web 后缀留着。
 # 要把 PDF 和图片目录按原来的相对位置放在一起才点得开。
 #
 # 页内锚点不用管：header.tmpl 打印前会把它们改写成浏览器认得出来的样子，
@@ -146,8 +146,8 @@ def describe(pdf: Pdf, dic: bytes) -> tuple[str, str]:
     if uri.startswith(b"("):
         return "uri", urllib.parse.unquote(uri[1:-1].decode("utf-8", "replace"))
 
-    if kind == b"/Launch":
-        # 文件说明里的 /F 是条字面量路径
+    if kind in (b"/Launch", b"/GoToR"):
+        # 文件说明里的 /F 是条字面量路径（纯字符串写法也是同一个 /F）
         m = re.search(rb"/F\s*\((.*?)\)", action, re.S)
         return "file", m.group(1).decode("utf-8", "replace") if m else "?"
 
@@ -244,9 +244,11 @@ def plan_changes(pdf: Pdf, base_url: str) -> dict[int, bytes]:
         rel = path[len(base_dir):]
         if not rel.lower().endswith(IMAGE_SUFFIXES) or rel.startswith(("/", "..")):
             continue
-        # 打开 PDF 旁边同样相对位置的那个文件
+        # 打开 PDF 旁边同样相对位置的那个文件。用 /GoToR 而不是看起来更对口的
+        # /Launch：macOS 预览对 /Launch 和 file:// 的 /URI 一概不理（只"嘟"一声），
+        # 相对路径的 /URI 它认得出路径却开不起来（报 -50），只有 /GoToR 能打开。
         spec = b"<< /Type /Filespec /F " + pdf_literal(rel) + b" /UF " + pdf_utf16(rel) + b" >>"
-        changed[num] = replace_action(body, b"/A << /S /Launch /F " + spec + b" >>")
+        changed[num] = replace_action(body, b"/A << /S /GoToR /F " + spec + b" /D [0 /Fit] >>")
         print(f"  图片 {rel}  ->  打开本地同名文件")
     return changed
 

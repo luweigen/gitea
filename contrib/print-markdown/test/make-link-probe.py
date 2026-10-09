@@ -46,7 +46,7 @@ def variants(abs_path: str) -> list[tuple[str, bytes]]:
     rel_spec = b"<< /Type /Filespec /F " + literal(REL) + b" /UF " + utf16(REL) + b" >>"
     abs_spec = b"<< /Type /Filespec /F " + literal(abs_path) + b" /UF " + utf16(abs_path) + b" >>"
     return [
-        ("1 Launch + Filespec + relative path  (what pdf-links.py writes)",
+        ("1 Launch + Filespec + relative path",
          b"<< /S /Launch /F " + rel_spec + b" >>"),
         ("2 Launch + plain string + relative path",
          b"<< /S /Launch /F " + literal(REL) + b" >>"),
@@ -58,7 +58,7 @@ def variants(abs_path: str) -> list[tuple[str, bytes]]:
          b"<< /S /URI /URI " + literal("./" + REL) + b" >>"),
         ("6 URI action + absolute file:// URL",
          b"<< /S /URI /URI " + literal("file://" + abs_path) + b" >>"),
-        ("7 GoToR + Filespec + relative path",
+        ("7 GoToR + Filespec + relative path  (what pdf-links.py writes)",
          b"<< /S /GoToR /F " + rel_spec + b" /D [0 /Fit] >>"),
         ("8 GoToR + plain string + relative path",
          b"<< /S /GoToR /F " + literal(REL) + b" /D [0 /Fit] >>"),
